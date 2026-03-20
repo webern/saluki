@@ -11,9 +11,9 @@ consists of the following components:
   intake, highlighting any discrepancies
 - `datadog-intake`: a mock intake in the spirit of [`fakeintake`][fakeintake_gh] that provides a more ergonomic
   approach to dumping the captured data
-- `millstone`: a deterministic load generator, in the spirit of [Lading][lading_gh], that allow provides determinism
-  around the number of payloads it sends, in addition to the basic determinism of the payloads it generates to send in
-  the first place
+- `millstone`: a deterministic load generator, in the spirit of [Lading][lading_gh], that provides determinism around
+  the number of payloads it sends, in addition to the basic determinism of the payloads it generates to send in the
+  first place
 - `stele`: helper library that established a common, simplified represent for telemetry data, and their values, to be used
   between `datadog-intake` and `ground-truth`
 

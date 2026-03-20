@@ -213,7 +213,7 @@ impl ConfigurationLoader {
         Ok(self)
     }
 
-    // TODO: weird function, who would use this?
+    // TODO(mjb): weird function, who would use this?
     /// Attempts to load the given JSON configuration file, ignoring any errors.
     ///
     /// Errors include the file not existing, not being readable/accessible, and not being valid JSON.
@@ -271,10 +271,10 @@ impl ConfigurationLoader {
         Ok(self)
     }
 
-    // TODO: note there is no "try_from_environment" to match the other weird functions
+    // TODO(mjb): note there is no "try_from_environment" to match the other weird functions
 
-    // TODO: here I see the existence of my first configuration keys, secret_backend_command and secret_backend_timeout
-    // TODO: my question is, are all configurations sprinkled about like this? There is no type-system involvement?
+    // TODO(mjb): here I see the existence of my first configuration keys, secret_backend_command and secret_backend_timeout
+    // TODO(mjb): my question is, are all configurations sprinkled about like this? There is no type-system involvement?
     /// Resolves secrets in the configuration based on available secret backend configuration.
     ///
     /// This will attempt to resolve any secret references (format shown below) in the configuration by using a "secrets
@@ -340,6 +340,7 @@ impl ConfigurationLoader {
     /// Care should be taken to not return sensitive information in either the error output (standard error) of the
     /// backend command or the `error` field in the JSON response, as these values are logged in order to aid debugging.
     pub async fn with_default_secrets_resolution(mut self) -> Result<Self, ConfigurationError> {
+        // TODO(mjb): hard to understand the call to build_figment_from_sources at this stage
         let configuration = build_figment_from_sources(&self.provider_sources);
 
         // If no secrets backend is set, we can't resolve secrets, so just return early.
@@ -365,6 +366,7 @@ impl ConfigurationLoader {
     /// Enables dynamic configuration.
     ///
     /// The receiver is used in `run_dynamic_config_updater` to handle retrieving the initial snapshot and subsequent updates.
+    // TODO(mjb): why is there an "initial" snapshot and subsequent updates? What about YAML config followed by updates?
     pub fn with_dynamic_configuration(mut self, receiver: mpsc::Receiver<ConfigUpdate>) -> Self {
         self.provider_sources.push(ProviderSource::Dynamic(Some(receiver)));
         self
@@ -517,6 +519,7 @@ impl ConfigurationLoader {
     }
 }
 
+// TODO(mjb): this is not easy to understand
 fn build_figment_from_sources(sources: &[ProviderSource]) -> Figment {
     sources.iter().fold(Figment::new(), |figment, source| match source {
         ProviderSource::Static(p) => figment.admerge(p.clone()),
@@ -863,6 +866,11 @@ fn from_figment_error(lookup_sources: &HashSet<LookupSource>, e: figment::Error)
 }
 
 fn has_valid_secret_backend_command(configuration: &Figment) -> bool {
+    // TODO(mjb): Oh no, I hate how configuration is handled. There is no documentation or type-system help with configs.
+    // A question that I have, in general, is there a central source of truth for all configuration values that exist in
+    // for the agent in all its myriad forms? Is there, for example, an OpenAPI spec to show the complete configuration
+    // document? Or... is the datadog-agent the same as saluki in the sense that configuration values are defined where
+    // they are used and "stringly typed"?
     configuration
         .find_value("secret_backend_command")
         .ok()

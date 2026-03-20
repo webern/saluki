@@ -174,6 +174,7 @@ impl ConfigurationLoader {
         Ok(self)
     }
 
+    // TODO: remove this function? Who would use this?
     /// Attempts to load the given YAML configuration file, ignoring any errors.
     ///
     /// Errors include the file not existing, not being readable/accessible, and not being valid YAML.

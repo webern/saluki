@@ -272,7 +272,9 @@ impl ConfigurationLoader {
     }
 
     // TODO: note there is no "try_from_environment" to match the other weird functions
-    
+
+    // TODO: here I see the existence of my first configuration keys, secret_backend_command and secret_backend_timeout
+    // TODO: my question is, are all configurations sprinkled about like this? There is no type-system involvement?
     /// Resolves secrets in the configuration based on available secret backend configuration.
     ///
     /// This will attempt to resolve any secret references (format shown below) in the configuration by using a "secrets

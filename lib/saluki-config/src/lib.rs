@@ -213,6 +213,7 @@ impl ConfigurationLoader {
         Ok(self)
     }
 
+    // TODO: weird function, who would use this?
     /// Attempts to load the given JSON configuration file, ignoring any errors.
     ///
     /// Errors include the file not existing, not being readable/accessible, and not being valid JSON.
@@ -270,6 +271,8 @@ impl ConfigurationLoader {
         Ok(self)
     }
 
+    // TODO: note there is no "try_from_environment" to match the other weird functions
+    
     /// Resolves secrets in the configuration based on available secret backend configuration.
     ///
     /// This will attempt to resolve any secret references (format shown below) in the configuration by using a "secrets

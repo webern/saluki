@@ -24,11 +24,13 @@ async fn main() -> Result<(), GenericError> {
         .compact()
         .with_env_filter(
             EnvFilter::builder()
-                .with_default_directive(LevelFilter::INFO.into())
+                .with_default_directive(LevelFilter::DEBUG.into())
                 .from_env_lossy(),
         )
         .with_ansi(true)
         .with_target(true)
+        .with_file(true)
+        .with_line_number(true)
         .init();
 
     // Load our configuration.

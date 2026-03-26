@@ -57,9 +57,13 @@ async fn main() -> Result<(), GenericError> {
     Ok(())
 }
 
+// TODO: accept program arguments, like host docker socket address
+// e.g. async fn run(config: Config, args: Args) -> Result<(), GenericError> {}
 async fn run(config: Config) -> Result<(), GenericError> {
     info!("Test run starting...");
 
+    // TODO: pass the Args (e.g. host docker socket address) separately from config file values
+    // e.g. TestRunner::from_config_and_args(&config, args).await?;
     let test_runner = TestRunner::from_config(&config).await?;
     let (baseline_data, comparison_data) = test_runner
         .run()

@@ -55,6 +55,7 @@ pub struct Config {
     #[serde(skip, default = "PathBuf::new")]
     base_config_path: PathBuf,
 
+    // TODO: No, get this from Argh and pass it somehow separately from Config. i.e. Let's keep Args and Configs separate
     /// Host Docker socket path override for non-default Docker setups (e.g. Lima, Docker Desktop).
     #[serde(skip)]
     pub host_docker_socket: Option<String>,

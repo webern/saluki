@@ -548,7 +548,7 @@ impl Driver {
         // detection.
         binds.push("/proc:/host/proc:ro".to_string());
         binds.push("/sys/fs/cgroup:/host/sys/fs/cgroup:ro".to_string());
-        binds.push("/var/run/docker.sock:/var/run/docker.sock:ro".to_string());
+        binds.push("/Users/matt.briggs/.lima/docker/sock/docker.sock:/var/run/docker.sock:ro".to_string());
 
         let (publish_all_ports, exposed_ports) = if self.config.exposed_ports.is_empty() {
             (None, None)

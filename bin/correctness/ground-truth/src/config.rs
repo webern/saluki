@@ -54,6 +54,10 @@ pub struct Config {
 
     #[serde(skip, default = "PathBuf::new")]
     base_config_path: PathBuf,
+
+    /// Host Docker socket path override for non-default Docker setups (e.g. Lima, Docker Desktop).
+    #[serde(skip)]
+    pub host_docker_socket: Option<String>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -172,6 +176,11 @@ impl Config {
             binary_path: Some(self.datadog_intake.binary_path.clone()),
             config_path: self.get_canonicalized_config_path(&self.datadog_intake.config_path),
         }
+    }
+
+    /// Returns the host Docker socket path override, if set.
+    pub fn host_docker_socket(&self) -> Option<String> {
+        self.host_docker_socket.clone()
     }
 
     async fn target_driver_config(&self, target_config: &TargetConfig) -> Result<DriverConfig, GenericError> {

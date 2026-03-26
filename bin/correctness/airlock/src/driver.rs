@@ -55,9 +55,14 @@ pub struct DriverConfig {
     binds: Vec<String>,
     healthcheck: Option<HealthConfig>,
     exposed_ports: Vec<(&'static str, u16)>,
+    host_docker_socket: Option<String>,
 }
 
 impl DriverConfig {
+    pub fn id(&self) -> &str {
+        self.driver_id
+    }
+
     pub async fn millstone(config: MillstoneConfig) -> Result<Self, GenericError> {
         // Ensure the given configuration file path actually exists.
         match tokio::fs::metadata(&config.config_path).await {
@@ -146,7 +151,14 @@ impl DriverConfig {
             binds: vec![],
             healthcheck: None,
             exposed_ports: vec![],
+            host_docker_socket: None,
         }
+    }
+
+    /// Sets the host Docker socket path for the driver.
+    pub fn with_host_docker_socket(mut self, socket_path: Option<String>) -> Self {
+        self.host_docker_socket = socket_path;
+        self
     }
 
     /// Sets the entrypoint for the container.
@@ -289,7 +301,14 @@ impl Driver {
     ///
     /// If the Docker client cannot be created/configured, an error will be returned.
     pub fn from_config(isolation_group_id: String, config: DriverConfig) -> Result<Self, GenericError> {
-        let docker = Docker::connect_with_defaults()?;
+        debug!("Connecting to docker...");
+        let docker = match &config.host_docker_socket {
+            Some(socket_path) => {
+                debug!("Using configured Docker socket: {}", socket_path);
+                Docker::connect_with_unix(socket_path, 120, bollard::API_DEFAULT_VERSION)?
+            }
+            None => Docker::connect_with_defaults()?,
+        };
 
         Ok(Self {
             isolation_group_name: format!("airlock-{}", isolation_group_id),
@@ -548,7 +567,7 @@ impl Driver {
         // detection.
         binds.push("/proc:/host/proc:ro".to_string());
         binds.push("/sys/fs/cgroup:/host/sys/fs/cgroup:ro".to_string());
-        binds.push("/Users/matt.briggs/.lima/docker/sock/docker.sock:/var/run/docker.sock:ro".to_string());
+        binds.push("/var/run/docker.sock:/var/run/docker.sock:ro".to_string());
 
         let (publish_all_ports, exposed_ports) = if self.config.exposed_ports.is_empty() {
             (None, None)

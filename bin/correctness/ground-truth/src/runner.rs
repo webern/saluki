@@ -29,19 +29,24 @@ pub struct TestRunner {
     baseline_coordinator: Coordinator,
     comparison_coordinator: Coordinator,
     log_base_dir: PathBuf,
+    host_docker_socket: Option<String>,
 }
 
 impl TestRunner {
     pub async fn from_config(config: &Config) -> Result<Self, GenericError> {
+        let host_docker_socket = config.host_docker_socket();
         Ok(Self {
             datadog_intake_config: config.datadog_intake_config(),
             millstone_config: config.millstone_config(),
-            baseline_target_driver_config: config.baseline_target_driver_config().await?,
-            comparison_target_driver_config: config.comparison_target_driver_config().await?,
+            baseline_target_driver_config: config.baseline_target_driver_config().await?
+                .with_host_docker_socket(host_docker_socket.clone()),
+            comparison_target_driver_config: config.comparison_target_driver_config().await?
+                .with_host_docker_socket(host_docker_socket.clone()),
             cancel_token: CancellationToken::new(),
             baseline_coordinator: Coordinator::new(),
             comparison_coordinator: Coordinator::new(),
             log_base_dir: PathBuf::from("/tmp/ground-truth"),
+            host_docker_socket,
         })
     }
 
@@ -55,11 +60,16 @@ impl TestRunner {
             self.baseline_coordinator.clone(),
             self.cancel_token.child_token(),
         );
-        group_runner
-            .with_driver(DriverConfig::datadog_intake(self.datadog_intake_config.clone()).await?)?
-            .with_driver(self.baseline_target_driver_config.clone())?
-            .with_driver(DriverConfig::millstone(self.millstone_config.clone()).await?)?;
 
+        debug!("Further configuring the group_runner object...");
+        group_runner
+            .with_driver(DriverConfig::datadog_intake(self.datadog_intake_config.clone()).await?
+                .with_host_docker_socket(self.host_docker_socket.clone()))?
+            .with_driver(self.baseline_target_driver_config.clone())?
+            .with_driver(DriverConfig::millstone(self.millstone_config.clone()).await?
+                .with_host_docker_socket(self.host_docker_socket.clone()))?;
+
+        debug!("Returning the group_runner object...");
         Ok(group_runner)
     }
 
@@ -75,9 +85,11 @@ impl TestRunner {
         );
 
         group_runner
-            .with_driver(DriverConfig::datadog_intake(self.datadog_intake_config.clone()).await?)?
+            .with_driver(DriverConfig::datadog_intake(self.datadog_intake_config.clone()).await?
+                .with_host_docker_socket(self.host_docker_socket.clone()))?
             .with_driver(self.comparison_target_driver_config.clone())?
-            .with_driver(DriverConfig::millstone(self.millstone_config.clone()).await?)?;
+            .with_driver(DriverConfig::millstone(self.millstone_config.clone()).await?
+                .with_host_docker_socket(self.host_docker_socket.clone()))?;
 
         Ok(group_runner)
     }
@@ -119,6 +131,7 @@ impl TestRunner {
     }
 
     pub async fn run(mut self) -> Result<(CollectedData, CollectedData), GenericError> {
+        debug!("begging the run function");
         let baseline_isolation_group_id = generate_isolation_group_id();
         let comparison_isolation_group_id = generate_isolation_group_id();
 
@@ -133,6 +146,7 @@ impl TestRunner {
             test_id = "comparison"
         );
 
+        debug!("building a runner group");
         // Build a group runner for both the baseline and comparison targets, and then spawn the groups.
         //
         // This spawns all the necessary containers in the correct order, and waits for them to become healthy.
@@ -140,11 +154,14 @@ impl TestRunner {
         let baseline_group_runner = self
             .build_baseline_group_runner(baseline_isolation_group_id.clone())
             .await?;
+        debug!("build_comparison_group_runner");
         let comparison_group_runner = self
             .build_comparison_group_runner(comparison_isolation_group_id.clone())
             .await?;
 
+        debug!("baseline_spawn_result");
         let baseline_spawn_result = run_in_background(&baseline_runner_span, baseline_group_runner.spawn());
+        debug!("comparison_spawn_result");
         let comparison_spawn_result = run_in_background(&comparison_runner_span, comparison_group_runner.spawn());
 
         // Everything is running, so just wait for the data (or an error) to come back from both group runners.
@@ -248,6 +265,7 @@ impl GroupRunner {
     }
 
     fn with_driver(&mut self, config: DriverConfig) -> Result<&mut Self, GenericError> {
+        debug!("Adding driver id={}", config.id());
         let driver =
             Driver::from_config(self.isolation_group_id.clone(), config)?.with_logging(self.runner_log_dir.clone());
         self.drivers.push(driver);

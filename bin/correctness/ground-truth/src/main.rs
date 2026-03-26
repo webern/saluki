@@ -18,6 +18,10 @@ use self::runner::TestRunner;
 
 mod sync;
 
+// TODO: take this as an argument using argh or whatever crate is canonical in the codebase
+const HOST_DOCKER_SOCK: &str = "/Users/matt.briggs/.lima/docker/sock/docker.sock";
+
+
 #[tokio::main]
 async fn main() -> Result<(), GenericError> {
     tracing_subscriber::fmt()
@@ -37,7 +41,8 @@ async fn main() -> Result<(), GenericError> {
     //
     // The first argument passed to `ground-truth` should be the path to the configuration file in YAML format.
     let config_path = std::env::args().nth(1).expect("Missing configuration file path.");
-    let config = Config::from_yaml(&config_path).error_context("Failed to load configuration file.")?;
+    let mut config = Config::from_yaml(&config_path).error_context("Failed to load configuration file.")?;
+    config.host_docker_socket = Some(HOST_DOCKER_SOCK.to_string());
 
     info!("Loaded test case configuration from '{}'.", config_path);
 

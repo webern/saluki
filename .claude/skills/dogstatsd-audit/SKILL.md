@@ -8,56 +8,81 @@ allowed-tools: Read, Write, MultiEdit, Grep, Glob, LS, Bash, Agent, Task, AskUse
 ---
 # /dogstatsd-audit
 
-Usage: `/dogstatsd-audit <optional-prompt>`. The optional free-form prompt can adjust behavior,
-limit scope, or provide additional context.
+Usage: `/dogstatsd-audit <prompt>`. The prompt is optional and can adjust behavior, limit scope, or
+add context.
 
-## Phase 1: Path Resolution and Git Check
+## Action: Path Resolution and Git Check
 
-Resolve three repo paths. {{saluki}} is this repo's root. For {{datadog-agent}} and
-{{documentation}}, check `{{saluki}}/../<name>` then `~/dd/<name>`. If not found, ask the user.
-If the user lacks either repo, error and exit.
+Resolve three repo paths. `{{saluki}}` is this repo's root. For `{{datadog-agent}}` and
+`{{documentation}}`, check `{{saluki}}/../<name>` then `~/dd/<name>`. If not found, ask the user. If
+either repo is unavailable, report which is missing and stop.
 
-Show a table of the three resolved paths. AskUserQuestion: are these correct?
+Show a table of the three resolved paths. Use AskUserQuestion to confirm they are correct.
 
-Then show a table with each repo's HEAD commit message, branch name, and dirty status.
+Then show a table with each repo's HEAD commit message, branch name, and dirty status. Use
+AskUserQuestion to ask whether to proceed.
 
-AskUserQuestion: Proceed?
+You may store temporary files in `{{tmp}}`=`{{saluki}}/target/.temp`.
 
-## Phase 2: Build Supervisor Context
+## Initial Definitions
 
-Read these files to understand DogStatsD and Datadog Agent:
-- {{documentation}}/content/en/agent/architecture.md
-- {{documentation}}/content/en/extend/dogstatsd/
-- {{datadog-agent}}/pkg/config/
-- {{datadog-agent}}/comp/dogstatsd/
-
-Read these files to understand ADP, the performant alternative to datadog-agent's DogStatsD:
-- {{saluki}}/docs/agent-data-plane/index.md
-- {{saluki}}/docs/reference/architecture.md
-- {{saluki}}/bin/agent-data-plane/
-
-### Definitions
-
-- **ADP** (Agent Data Plane): The agent-data-plane binary and its components.
+- **ADP** (Agent Data Plane): The `agent-data-plane` binary and its components.
 - **RefImpl** (Reference Implementation): The DogStatsD implementation in `datadog-agent`.
 - **AdpImpl** (ADP Implementation): The DogStatsD implementation in ADP.
-- **ConfKey** (Configuration Key): Keys identifying configuration options. The primary source is
-  {{datadog-agent}}/pkg/config/common_settings.go, though keys are defined elsewhere too.
-
-The goal of this skill is to orchestrate large-scale discovery of RefImpl features, using ConfKeys
-to identify them and track how they affect RefImpl behavior.
+- **ConfKey** (Configuration Key): A `datadog-agent` configuration key. The primary index is
+  `{{datadog-agent}}/pkg/config/common_settings.go`, but keys also appear throughout
+  `{{datadog-agent}}/comp/dogstatsd/` and elsewhere
 
 ### FeatureState
 
-Analyze AdpImpl to produce a matrix of ConfKey features, each in one of these states:
+Each ConfKey maps to one of these states:
 
 - **IMPLEMENTED**: Present in RefImpl and correctly implemented in AdpImpl.
 - **ADP_ONLY**: Present in AdpImpl but not in RefImpl.
 - **MISSING**: Present in RefImpl but not in AdpImpl.
 - **DIVERGENT**: Present in both, but AdpImpl behavior differs from RefImpl.
-- **PENDING**: Present in both, but behavioral analysis is incomplete.
+- **UNSURE**: Present in both, but behavioral analysis is incomplete.
 
-AskUserQuestion: Summarize your understanding of the problem space in 100-300 words. Ask whether
-it is correct, giving the user a chance to redirect if needed.
+This skill discovers RefImpl features by enumerating ConfKeys and analyzing how each affects RefImpl
+behavior. The goal is to audit AdpImpl against RefImpl.
 
-STOP HERE: the rest of this skill has not been written yet. EXIT_SUCCESS
+## Action: Gather Background Knowledge
+
+You will be commanding a swarm of sub-agents. Here is the background context that you will need.
+
+Read these files to understand RefImpl:
+- `{{documentation}}/content/en/agent/architecture.md`
+- `{{documentation}}/content/en/extend/dogstatsd/` -- index and overview files
+- `{{datadog-agent}}/pkg/config/` -- `.go` files
+- `{{datadog-agent}}/comp/dogstatsd/` -- `.go` files
+
+Read these files to understand AdpImpl:
+- `{{saluki}}/docs/agent-data-plane/index.md`
+- `{{saluki}}/docs/reference/architecture.md`
+- `{{saluki}}/bin/agent-data-plane/` -- entry point files
+
+Use AskUserQuestion: summarize your understanding of the audit goal, the two implementations, and
+the FeatureState categories in 100-300 words. Ask the user to confirm or correct it.
+
+## Definition: ConfKey JSON
+
+A ConfKey JSON file looks like this:
+
+```json
+{
+	"impl": "RefImpl|AdpImpl",
+	"keys": [
+		{"dogstatsd_tag_cardinality": "{{datadog-agent}}/pkg/config/setup/common_settings.go:536"}
+		{"system_probe_config.internal_profiling.enabled": "{{datadog-agent}}/pkg/config/setup/system_probe.go:109"}
+	]
+}
+```
+
+## Action: Discover
+
+Create a sub-agent for each of the following tasks. Store their output in `{{tmp}}/ConfKeys`.
+
+- Discover all ConfKeys in {{datadog-agent}}/pkg/config/
+- Discover all ConfKeys in {{datadog-agent}}/cmd/agent/dist/datadog.yaml : this is an example
+  configuration YAML file with most configuration sections commented out. Use YAML flattening to
+  produce dot-separated paths as we see in common_settings.go

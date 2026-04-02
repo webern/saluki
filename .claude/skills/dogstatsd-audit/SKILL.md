@@ -15,32 +15,53 @@ or anything else that seems to work.
 
 Program flow overview:
 - Phase 1: Path resolution - finding the relevant code repositories
-- Phase 2: TBD
+- Phase 2: Supervisor Context Building
 
 ## Phase 1: Path Resolution and Git Check
 
-## Find Repos
+Resolve three repo paths. {{saluki}} is this repo's root. For each of {{datadog-agent}} and
+{{documentation}}, check `{{saluki}}/../<name>` then `~/dd/<name>`. If not found, ask the user. If
+the user doesn't have either repo locally, error and exit.
 
-{{saluki}}: This skill lives in the saluki code repository, thus {{saluki}} is the root of this
-repository.
-{{datadog-agent}}: You will need the filepath to the Datadog Agent code repository. This is usually
-named `datadog-agent` and often can be found at either `{{saluki}}../datadog-agent` or
-`~/dd/datadog-agent`. If you can't find it, ask the user. If the user doesn't have it checked out
-locally, this skill will not work. Error and exit explaining this to the user.
-{{documentation}}: This is the code repository containing Datadog's public documentation. This is
-usually named `documentation` and often can be found at either `{{saluki}}../documentation` or
-`~/dd/documentation`. If you can't find it, ask the user. If the user doesn't have it checked out
-locally, this skill will not work. Error and exit explaining this to the user.
+Show a table of the three resolved paths. AskUserQuestion: are these correct?
 
-Display these paths in a table as you have resolved them to the user and AskUserQuestion to
-determine if they are correct.
-
-## Double Check Git Status
-
-For each of {{saluki}}, {{datadog-agent}}, and {{documentation}}, display to the user (in a table)
-the git commit message of HEAD, the branch name if there is one, and whether the status is dirty or
-not.
+Then show a table with each repo's HEAD commit message, branch name, and dirty status.
 
 AskUserQuestion: Proceed?
 
-DONE: the rest of the skill is a work in progress. Exit Success
+## Phase 2: Supervising Agent Context
+
+You need to understand DogStatsD, Datadog Agent, read these files:
+- {{documentation}}/content/en/agent/architecture.md
+- {{documentation}}/content/en/extend/dogstatsd/
+- {{datadog-agent}}/pkg/config/
+- {{datadog-agent}}/comp/dogstatsd/
+
+You need to understand the agent-data-plane project's goal of providing a more performant
+alternative to datadog-agent's DogStatsD. Read these files:
+- {{saluki}}/docs/agent-data-plane/index.md
+- {{saluki}}/docs/reference/architecture.md
+- {{saluki}}/bin/agent-data-plane/
+
+Definitions:
+- ADP=Agent Data Plate
+- Reference Implementation, or RefImpl: The implementation of Datadog Agent and DogStatsD found in
+  `datadog-agent`
+- ADP Implementation, or AdpImpl: The implementation of DogStatsD (and supporting features) in ADP.
+- Configuration Key, or ConfKey: The keys used to identify configuration options. The closest thing
+  to a source of truth for these is {{datadog-agent}}/pkg/config/common_settings.go but they are
+  defined in other places as well.
+
+The purpose of this skill is going to be for you to orchestrate a large-scale discovery of RefImpl
+features, using ConfKeys to identify them and track how they affect RefImpl behavior.
+
+You will then perform an analysis of AdpImpl to create a matrix of RefImpl features that are:
+- IMPL: correctly implemented in ADP
+- MISS: missing or ignored in ADP
+- DIVR: exist in AdpImpl but behave differently than RefImpl
+
+AskUserQuestion: Provide a description of your understanding of the problem space using 100-300
+words and ask if you correctly understand the problem. If no, ask the user for more feedback and
+repeat.
+
+STOP HERE: the rest of this skill has not been written yet. EXIT_SUCCESS

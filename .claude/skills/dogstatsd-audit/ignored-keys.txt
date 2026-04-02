@@ -1,0 +1,2 @@
+dogstatsd_ignore_me_1
+other_ignored_key.with.path_2

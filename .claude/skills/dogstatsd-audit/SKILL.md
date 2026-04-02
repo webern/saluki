@@ -22,7 +22,8 @@ Show a table of the three resolved paths. Use AskUserQuestion to confirm they ar
 Then show a table with each repo's HEAD commit message, branch name, and dirty status. Use
 AskUserQuestion to ask whether to proceed.
 
-You may store temporary files in `{{tmp}}`=`{{saluki}}/target/.temp/dogstatsd-audit`.
+You may store temporary files in `{{tmp}}`=`{{saluki}}/target/.temp/dogstatsd-audit`. Delete {{tmp}}
+if exists. Create {{tmp}}
 
 ## Initial Definitions
 
@@ -80,7 +81,8 @@ A ConfKey JSON file looks like this:
 
 ## Action: Discover
 
-Create a sub-agent for each of the following tasks. Store their output in `{{tmp}}/conf-keys-all`.
+Create a sub-agent for each of the following tasks. Store their output in `{{tmp}}/conf-keys`.
+Inlcude ALL ConfKeys, not just DogStatsD-relevant keys.
 
 - Discover all ConfKeys in {{datadog-agent}}/pkg/config/
 - Discover all ConfKeys in {{datadog-agent}}/cmd/agent/dist/datadog.yaml : this is an example
@@ -88,4 +90,42 @@ Create a sub-agent for each of the following tasks. Store their output in `{{tmp
   produce dot-separated paths as we see in common_settings.go
 - Uh oh, I need to reserach this better, but do your best to find the ConfKeys in saluki
 
-STOP HERE: this skill is still under construction. The user wants to inspect the files at `{{tmp}}/conf-keys-all`
+Combine the files:
+- filtering out any ConfKeys in `ignored-keys.txt`...
+
+- find the best single-source-of-truth representation of each RefImpl key with the following
+  preference-order:
+  - {{datadog-agent}}/pkg/config/setup/common_settings.go
+  - {{datadog-agent}}/pkg/config/
+  - {{datadog-agent}}/cmd/agent/dist/datadog.yaml
+  - {{documentation}}
+
+- find the best single-source-of-truth representation of each AdpImpl key with the following
+  preference-order: <!-- TODO: better undersanding here -->
+  - {{saluki}}
+
+Write to `{{tmp}}/conf-keys/all.json` with the following format. Each ConfKey should exist only once giving it's best
+source-of-truth locations from each Impl:
+
+```json
+[
+	{
+		"ConfKey": "histogram_aggregates",
+		"RefImpl": null,
+		"AdpImpl": "lib/saluki-components/src/transforms/aggregate/config.rs:79"
+	},
+	{
+		"ConfKey": "dogstatsd_workers_count",
+		"RefImpl": "pkg/config/setup/common_settings.go:1596",
+		"AdpImpl": null
+	},
+	{
+		"ConfKey": "dogstatsd_port",
+		"RefImpl": "pkg/config/setup/common_settings.go:1524",
+		"AdpImpl": "lib/saluki-components/src/sources/dogstatsd/mod.rs:175"
+	}
+]
+```
+
+STOP HERE: this skill is still under construction. The user wants to inspect the files at
+`{{tmp}}/conf-keys-all`

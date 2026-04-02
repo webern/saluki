@@ -55,13 +55,19 @@ Definitions:
 The purpose of this skill is going to be for you to orchestrate a large-scale discovery of RefImpl
 features, using ConfKeys to identify them and track how they affect RefImpl behavior.
 
-You will then perform an analysis of AdpImpl to create a matrix of RefImpl features that are:
-- IMPL: correctly implemented in ADP
-- MISS: missing or ignored in ADP
-- DIVR: exist in AdpImpl but behave differently than RefImpl
+### FeatureState
+
+You will then perform an analysis of AdpImpl to create a matrix of ConfKey features that are in one
+of these FeatureStates:
+
+- IMPLEMENTED: Found in RefImpl and correctly implemented in AdpImpl
+- ADP_ONLY: Found in AdpImpl but not in RefImpl
+- MISSING: Found in RefImpl but not in AdpImpl
+- DIVERGENT: Found in both RefImpl and AdpImpl, but AdpImpl behavior is different from RefImpl
+- PENDING: Found in both RefImpl and AdpImpl, but the behavioral analysis is not yet complete
 
 AskUserQuestion: Provide a description of your understanding of the problem space using 100-300
-words and ask if you correctly understand the problem. If no, ask the user for more feedback and
-repeat.
+words and ask if you correctly understand the problem giving the user a chance to guide you if you
+are off-base.
 
 STOP HERE: the rest of this skill has not been written yet. EXIT_SUCCESS

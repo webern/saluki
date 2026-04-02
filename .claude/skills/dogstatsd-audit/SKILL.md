@@ -22,7 +22,7 @@ Show a table of the three resolved paths. Use AskUserQuestion to confirm they ar
 Then show a table with each repo's HEAD commit message, branch name, and dirty status. Use
 AskUserQuestion to ask whether to proceed.
 
-You may store temporary files in `{{tmp}}`=`{{saluki}}/target/.temp`.
+You may store temporary files in `{{tmp}}`=`{{saluki}}/target/.temp/dogstatsd-audit`.
 
 ## Initial Definitions
 
@@ -80,9 +80,12 @@ A ConfKey JSON file looks like this:
 
 ## Action: Discover
 
-Create a sub-agent for each of the following tasks. Store their output in `{{tmp}}/ConfKeys`.
+Create a sub-agent for each of the following tasks. Store their output in `{{tmp}}/conf-keys-all`.
 
 - Discover all ConfKeys in {{datadog-agent}}/pkg/config/
 - Discover all ConfKeys in {{datadog-agent}}/cmd/agent/dist/datadog.yaml : this is an example
   configuration YAML file with most configuration sections commented out. Use YAML flattening to
   produce dot-separated paths as we see in common_settings.go
+- Uh oh, I need to reserach this better, but do your best to find the ConfKeys in saluki
+
+STOP HERE: this skill is still under construction. The user wants to inspect the files at `{{tmp}}/conf-keys-all`

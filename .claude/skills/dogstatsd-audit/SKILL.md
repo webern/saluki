@@ -1,27 +1,21 @@
 ---
 name: dogstatsd-audit
 description: >
-  Conduct a user-invoced audit of the features implemented in the DogStatsD feature of datadog-agent
-  and compare that with the features available in agent-data-plane's DogStatsD component. This
-  analysis uses configuration keys as feature identifiers.
+  Audit DogStatsD feature parity between datadog-agent and agent-data-plane,
+  using configuration keys as feature identifiers.
 disable-model-invocation: true
 allowed-tools: Read, Write, MultiEdit, Grep, Glob, LS, Bash, Agent, Task, AskUserQuestion
 ---
 # /dogstatsd-audit
 
-Usage `/dogstatsd-audit <optional-prompt>`. The optional, free-form prompt may be used to adjust the
-agent's behavior or context at the start of the skill, to ask it to perform only part of the skill,
-or anything else that seems to work.
-
-Program flow overview:
-- Phase 1: Path resolution - finding the relevant code repositories
-- Phase 2: Supervisor Context Building
+Usage: `/dogstatsd-audit <optional-prompt>`. The optional free-form prompt can adjust behavior,
+limit scope, or provide additional context.
 
 ## Phase 1: Path Resolution and Git Check
 
-Resolve three repo paths. {{saluki}} is this repo's root. For each of {{datadog-agent}} and
-{{documentation}}, check `{{saluki}}/../<name>` then `~/dd/<name>`. If not found, ask the user. If
-the user doesn't have either repo locally, error and exit.
+Resolve three repo paths. {{saluki}} is this repo's root. For {{datadog-agent}} and
+{{documentation}}, check `{{saluki}}/../<name>` then `~/dd/<name>`. If not found, ask the user.
+If the user lacks either repo, error and exit.
 
 Show a table of the three resolved paths. AskUserQuestion: are these correct?
 
@@ -29,45 +23,41 @@ Then show a table with each repo's HEAD commit message, branch name, and dirty s
 
 AskUserQuestion: Proceed?
 
-## Phase 2: Supervising Agent Context
+## Phase 2: Build Supervisor Context
 
-You need to understand DogStatsD, Datadog Agent, read these files:
+Read these files to understand DogStatsD and Datadog Agent:
 - {{documentation}}/content/en/agent/architecture.md
 - {{documentation}}/content/en/extend/dogstatsd/
 - {{datadog-agent}}/pkg/config/
 - {{datadog-agent}}/comp/dogstatsd/
 
-You need to understand the agent-data-plane project's goal of providing a more performant
-alternative to datadog-agent's DogStatsD. Read these files:
+Read these files to understand ADP, the performant alternative to datadog-agent's DogStatsD:
 - {{saluki}}/docs/agent-data-plane/index.md
 - {{saluki}}/docs/reference/architecture.md
 - {{saluki}}/bin/agent-data-plane/
 
-Definitions:
-- ADP=Agent Data Plate
-- Reference Implementation, or RefImpl: The implementation of Datadog Agent and DogStatsD found in
-  `datadog-agent`
-- ADP Implementation, or AdpImpl: The implementation of DogStatsD (and supporting features) in ADP.
-- Configuration Key, or ConfKey: The keys used to identify configuration options. The closest thing
-  to a source of truth for these is {{datadog-agent}}/pkg/config/common_settings.go but they are
-  defined in other places as well.
+### Definitions
 
-The purpose of this skill is going to be for you to orchestrate a large-scale discovery of RefImpl
-features, using ConfKeys to identify them and track how they affect RefImpl behavior.
+- **ADP** (Agent Data Plane): The agent-data-plane binary and its components.
+- **RefImpl** (Reference Implementation): The DogStatsD implementation in `datadog-agent`.
+- **AdpImpl** (ADP Implementation): The DogStatsD implementation in ADP.
+- **ConfKey** (Configuration Key): Keys identifying configuration options. The primary source is
+  {{datadog-agent}}/pkg/config/common_settings.go, though keys are defined elsewhere too.
+
+The goal of this skill is to orchestrate large-scale discovery of RefImpl features, using ConfKeys
+to identify them and track how they affect RefImpl behavior.
 
 ### FeatureState
 
-You will then perform an analysis of AdpImpl to create a matrix of ConfKey features that are in one
-of these FeatureStates:
+Analyze AdpImpl to produce a matrix of ConfKey features, each in one of these states:
 
-- IMPLEMENTED: Found in RefImpl and correctly implemented in AdpImpl
-- ADP_ONLY: Found in AdpImpl but not in RefImpl
-- MISSING: Found in RefImpl but not in AdpImpl
-- DIVERGENT: Found in both RefImpl and AdpImpl, but AdpImpl behavior is different from RefImpl
-- PENDING: Found in both RefImpl and AdpImpl, but the behavioral analysis is not yet complete
+- **IMPLEMENTED**: Present in RefImpl and correctly implemented in AdpImpl.
+- **ADP_ONLY**: Present in AdpImpl but not in RefImpl.
+- **MISSING**: Present in RefImpl but not in AdpImpl.
+- **DIVERGENT**: Present in both, but AdpImpl behavior differs from RefImpl.
+- **PENDING**: Present in both, but behavioral analysis is incomplete.
 
-AskUserQuestion: Provide a description of your understanding of the problem space using 100-300
-words and ask if you correctly understand the problem giving the user a chance to guide you if you
-are off-base.
+AskUserQuestion: Summarize your understanding of the problem space in 100-300 words. Ask whether
+it is correct, giving the user a chance to redirect if needed.
 
 STOP HERE: the rest of this skill has not been written yet. EXIT_SUCCESS

@@ -109,4 +109,62 @@ giving its best source-of-truth locations from each Impl:
 ]
 ```
 
-STOP HERE: this skill is still under construction. The user wants to inspect the files in `{{tmp}}`
+## Action: Classify Keys by DogStatsD Relevance
+
+The goal is to determine which keys from `all-conf-keys.json` could affect DogStatsD behavior and
+which are clearly unrelated. This requires code analysis — name prefixes alone are not sufficient.
+A key like `forwarder_num_workers` has no `dogstatsd` prefix but directly affects how DogStatsD
+metrics are forwarded.
+
+### Phase 1: Batch Triage
+
+Split the keys from `all-conf-keys.json` into batches of ~30-50 keys. For each batch, create a
+sub-agent with the following instructions:
+
+> For each key in this batch, determine whether it could plausibly affect DogStatsD behavior. Read
+> the code at the listed source location(s) and trace how the key is used. A key affects DogStatsD
+> if it influences any of:
+>
+> - Metric reception (listeners, ports, sockets, buffers, protocols)
+> - Metric parsing or decoding (DogStatsD wire format, sample rates, timestamps)
+> - Metric aggregation, enrichment, or tagging (context resolution, tag cardinality, host tags)
+> - Metric forwarding or serialization (forwarder, endpoints, payloads, compression, retry)
+> - Origin detection or container enrichment
+> - General infrastructure that DogStatsD depends on (API keys, proxy, TLS, secrets, logging that
+>   would affect DogStatsD components)
+>
+> Respond with one CSV line per key:
+> `"key_name",true/false,"reasoning (20-70 chars)"`
+>
+> Where `true` means IGNORE this key (it does NOT affect DogStatsD), and `false` means DO NOT ignore
+> (it does or could affect DogStatsD).
+>
+> When uncertain, err on the side of `false` (do not ignore). It is much worse to miss a relevant
+> key than to include an irrelevant one.
+
+Give each sub-agent access to both `{{datadog-agent}}` and `{{saluki}}` so it can read usage sites.
+
+### Phase 2: Assemble Results
+
+Collect all sub-agent CSV outputs and concatenate into
+`{{tmp}}/ignored-keys.recommendations.csv`:
+
+```csv
+"api_key",false,"shared infra: DogStatsD forwarder needs this"
+"security_agent.enabled",true,"security agent only, no DogStatsD path"
+"dogstatsd_port",false,"directly configures DogStatsD listener"
+"network_config.enable_http_monitoring",true,"system probe network monitoring only"
+```
+
+Use AskUserQuestion: report how many keys were analyzed, how many recommended-ignore vs
+recommended-keep, and ask the user to review the file before proceeding.
+
+### Phase 3: Apply to ignored-keys.txt
+
+After the user approves (they may edit the recommendations file), read
+`{{tmp}}/ignored-keys.recommendations.csv` and write all keys where `ignore` is `true` to
+`{{saluki}}/.claude/skills/dogstatsd-audit/ignored-keys.txt`, one key per line, sorted
+alphabetically. Preserve any keys that were already in `ignored-keys.txt`.
+
+STOP HERE: this skill is still under construction. Later phases will use the filtered key set to
+perform per-key feature parity analysis.

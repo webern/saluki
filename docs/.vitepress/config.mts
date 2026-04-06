@@ -53,7 +53,10 @@ export default defineConfig({
             },
             {
                 text: "Agent Data Plane",
-                items: [{ text: "Releasing", link: "/agent-data-plane/releasing" }],
+                items: [
+                    { text: "Releasing", link: "/agent-data-plane/releasing" },
+                    { text: "DogStatsD Features", link: "/reference/dogstatsd-features" },
+                ],
             },
         ],
 

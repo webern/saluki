@@ -199,58 +199,46 @@ relevant keys that downstream phases will analyze.
 
 ## Action: Analyze Feature Parity
 
-For each relevant key in `all-conf-keys.json`, independently analyze both codebases to determine
-the FeatureState and produce a description, notes, and (when noteworthy) a discussion section.
+For each relevant key in `all-conf-keys.json`, analyze both codebases to determine FeatureState.
 
 ### Phase 1: Dispatch Analysis Agents
 
-Split the relevant keys from `all-conf-keys.json` into batches of 10-15 keys. For each batch,
-create a sub-agent using `./analyze-features.md`. Each sub-agent is clean-room — it has no
-knowledge of prior analysis or what the document currently says. It independently searches both
-codebases for every key in its batch.
-
-Give each sub-agent the batch of ConfKey names plus the paths to `{{datadog-agent}}` and
-`{{saluki}}`.
+Split keys from `all-conf-keys.json` into batches of 10-15. For each batch, create a sub-agent
+using `./analyze-features.md`. Each sub-agent performs clean room analysis — it independently
+searches both codebases. Give it the batch of ConfKey names plus paths to `{{datadog-agent}}`,
+`{{saluki}}` and an output path consisting of {{outdir}}/{{outfile}}.
 
 ### Phase 2: Compile Results
 
-Collect JSON outputs from all sub-agents into `{{tmp}}/feature-analysis.json` — a single array of
-all analyzed features.
+Collect JSON outputs into `{{tmp}}/feature-analysis.json` (single array of all analyzed features).
 
-Use AskUserQuestion: report summary counts (how many Implemented, Missing, Divergent, ADP Only) and
-ask the user to review `feature-analysis.json` before updating the documentation.
+AskUserQuestion: report summary counts (Implemented, Missing, Divergent, ADP Only) and ask user to
+review `feature-analysis.json` before updating documentation.
 
 ### Phase 3: Update docs/reference/dogstatsd-features.md
 
-Read the current `docs/reference/dogstatsd-features.md`. Apply the analysis results with these
-rules:
+Read the current file. Apply analysis with these rules:
 
-**The Features table:**
-- For each analyzed key, ensure a row exists in the Features table.
-- Description and Notes fields must be at most 32 characters each.
-- Table columns are: `Config Key | Description | Status | Notes`
+**General preservation rule — applies to Features table rows AND Discussion sections:**
+- If existing content is semantically equivalent to the new analysis, keep the existing text
+  unchanged. Don't rewrite to match sub-agent wording.
+- Only update if the analysis is substantively different (status changed, description wrong, etc.).
+- Add new entries for keys/discussions not yet present.
+- Never remove existing rows or discussion sections.
 
-**Preserving human edits — this is critical:**
-- Before updating any row, compare the sub-agent's analysis to what is already in the document.
-- If the existing Description, Status, and Notes are semantically equivalent to the new analysis,
-  **do not change the row**. Keep the existing human-written text. Minor wording differences that
-  mean the same thing are NOT a reason to update.
-- Only update a row if the analysis is substantively different (e.g. status changed, or the
-  description was wrong/misleading).
-- New keys not yet in the table should be added.
-- Never remove rows that exist in the table — a human may have added them intentionally.
+**Features table:**
+- Columns: `Config Key | Description | Status | Notes`
+- Description and Notes: max 32 characters each.
 
-**The Discussion section:**
-- Sub-agents produce discussion markdown (h3 headings) for noteworthy features only.
-- If a discussion section already exists for a key and the new analysis says the same thing, do not
-  replace it.
-- If a discussion section exists and the new analysis is substantively different, update it.
-- If the sub-agent produced a discussion for a key that doesn't have one yet, add it.
-- Never remove discussion sections that already exist — they may contain human-written analysis.
+**Discussion section:**
+- Sub-agents emit `### key_name` markdown for noteworthy features only. Apply the preservation rule
+  above.
 
-**Other sections (Status Legend, introductory text, Action Items, etc.):**
-- Do not modify these. They are maintained by humans.
+**Status Legend:**
+- Only add UNSURE to the legend if a sub-agent actually used it in the results.
 
-Update the `Last updated` date at the top of the document.
+**Other sections (intro, Action Items, etc.):** Do not modify.
 
-STOP HERE: later phases may add Action Items or other follow-up based on the analysis.
+Update the `Last updated` date at the top.
+
+STOP HERE: later phases may add Action Items or other follow-up.

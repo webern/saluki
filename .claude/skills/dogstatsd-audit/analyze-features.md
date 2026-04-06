@@ -1,90 +1,59 @@
 # Analyze Features
 
-This is a substep of the `/dogstatsd-audit` skill. You receive a batch of configuration keys and
-must independently analyze each one to determine its DogStatsD feature parity status between
-RefImpl (datadog-agent) and AdpImpl (agent-data-plane in Saluki).
+Substep of `/dogstatsd-audit`. You receive a batch of config keys and perform clean room analysis of
+each one for DogStatsD feature parity between RefImpl (datadog-agent) and AdpImpl
+(agent-data-plane/Saluki).
+
+Search BOTH codebases for every key regardless of what the supervising agent tells you.
 
 ## Input
 
-- `{{datadog-agent}}` = path to the datadog-agent repository
-- `{{saluki}}` = path to the Saluki repository
-- A batch of config keys to analyze (provided by the supervising agent)
+- `{{datadog-agent}}` = path to datadog-agent repo
+- `{{saluki}}` = path to Saluki repo
+- `{{outdir}}/{{outfile}}` = your output filepath
+- A batch of config keys (provided by the supervising agent)
 
-## Important: Clean Room
+## Per-Key Analysis
 
-You have NO prior knowledge of whether a key exists on either side. The supervising agent may have
-hints, but you must independently verify. For every key, search BOTH codebases regardless of what
-you've been told.
+### Where to search
 
-## Per-Key Analysis Procedure
+**RefImpl** (`{{datadog-agent}}`):
+- `pkg/config/setup/` — registration: `BindEnvAndSetDefault`, `SetDefault`, `BindEnv`
+- `comp/dogstatsd/` — runtime reads: `GetString`, `GetBool`, `GetInt`, etc.
+- Any other `.go` file referencing the key
 
-For each config key in your batch:
+**AdpImpl** (`{{saluki}}`):
+- `#[serde(rename = "key")]` on Deserialize structs
+- `get_typed("key")`, `try_get_typed("key")`, `get_typed_or_default("key")`
+- Bare field names on Deserialize structs (field name = key when no rename)
 
-### 1. Search RefImpl
+Do a deep code analysis on how the configuration setting affects both systems.
 
-Search `{{datadog-agent}}` for the key. Look in:
-- `pkg/config/setup/` for registration calls (`BindEnvAndSetDefault`, `SetDefault`, `BindEnv`, etc.)
-- `comp/dogstatsd/` for runtime reads (`GetString`, `GetBool`, `GetInt`, etc.)
-- Anywhere else it appears in `.go` files
+### Determine Status
 
-If found, read the surrounding code to understand:
-- What is the default value?
-- What does it control? (trace the usage from config read to behavioral effect)
-- Is it used directly by DogStatsD, or indirectly via shared infrastructure?
+- **Implemented**: Exists in both, affected behavior functionally equivalent.
+- **Missing**: Exists in RefImpl but not AdpImpl.
+- **Divergent**: Exists in both, behavior differs meaningfully.
+- **ADP Only**: Exists in AdpImpl but not RefImpl.
 
-### 2. Search AdpImpl
+Commit to a status. If you truly cannot determine equivalence with confidence after thorough
+analysis, use **Unsure** — but this should be rare.
 
-Search `{{saluki}}` for the key. Look in:
-- `#[serde(rename = "key")]` attributes on Deserialize structs
-- `get_typed("key")`, `try_get_typed("key")`, `get_typed_or_default("key")` calls
-- Field names on Deserialize structs (if no rename, the field name is the key)
-- Any other accessor pattern on `GenericConfiguration`
+### Write Outputs
 
-If found, read the surrounding code to understand:
-- What is the default value?
-- What does it control?
-- How does the behavior compare to RefImpl?
+**Description** (required, max 32 chars): Terse summary of what the key controls.
+Examples: `UDP listen port`, `Tag cardinality for origin`, `Max cached DSD contexts`
 
-### 3. Determine Status
+**Notes** (optional, max 32 chars): Only for Divergent or surprising cases. Blank otherwise.
+Examples: `ADP default differs: 256 vs 128`, `ADP ignores when standalone`
 
-Based on your analysis:
-
-- **Implemented**: Key exists in both, behavior is functionally equivalent.
-- **Missing**: Key exists in RefImpl but not in AdpImpl.
-- **Divergent**: Key exists in both but behavior differs in a meaningful way.
-- **ADP Only**: Key exists in AdpImpl but not in RefImpl.
-
-### 4. Write Outputs
-
-For each key, produce:
-
-**Description** (required, max 32 characters): A terse plain-English summary of what the key
-controls. Examples:
-- `UDP listen port`
-- `Receive buffer size (bytes)`
-- `Tag cardinality for origin`
-- `Max cached DSD contexts`
-
-**Notes** (optional, max 32 characters): Only populate if the status is Divergent or something is
-otherwise surprising/noteworthy. Leave blank for straightforward Implemented/Missing/ADP Only keys.
-Examples:
-- `ADP default differs: 256 vs 128`
-- `ADP ignores when standalone`
-- `` (blank for most keys)
-
-**Discussion** (optional): Only write a discussion if the feature is noteworthy. This means:
-- Divergent behavior that users should know about
-- Missing features that are important or surprising
-- Subtle differences in defaults, edge cases, or semantics
-- ADP-only features that warrant explanation
-
-A discussion should include relevant code snippets from both sides (if applicable), explain the
-difference concretely, and note any user-visible impact. Keep it focused. Most keys will NOT need a
-discussion.
+**Discussion** (optional, null for most keys): Only for noteworthy features — divergent behavior,
+surprising omissions, subtle semantic differences. Include code snippets from both sides and explain
+user-visible impact. Keep focused.
 
 ## Output Format
 
-Respond with a JSON array. One object per key:
+JSON array, one object per key:
 
 ```json
 [
@@ -96,33 +65,15 @@ Respond with a JSON array. One object per key:
     "Discussion": null
   },
   {
-    "ConfKey": "dogstatsd_mapper_profiles",
-    "Status": "Missing",
-    "Description": "Metric name to tag mapping",
-    "Notes": "",
-    "Discussion": null
-  },
-  {
     "ConfKey": "dogstatsd_buffer_size",
     "Status": "Divergent",
     "Description": "Receive buffer size (bytes)",
-    "Notes": "ADP default 8192 vs Agent 8192",
-    "Discussion": "### dogstatsd_buffer_size\n\nIn the Agent, this controls...\n\n```go\n// agent code\n```\n\nIn ADP, this controls...\n\n```rust\n// adp code\n```\n\nThe difference is..."
+    "Notes": "ADP default 8192 vs Agent 4096",
+    "Discussion": "### dogstatsd_buffer_size\n\nIn the Agent...\n```go\n// code\n```\n\nIn ADP...\n```rust\n// code\n```\n\nThe difference is..."
   }
 ]
 ```
 
-Rules:
-- `Description` must be non-empty and at most 32 characters
-- `Notes` must be at most 32 characters (empty string if not needed)
-- `Discussion` is `null` for non-noteworthy keys, or a markdown string (starting with `### key_name`) for noteworthy ones
-- Discussion markdown should use `###` heading (h3) for the key name
-
-## Getting Additional Context
-
-You are running as a subagent and may ask questions from the supervising agent if you need more
-context.
-
-## Completion
-
-Return your JSON array to the supervising agent when done.
+- `Description`: non-empty, max 32 chars
+- `Notes`: max 32 chars, empty string if not needed
+- `Discussion`: `null` or markdown string starting with `### key_name`

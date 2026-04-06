@@ -197,13 +197,60 @@ After the user approves (they may have edited the recommendations file):
 After this step, `all-conf-keys.json` should contain only `"Status": "known"` entries — the
 relevant keys that downstream phases will analyze.
 
-## Action: Analyze and Document Feature Parity (TBD)
+## Action: Analyze Feature Parity
 
-Instructions for this phase are under construction. The intent is:
+For each relevant key in `all-conf-keys.json`, independently analyze both codebases to determine
+the FeatureState and produce a description, notes, and (when noteworthy) a discussion section.
 
-For each relevant key in `all-conf-keys.json`, analyze the RefImpl and AdpImpl to determine the
-FeatureState (IMPLEMENTED, MISSING, DIVERGENT, ADP_ONLY, UNSURE). Update
-`docs/reference/dogstatsd-features.md` with the results — a customer-facing reference documenting
-DogStatsD feature parity between the Datadog Agent and Agent Data Plane.
+### Phase 1: Dispatch Analysis Agents
 
-STOP HERE: instructions for this phase are TBD.
+Split the relevant keys from `all-conf-keys.json` into batches of 10-15 keys. For each batch,
+create a sub-agent using `./analyze-features.md`. Each sub-agent is clean-room — it has no
+knowledge of prior analysis or what the document currently says. It independently searches both
+codebases for every key in its batch.
+
+Give each sub-agent the batch of ConfKey names plus the paths to `{{datadog-agent}}` and
+`{{saluki}}`.
+
+### Phase 2: Compile Results
+
+Collect JSON outputs from all sub-agents into `{{tmp}}/feature-analysis.json` — a single array of
+all analyzed features.
+
+Use AskUserQuestion: report summary counts (how many Implemented, Missing, Divergent, ADP Only) and
+ask the user to review `feature-analysis.json` before updating the documentation.
+
+### Phase 3: Update docs/reference/dogstatsd-features.md
+
+Read the current `docs/reference/dogstatsd-features.md`. Apply the analysis results with these
+rules:
+
+**The Features table:**
+- For each analyzed key, ensure a row exists in the Features table.
+- Description and Notes fields must be at most 32 characters each.
+- Table columns are: `Config Key | Description | Status | Notes`
+
+**Preserving human edits — this is critical:**
+- Before updating any row, compare the sub-agent's analysis to what is already in the document.
+- If the existing Description, Status, and Notes are semantically equivalent to the new analysis,
+  **do not change the row**. Keep the existing human-written text. Minor wording differences that
+  mean the same thing are NOT a reason to update.
+- Only update a row if the analysis is substantively different (e.g. status changed, or the
+  description was wrong/misleading).
+- New keys not yet in the table should be added.
+- Never remove rows that exist in the table — a human may have added them intentionally.
+
+**The Discussion section:**
+- Sub-agents produce discussion markdown (h3 headings) for noteworthy features only.
+- If a discussion section already exists for a key and the new analysis says the same thing, do not
+  replace it.
+- If a discussion section exists and the new analysis is substantively different, update it.
+- If the sub-agent produced a discussion for a key that doesn't have one yet, add it.
+- Never remove discussion sections that already exist — they may contain human-written analysis.
+
+**Other sections (Status Legend, introductory text, Action Items, etc.):**
+- Do not modify these. They are maintained by humans.
+
+Update the `Last updated` date at the top of the document.
+
+STOP HERE: later phases may add Action Items or other follow-up based on the analysis.

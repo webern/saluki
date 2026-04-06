@@ -16,25 +16,22 @@ source code with default values and env var bindings, and can also appear in the
 
 ## Step 1: Discover the Config API Surface
 
-Before searching for usages, read the interface definitions in `pkg/config/model/types.go` to
-discover every method on the `Setup` interface (registration methods) and the `Reader` interface
-(accessor methods). Build your own complete list from the source — do not rely solely on the
-examples below, as methods may have been added or renamed.
+Read `pkg/config/model/types.go` and build a complete list of every method on the `Setup` interface
+(registration) and `Reader` interface (accessors). Do not rely solely on the examples in Steps 2-3 —
+methods may have been added or renamed. Search for all of them.
 
-Also look for any wrapper functions or helpers that delegate to these interfaces. For example,
-`pkg/config/setup/config_accessor.go` provides top-level accessor functions. Check if other files
-in `pkg/config/setup/` add helpers you should also search for.
+Also check for wrapper functions that delegate to these interfaces (e.g.
+`pkg/config/setup/config_accessor.go`).
 
 ## Step 2: Search for Config Key Registration
 
-The primary config registry is `pkg/config/setup/common_settings.go` (~1900 lines, ~1100
-registration calls). Other files in `pkg/config/setup/` register keys for specific subsystems (APM,
-system probe, etc.).
+The primary config registry is `pkg/config/setup/common_settings.go`. Other files in
+`pkg/config/setup/` register keys for specific subsystems (APM, system probe, etc.).
 
-Using the `Setup` interface methods you discovered in Step 1, search all `.go` files under
-`pkg/config/` for calls to each registration method. The first string argument is the ConfKey.
+Search all `.go` files under `pkg/config/` for calls to each `Setup` method from Step 1. The first
+string argument is the ConfKey.
 
-As of this writing, the known registration patterns are:
+Known registration patterns:
 
 ```go
 // Most common (~95% of keys):
@@ -51,8 +48,6 @@ config.ParseEnvAsSlice("key_name", func(in string) []interface{} { ... })
 config.ParseEnvAsStringSlice("key_name", func(string) []string { ... })
 config.ParseEnvAsMapStringInterface("key_name", func(string) map[string]interface{} { ... })
 ```
-
-But there may be additional registration methods on the `Setup` interface — search for all of them.
 
 For each match, extract the first string literal as the ConfKey and record file:line as the
 location.
@@ -76,20 +71,15 @@ As of this writing, the known accessor patterns are:
 .GetStringMapString("key")
 ```
 
-But there may be additional accessor methods — search for all of them.
-
 Only include keys from read sites that were NOT already found at registration sites.
 
 ## Step 4: Validate Completeness
 
-After collecting keys from Steps 2 and 3, do a sanity check:
-
-- Pick 3-5 well-known DogStatsD keys (e.g. `dogstatsd_port`, `dogstatsd_buffer_size`,
-  `use_dogstatsd`) and verify they appear in your output with correct locations.
-- Scan `common_settings.go` manually (or skim sections) to check for registration patterns you
-  might have missed — e.g. keys registered via a loop, a helper function, or a different call
-  pattern.
-- If you find a new pattern, go back and search for it comprehensively.
+- Verify these known keys appear in your output with correct locations: `dogstatsd_port`,
+  `dogstatsd_buffer_size`, `use_dogstatsd`, `dogstatsd_socket`, `statsd_metric_namespace`.
+- Skim `common_settings.go` for registration patterns you may have missed (loops, helpers, unusual
+  call patterns).
+- If you find a new pattern, search for it comprehensively.
 
 ## Source 2: Example YAML File
 
@@ -142,13 +132,3 @@ Keys discovered from the example YAML file:
 "proxy.http","cmd/agent/dist/datadog.yaml:42"
 ```
 
-All paths should be relative to `{{datadog-agent}}`.
-
-## Getting Additional Context
-
-You are running as a subagent and may ask questions from the supervising agent or user if you need
-more context.
-
-## Completion
-
-Report to the supervising agent when your work is complete.

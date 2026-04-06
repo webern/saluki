@@ -10,25 +10,17 @@ This is a substep of the `/dogstatsd-audit` skill. Your job is to discover the c
 
 ## System Overview
 
-`bin/agent-data-plane` is the binary whose configuration we are concerned with. It composes
-components found in `lib/saluki-components` and uses other libs found in `lib/*`. The core
-configuration primitives are in `lib/saluki-config`.
-
-Configuration values originate from a `datadog.yaml` file and/or `DD_`-prefixed environment
-variables. At runtime they are stored in a flat key-value bag and accessed by components via
-`GenericConfiguration`.
+Configuration values originate from `datadog.yaml` and/or `DD_`-prefixed env vars, stored in a
+map structure accessed via `GenericConfiguration` (defined in `lib/saluki-config`).
 
 ## Step 1: Discover the Config API Surface
 
-Before searching for usages, read the `GenericConfiguration` impl in `lib/saluki-config/src/lib.rs`
-to discover **every public method** that takes a config key string argument. As of this writing, the
-known methods are `get_typed`, `try_get_typed`, `get_typed_or_default`, `as_typed`, and
-`watch_for_updates` — but new methods may have been added. Build your own complete list from the
-source.
+Read `GenericConfiguration` in `lib/saluki-config/src/lib.rs` and build a complete list of every
+public method that takes a config key string argument (e.g. `get_typed`, `try_get_typed`,
+`get_typed_or_default`, `as_typed`, `watch_for_updates`).
 
-Also look for any wrapper functions or helpers elsewhere in the codebase that delegate to
-`GenericConfiguration`. For example, search for functions whose body calls one of the methods you
-found above — these wrappers may be the actual call sites in component code.
+Also search for wrapper functions that delegate to `GenericConfiguration` — these may be the actual
+call sites in component code.
 
 ## Step 2: Search for Configuration Keys
 
@@ -63,10 +55,8 @@ If a field has NO `rename` attribute, the Rust field name itself is the key. For
 to find all keys — they won't appear in the outer struct.
 
 **Search:** Grep all `.rs` files under `lib/` and `bin/agent-data-plane/` for `serde(rename`.
-For each match, extract the string literal as the ConfKey and record file:line as the location.
-
-Also check for `Deserialize` structs loaded via `as_typed` that have fields WITHOUT `rename` — the
-field name is the key in those cases.
+For each match, extract the string literal as the ConfKey and record file:line. Also check
+`Deserialize` structs for fields WITHOUT `rename` — the Rust field name is the key in those cases.
 
 ### Pattern B: Manual key queries
 
@@ -95,13 +85,10 @@ string literal as the ConfKey and record file:line as the location.
 
 ## Step 3: Validate Completeness
 
-After collecting keys from Steps 2A and 2B, do a sanity check:
-
-- Search for any string literals that look like config keys (lowercase, underscores or dots, no
-  spaces) being passed to a `GenericConfiguration` or similar type that you may have missed.
-- Spot-check 2-3 component `mod.rs` or `config.rs` files to see if there's a pattern you haven't
-  accounted for.
-- If you find a new pattern, go back and search for it comprehensively.
+- Grep for any remaining string literals passed to `GenericConfiguration` methods not already
+  captured.
+- Spot-check 2-3 component `mod.rs` or `config.rs` files for patterns you haven't accounted for.
+- If you find a new pattern, search for it comprehensively.
 
 ### What NOT to include
 
@@ -122,12 +109,3 @@ relative to `{{saluki}}`:
 
 If the same ConfKey appears in multiple locations, include the most authoritative one — prefer the
 declaration site (serde rename or struct definition) over a secondary read site.
-
-## Getting Additional Context
-
-You are running as a subagent and may ask questions from the supervising agent or user if you need
-more context.
-
-## Completion
-
-Report to the supervising agent when your work is complete.

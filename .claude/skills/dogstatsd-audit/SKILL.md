@@ -51,16 +51,31 @@ behavior. The goal is to audit AdpImpl against RefImpl.
 
 You will be commanding a swarm of sub-agents. Here is the background context that you will need.
 
-Read these files to understand RefImpl:
-- `{{documentation}}/content/en/agent/architecture.md`
-- `{{documentation}}/content/en/extend/dogstatsd/` -- index and overview files
-- `{{datadog-agent}}/pkg/config/` -- `.go` files
-- `{{datadog-agent}}/comp/dogstatsd/` -- `.go` files
+Read these files to understand RefImpl. These are entrypoints for building context, not exhaustive
+lists — follow references as needed.
+
+DogStatsD feature overview and protocol:
+- `{{documentation}}/content/en/extend/dogstatsd/_index.md` — feature overview, setup, metric types
+- `{{documentation}}/content/en/extend/dogstatsd/datagram_shell.md` — wire protocol specification
+- `{{documentation}}/content/en/extend/dogstatsd/data_aggregation.md` — flush/aggregation behavior
+
+Agent architecture and config registration:
+- `{{documentation}}/content/en/agent/architecture.md` — high-level agent process model
+- `{{datadog-agent}}/pkg/config/setup/common_settings.go` — primary config key registry (~1900
+  lines, ~1100 BindEnvAndSetDefault calls). DogStatsD keys are around lines 1523-1625.
+- `{{datadog-agent}}/pkg/config/setup/config.go` — initialization logic, proxy/secrets setup
+- `{{datadog-agent}}/pkg/config/model/types.go` — Reader/Setup interfaces (all Get*/Set* methods)
+
+DogStatsD runtime behavior:
+- `{{datadog-agent}}/comp/dogstatsd/server/server.go` — main server, reads config at runtime
+- `{{datadog-agent}}/comp/dogstatsd/config/config.go` — DogStatsD config accessor
 
 Read these files to understand AdpImpl:
-- `{{saluki}}/docs/agent-data-plane/index.md`
-- `{{saluki}}/docs/reference/architecture.md`
-- `{{saluki}}/bin/agent-data-plane/` -- entry point files
+- `{{saluki}}/docs/agent-data-plane/index.md` — brief ADP overview
+- `{{saluki}}/docs/reference/architecture/index.md` — Saluki component architecture (topology,
+  sources, transforms, destinations)
+- `{{saluki}}/bin/agent-data-plane/src/config.rs` — top-level ADP config struct
+- `{{saluki}}/bin/agent-data-plane/src/cli/run.rs` — topology construction, config loading pipeline
 
 Use AskUserQuestion: summarize your understanding of the audit goal, the two implementations, and
 the FeatureState categories in 100-300 words. Ask the user to confirm or correct it.
@@ -76,14 +91,14 @@ A ConfKey csv file looks like this:
 
 ## Action: Discover
 
-Create a sub-agent for each of the following tasks. Store their output in `{{tmp}}`.
-Include ALL ConfKeys, not just DogStatsD-relevant keys.
+Create a sub-agent for each of the following tasks. Store their output in `{{tmp}}`. Include ALL
+ConfKeys, not just DogStatsD-relevant keys.
 
-- Discover all ConfKeys in {{datadog-agent}}/pkg/config/
-- Discover all ConfKeys in {{datadog-agent}}/cmd/agent/dist/datadog.yaml : this is an example
-  configuration YAML file with most configuration sections commented out. Use YAML flattening to
-  produce dot-separated paths as we see in common_settings.go
-- Find all ConfKeys in {{saluki}} by running ./find-saluki-configs.md
+- Find all ConfKeys in {{datadog-agent}} by running ./find-refimpl-configs.md
+- Find all ConfKeys in {{saluki}} by running ./find-adpimpl-configs.md
+
+- AskUserQuestion - give the user the output filenames and ask the user if they look OK before
+proceeding.
 
 Combine the files:
 - filtering out any ConfKeys in `ignored-keys.txt`...
@@ -95,11 +110,12 @@ Combine the files:
   - {{documentation}}
 
 - find the best single-source-of-truth representation of each AdpImpl key with the following
-  preference-order: <!-- TODO: better understanding here -->
-  - {{saluki}}
+  preference-order:
+  - {{saluki}} config structs
+  - {{saluki}} call function call sites
 
-Write to `{{tmp}}/all-conf-keys.json` with the following format. Each ConfKey should exist only once giving it's best
-source-of-truth locations from each Impl:
+Write to `{{tmp}}/all-conf-keys.json` with the following format. Each ConfKey should exist only once
+giving its best source-of-truth locations from each Impl:
 
 ```json
 [

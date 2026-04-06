@@ -65,34 +65,28 @@ Read these files to understand AdpImpl:
 Use AskUserQuestion: summarize your understanding of the audit goal, the two implementations, and
 the FeatureState categories in 100-300 words. Ask the user to confirm or correct it.
 
-## Definition: ConfKey JSON
+## Definition: ConfKey csv
 
-A ConfKey JSON file looks like this:
+A ConfKey csv file looks like this:
 
-```json
-{
-	"impl": "RefImpl|AdpImpl",
-	"keys": [
-		{"dogstatsd_tag_cardinality": "{{datadog-agent}}/pkg/config/setup/common_settings.go:536"}
-		{"system_probe_config.internal_profiling.enabled": "{{datadog-agent}}/pkg/config/setup/system_probe.go:109"}
-	]
-}
+```csv
+"dogstatsd_tag_cardinality","{{datadog-agent}}/pkg/config/setup/common_settings.go:536"
+"system_probe_config.internal_profiling.enabled","{{datadog-agent}}/pkg/config/setup/system_probe.go:109"
 ```
 
 ## Action: Discover
 
-Create a sub-agent for each of the following tasks. Store their output in `{{tmp}}/conf-keys`.
-Inlcude ALL ConfKeys, not just DogStatsD-relevant keys.
+Create a sub-agent for each of the following tasks. Store their output in `{{tmp}}`.
+Include ALL ConfKeys, not just DogStatsD-relevant keys.
 
 - Discover all ConfKeys in {{datadog-agent}}/pkg/config/
 - Discover all ConfKeys in {{datadog-agent}}/cmd/agent/dist/datadog.yaml : this is an example
   configuration YAML file with most configuration sections commented out. Use YAML flattening to
   produce dot-separated paths as we see in common_settings.go
-- Uh oh, I need to reserach this better, but do your best to find the ConfKeys in saluki
+- Find all ConfKeys in {{saluki}} by running ./find-saluki-configs.md
 
 Combine the files:
 - filtering out any ConfKeys in `ignored-keys.txt`...
-
 - find the best single-source-of-truth representation of each RefImpl key with the following
   preference-order:
   - {{datadog-agent}}/pkg/config/setup/common_settings.go
@@ -101,10 +95,10 @@ Combine the files:
   - {{documentation}}
 
 - find the best single-source-of-truth representation of each AdpImpl key with the following
-  preference-order: <!-- TODO: better undersanding here -->
+  preference-order: <!-- TODO: better understanding here -->
   - {{saluki}}
 
-Write to `{{tmp}}/conf-keys/all.json` with the following format. Each ConfKey should exist only once giving it's best
+Write to `{{tmp}}/all-conf-keys.json` with the following format. Each ConfKey should exist only once giving it's best
 source-of-truth locations from each Impl:
 
 ```json
@@ -127,5 +121,4 @@ source-of-truth locations from each Impl:
 ]
 ```
 
-STOP HERE: this skill is still under construction. The user wants to inspect the files at
-`{{tmp}}/conf-keys-all`
+STOP HERE: this skill is still under construction. The user wants to inspect the files in `{{tmp}}`

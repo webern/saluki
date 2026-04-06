@@ -13,6 +13,11 @@ This is a substep of the `/dogstatsd-audit` skill. Your job is to discover the c
 Configuration values originate from `datadog.yaml` and/or `DD_`-prefixed env vars, stored in a
 map structure accessed via `GenericConfiguration` (defined in `lib/saluki-config`).
 
+Environment variable names are split on `__` (double underscore) to create nested objects. For
+example, `DD_FOO__BAR=baz` becomes `{ "foo": { "bar": "baz" } }`. This is why some components use
+manual `try_get_typed("dotted.key")` calls instead of serde structs — it avoids requiring users to
+type awkward env var names like `DD_DATA_PLANE__OTLP__ENABLED`.
+
 ## Step 1: Discover the Config API Surface
 
 Read `GenericConfiguration` in `lib/saluki-config/src/lib.rs` and build a complete list of every

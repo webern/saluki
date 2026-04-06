@@ -4,6 +4,10 @@ This document tracks feature parity between the Datadog Agent's DogStatsD implem
 Data Plane (ADP). Use it to determine whether ADP supports the DogStatsD features your workload
 depends on.
 
+Last updated: 2026-04-06
+
+The `/dogstatsd-audit` skill can automatically inspect and update this, but it is also OK to edit this by hand.
+
 ## Status Legend
 
 | Status | Meaning |
@@ -13,7 +17,7 @@ depends on.
 | **Divergent** | Feature exists in both but behavior differs. See the notes column for details. |
 | **ADP Only** | Feature is unique to ADP and does not exist in the Datadog Agent. |
 
-## Metric Reception
+## Features
 
 | Config Key | Description | Status | Notes |
 |------------|-------------|--------|-------|
@@ -22,41 +26,31 @@ depends on.
 | `dogstatsd_stream_socket` | UDS stream socket path | _TBD_ | |
 | `dogstatsd_non_local_traffic` | Accept non-localhost UDP traffic | _TBD_ | |
 | `dogstatsd_buffer_size` | Receive buffer size in bytes | _TBD_ | |
-
-## Parsing and Decoding
-
-| Config Key | Description | Status | Notes |
-|------------|-------------|--------|-------|
 | `dogstatsd_no_aggregation_pipeline` | Timestamp-based no-aggregation support | _TBD_ | |
-| _more keys TBD_ | | | |
-
-## Aggregation and Enrichment
-
-| Config Key | Description | Status | Notes |
-|------------|-------------|--------|-------|
 | `dogstatsd_tag_cardinality` | Tag cardinality level for origin tags | _TBD_ | |
-| _more keys TBD_ | | | |
-
-## Forwarding and Serialization
-
-| Config Key | Description | Status | Notes |
-|------------|-------------|--------|-------|
 | `forwarder_num_workers` | Concurrent forwarder workers | _TBD_ | |
-| _more keys TBD_ | | | |
-
-## General Infrastructure
-
-Config keys that are not DogStatsD-specific but affect its behavior (API keys, proxy, TLS, etc.).
-
-| Config Key | Description | Status | Notes |
-|------------|-------------|--------|-------|
 | `api_key` | Datadog API key used for metric submission | _TBD_ | |
-| _more keys TBD_ | | | |
 
-## ADP-Only Features
+## Discussion
 
-Features unique to Agent Data Plane that do not have a Datadog Agent equivalent.
+TODO: we will discuss features that are missing, divergent or otherwise notable
 
-| Config Key | Description | Notes |
-|------------|-------------|-------|
-| _TBD_ | | |
+### dogstatsd_port
+
+We have a diverfence as follows, in the Agent we see
+
+```go
+// blah some go code
+```
+
+and in ADP we see
+
+```rust
+// blah some Rust code
+```
+
+Blah blah discussion
+
+## Action Items
+
+Here we will create a check-box list of features to implement perhaps?

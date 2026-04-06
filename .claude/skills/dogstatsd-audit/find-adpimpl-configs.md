@@ -18,11 +18,23 @@ Configuration values originate from a `datadog.yaml` file and/or `DD_`-prefixed 
 variables. At runtime they are stored in a flat key-value bag and accessed by components via
 `GenericConfiguration`.
 
-## How to Identify Configuration Keys
+## Step 1: Discover the Config API Surface
 
-There are two patterns. You must search for both.
+Before searching for usages, read the `GenericConfiguration` impl in `lib/saluki-config/src/lib.rs`
+to discover **every public method** that takes a config key string argument. As of this writing, the
+known methods are `get_typed`, `try_get_typed`, `get_typed_or_default`, `as_typed`, and
+`watch_for_updates` — but new methods may have been added. Build your own complete list from the
+source.
 
-### Pattern 1: Serde rename on Deserialize structs
+Also look for any wrapper functions or helpers elsewhere in the codebase that delegate to
+`GenericConfiguration`. For example, search for functions whose body calls one of the methods you
+found above — these wrappers may be the actual call sites in component code.
+
+## Step 2: Search for Configuration Keys
+
+There are two families of patterns. You must search for both.
+
+### Pattern A: Serde rename on Deserialize structs
 
 Config structs derive `Deserialize` and use `#[serde(rename = "...")]` to map fields to config key
 names. The struct is loaded as a whole via `config.as_typed::<T>()`.
@@ -50,23 +62,19 @@ If a field has NO `rename` attribute, the Rust field name itself is the key. For
 **Important:** `#[serde(flatten)]` means a sub-struct's fields are inlined. You must follow these
 to find all keys — they won't appear in the outer struct.
 
-**Search command:** Grep all `.rs` files under `lib/` and `bin/agent-data-plane/` for:
-```
-#[serde(rename = "
-```
-
+**Search:** Grep all `.rs` files under `lib/` and `bin/agent-data-plane/` for `serde(rename`.
 For each match, extract the string literal as the ConfKey and record file:line as the location.
 
 Also check for `Deserialize` structs loaded via `as_typed` that have fields WITHOUT `rename` — the
 field name is the key in those cases.
 
-### Pattern 2: Manual key queries
+### Pattern B: Manual key queries
 
 Some config structs don't derive `Deserialize`. Instead, their `from_configuration()` method calls
 accessor functions on `GenericConfiguration` with string literal key names.
 
 ```rust
-// Examples of the three accessor functions:
+// Examples using the methods known at time of writing:
 config.get_typed("api_key")?
 config.try_get_typed("data_plane.enabled")?.unwrap_or(false)
 config.get_typed_or_default("log_level")
@@ -81,14 +89,19 @@ data_plane:
     enabled: true
 ```
 
-**Search commands:** Grep all `.rs` files under `lib/` and `bin/agent-data-plane/` for each of:
-```
-get_typed("
-try_get_typed("
-get_typed_or_default("
-```
+**Search:** Using the full method list you discovered in Step 1, grep all `.rs` files under `lib/`
+and `bin/agent-data-plane/` for each method name followed by `("`. For each match, extract the
+string literal as the ConfKey and record file:line as the location.
 
-For each match, extract the string literal as the ConfKey and record file:line as the location.
+## Step 3: Validate Completeness
+
+After collecting keys from Steps 2A and 2B, do a sanity check:
+
+- Search for any string literals that look like config keys (lowercase, underscores or dots, no
+  spaces) being passed to a `GenericConfiguration` or similar type that you may have missed.
+- Spot-check 2-3 component `mod.rs` or `config.rs` files to see if there's a pattern you haven't
+  accounted for.
+- If you find a new pattern, go back and search for it comprehensively.
 
 ### What NOT to include
 

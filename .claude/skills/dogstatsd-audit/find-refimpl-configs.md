@@ -14,61 +14,58 @@ The Datadog Agent uses Viper (via a custom wrapper) for configuration. Keys are 
 source code with default values and env var bindings, and can also appear in the example
 `datadog.yaml` configuration file.
 
-## Source 1: Go Code Registration
+## Step 1: Discover the Config API Surface
+
+Before searching for usages, read the interface definitions in `pkg/config/model/types.go` to
+discover every method on the `Setup` interface (registration methods) and the `Reader` interface
+(accessor methods). Build your own complete list from the source — do not rely solely on the
+examples below, as methods may have been added or renamed.
+
+Also look for any wrapper functions or helpers that delegate to these interfaces. For example,
+`pkg/config/setup/config_accessor.go` provides top-level accessor functions. Check if other files
+in `pkg/config/setup/` add helpers you should also search for.
+
+## Step 2: Search for Config Key Registration
 
 The primary config registry is `pkg/config/setup/common_settings.go` (~1900 lines, ~1100
 registration calls). Other files in `pkg/config/setup/` register keys for specific subsystems (APM,
 system probe, etc.).
 
-### Registration patterns to search for
+Using the `Setup` interface methods you discovered in Step 1, search all `.go` files under
+`pkg/config/` for calls to each registration method. The first string argument is the ConfKey.
 
-Search all `.go` files under `pkg/config/` for these function calls. The first string argument is
-the ConfKey.
+As of this writing, the known registration patterns are:
 
-**Pattern 1 — most common (~95% of keys):**
 ```go
+// Most common (~95% of keys):
 config.BindEnvAndSetDefault("dogstatsd_port", 8125)
-config.BindEnvAndSetDefault("dogstatsd_buffer_size", 1024*8)
-config.BindEnvAndSetDefault("dogstatsd_origin_detection", false)
-```
 
-**Pattern 2 — default without env binding:**
-```go
+// Default without env binding:
 config.SetDefault("key_name", defaultValue)
-```
 
-**Pattern 3 — env binding without default:**
-```go
+// Env binding without default:
 config.BindEnv("dogstatsd_mapper_profiles")
-```
 
-**Pattern 4 — custom env parsing (the key is still the first argument):**
-```go
-config.ParseEnvAsSlice("dogstatsd_mapper_profiles", func(in string) []interface{} { ... })
+// Custom env parsing (key is still the first argument):
+config.ParseEnvAsSlice("key_name", func(in string) []interface{} { ... })
 config.ParseEnvAsStringSlice("key_name", func(string) []string { ... })
 config.ParseEnvAsMapStringInterface("key_name", func(string) map[string]interface{} { ... })
 ```
 
-**Search commands:** Grep all `.go` files under `pkg/config/` for each of:
-```
-BindEnvAndSetDefault("
-SetDefault("
-BindEnv("
-ParseEnvAsSlice("
-ParseEnvAsStringSlice("
-ParseEnvAsMapStringInterface("
-```
+But there may be additional registration methods on the `Setup` interface — search for all of them.
 
 For each match, extract the first string literal as the ConfKey and record file:line as the
 location.
 
-### Keys found at runtime read sites
+## Step 3: Search for Config Key Reads
 
-Some keys may only appear at read sites, not at registration sites. As a secondary pass, also search
-`comp/dogstatsd/` for config reads:
+Some keys may only appear at read sites, not at registration sites. Using the `Reader` interface
+methods you discovered in Step 1, search `comp/dogstatsd/` and `pkg/config/setup/` for accessor
+calls.
+
+As of this writing, the known accessor patterns are:
 
 ```go
-// The Reader interface methods — all take a key string as the first argument:
 .GetString("key")
 .GetBool("key")
 .GetInt("key")
@@ -79,7 +76,20 @@ Some keys may only appear at read sites, not at registration sites. As a seconda
 .GetStringMapString("key")
 ```
 
+But there may be additional accessor methods — search for all of them.
+
 Only include keys from read sites that were NOT already found at registration sites.
+
+## Step 4: Validate Completeness
+
+After collecting keys from Steps 2 and 3, do a sanity check:
+
+- Pick 3-5 well-known DogStatsD keys (e.g. `dogstatsd_port`, `dogstatsd_buffer_size`,
+  `use_dogstatsd`) and verify they appear in your output with correct locations.
+- Scan `common_settings.go` manually (or skim sections) to check for registration patterns you
+  might have missed — e.g. keys registered via a loop, a helper function, or a different call
+  pattern.
+- If you find a new pattern, go back and search for it comprehensively.
 
 ## Source 2: Example YAML File
 

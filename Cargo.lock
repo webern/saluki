@@ -55,6 +55,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "stringtheory",
+ "tempfile",
  "tikv-jemallocator",
  "tokio",
  "tonic",

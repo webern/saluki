@@ -69,3 +69,4 @@ chrono = { workspace = true }
 
 [dev-dependencies]
 saluki-metrics = { workspace = true, features = ["test"] }
+tempfile = { workspace = true }

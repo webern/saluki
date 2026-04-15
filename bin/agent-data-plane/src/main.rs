@@ -24,6 +24,9 @@ mod internal;
 
 pub(crate) mod state;
 
+#[cfg(test)]
+mod confidence_tests;
+
 #[cfg(all(target_os = "linux", not(system_allocator)))]
 #[global_allocator]
 static ALLOC: memory_accounting::allocator::TrackingAllocator<tikv_jemallocator::Jemalloc> =
@@ -94,7 +97,10 @@ async fn run_inner(
                 }
             }
 
-            let exit_code = match handle_run_command(started, bootstrap_config_path, bootstrap_config).await {
+            let shutdown_signal = async {
+                let _ = tokio::signal::ctrl_c().await;
+            };
+            let exit_code = match handle_run_command(started, bootstrap_config_path, bootstrap_config, shutdown_signal).await {
                 Ok(()) => {
                     info!("Agent Data Plane stopped.");
                     None

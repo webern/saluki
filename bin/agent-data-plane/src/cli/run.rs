@@ -1,4 +1,5 @@
 use std::{
+    future::Future,
     path::PathBuf,
     time::{Duration, Instant},
 };
@@ -58,6 +59,7 @@ pub struct RunCommand {
 /// Entrypoint for the `run` commands.
 pub async fn handle_run_command(
     started: Instant, bootstrap_config_path: PathBuf, bootstrap_config: GenericConfiguration,
+    shutdown_signal: impl Future<Output = ()> + Send,
 ) -> Result<(), GenericError> {
     let app_details = saluki_metadata::get_app_details();
     info!(
@@ -217,6 +219,8 @@ pub async fn handle_run_command(
         info!(ready_time_ms = started.elapsed().as_millis(), "Topology healthy.");
     });
 
+    tokio::pin!(shutdown_signal);
+
     let mut topology_failed = false;
     let mut internal_supervisor_failed = false;
     select! {
@@ -245,8 +249,8 @@ pub async fn handle_run_command(
             error!("Topology component unexpectedly finished. Shutting down...");
             topology_failed = true;
         },
-        _ = tokio::signal::ctrl_c() => {
-            info!("Received SIGINT, shutting down...");
+        _ = shutdown_signal => {
+            info!("Received shutdown signal, shutting down...");
         }
     }
 

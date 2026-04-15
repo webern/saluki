@@ -68,5 +68,7 @@ tikv-jemallocator = { workspace = true, features = [
 chrono = { workspace = true }
 
 [dev-dependencies]
+axum = { workspace = true, features = ["tokio"] }
+bytes = { workspace = true }
 saluki-metrics = { workspace = true, features = ["test"] }
 tempfile = { workspace = true }

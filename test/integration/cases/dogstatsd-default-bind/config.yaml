@@ -1,3 +1,13 @@
+# Issue #1331: bind_host support — test 1 of 3 (default behavior)
+#
+# The core agent reads `bind_host` from config to determine which address
+# DogStatsD binds to. When bind_host is not set and non_local_traffic is
+# false, the core agent defaults to localhost (127.0.0.1).
+#
+# ADP must match this behavior. This test verifies the default case: no
+# bind_host configured, no non_local_traffic. The DogStatsD listener
+# should bind to 127.0.0.1.
+
 name: "dogstatsd-default-bind"
 description: "Verifies DogStatsD binds to 127.0.0.1 by default when bind_host is not configured"
 timeout: 60s

@@ -1,3 +1,17 @@
+# Issue #1331: bind_host support — test 3 of 3 (non_local_traffic wins)
+#
+# The core agent reads `bind_host` from config to determine which address
+# DogStatsD binds to. But when dogstatsd_non_local_traffic is true, the
+# core agent ignores bind_host entirely and binds to 0.0.0.0.
+#
+# ADP must match this precedence. This test sets bind_host to the
+# container's eth0 IP AND sets non_local_traffic to true. Despite
+# bind_host being configured to a specific interface IP, the listener
+# should bind to 0.0.0.0 because non_local_traffic takes priority.
+#
+# Without this test, an implementation could incorrectly let bind_host
+# override non_local_traffic, breaking the core agent's contract.
+
 name: "dogstatsd-non-local-overrides-bind-host"
 description: "Verifies dogstatsd_non_local_traffic takes precedence over bind_host"
 timeout: 60s

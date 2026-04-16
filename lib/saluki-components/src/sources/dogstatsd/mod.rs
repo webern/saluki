@@ -81,6 +81,9 @@ enum Error {
 
     #[snafu(display("No listeners configured. Please specify a port (`dogstatsd_port`) or a socket path (`dogstatsd_socket` or `dogstatsd_stream_socket`) to enable a listener."))]
     NoListenersConfigured,
+
+    #[snafu(display("Invalid bind_host '{}': not a valid IP address.", address))]
+    InvalidBindHost { address: String },
 }
 
 const fn default_buffer_size() -> usize {
@@ -201,10 +204,20 @@ pub struct DogStatsDConfiguration {
     #[serde_as(as = "NoneAsEmptyString")]
     socket_stream_path: Option<String>,
 
+    /// The host address to bind DogStatsD listeners to.
+    ///
+    /// When set, UDP and TCP listeners bind to this address instead of `localhost`. Ignored when
+    /// `dogstatsd_non_local_traffic` is `true` (which always binds to `0.0.0.0`).
+    ///
+    /// Defaults to unset, which resolves to `localhost` (`127.0.0.1`).
+    #[serde(rename = "bind_host", default)]
+    #[serde_as(as = "NoneAsEmptyString")]
+    bind_host: Option<String>,
+
     /// Whether or not to listen for non-local traffic in UDP mode.
     ///
     /// If set to `true`, the listener will accept packets from any interface/address. Otherwise, the source will only
-    /// listen on `localhost`.
+    /// listen on the address specified by `bind_host`, or `localhost` if `bind_host` is not set.
     ///
     /// Defaults to `false`.
     #[serde(rename = "dogstatsd_non_local_traffic", default)]
@@ -358,12 +371,20 @@ impl DogStatsDConfiguration {
     async fn build_listeners(&self) -> Result<Vec<Listener>, Error> {
         let mut listeners = Vec::new();
 
+        // Resolve the bind address for UDP/TCP listeners.
+        // non_local_traffic=true always wins (0.0.0.0). Otherwise, use bind_host if set, falling
+        // back to localhost. This matches the core agent's behavior in GetBindHost().
+        let bind_ip: std::net::IpAddr = if self.non_local_traffic {
+            [0, 0, 0, 0].into()
+        } else if let Some(ref host) = self.bind_host {
+            host.parse()
+                .map_err(|_| Error::InvalidBindHost { address: host.clone() })?
+        } else {
+            [127, 0, 0, 1].into()
+        };
+
         if self.port != 0 {
-            let address = if self.non_local_traffic {
-                ListenAddress::Udp(([0, 0, 0, 0], self.port).into())
-            } else {
-                ListenAddress::Udp(([127, 0, 0, 1], self.port).into())
-            };
+            let address = ListenAddress::Udp(std::net::SocketAddr::new(bind_ip, self.port));
 
             let listener = Listener::from_listen_address(address)
                 .await
@@ -372,11 +393,7 @@ impl DogStatsDConfiguration {
         }
 
         if self.tcp_port != 0 {
-            let address = if self.non_local_traffic {
-                ListenAddress::Tcp(([0, 0, 0, 0], self.tcp_port).into())
-            } else {
-                ListenAddress::Tcp(([127, 0, 0, 1], self.tcp_port).into())
-            };
+            let address = ListenAddress::Tcp(std::net::SocketAddr::new(bind_ip, self.tcp_port));
 
             let listener = Listener::from_listen_address(address)
                 .await

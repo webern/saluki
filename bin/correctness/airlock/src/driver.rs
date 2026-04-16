@@ -8,6 +8,7 @@ use std::{
 use bollard::{
     container::{Config, CreateContainerOptions, ListContainersOptions, LogOutput, LogsOptions},
     errors::Error,
+    exec::{CreateExecOptions, StartExecResults},
     image::CreateImageOptions,
     models::{HealthConfig, HealthStatusEnum, HostConfig, Ipam},
     network::CreateNetworkOptions,
@@ -15,7 +16,7 @@ use bollard::{
     volume::CreateVolumeOptions,
     Docker,
 };
-use futures::StreamExt as _;
+use futures::{StreamExt as _, TryStreamExt as _};
 use saluki_error::{generic_error, ErrorContext as _, GenericError};
 use tokio::{
     io::{AsyncWriteExt as _, BufWriter},
@@ -823,6 +824,45 @@ impl Driver {
         );
 
         Ok(exit_status)
+    }
+
+    /// Executes a command inside the running container and returns its stdout.
+    ///
+    /// The command runs as root with no TTY. Stderr is captured but discarded — only stdout is returned.
+    ///
+    /// # Errors
+    ///
+    /// If the exec creation, start, or output collection fails, an error is returned.
+    pub async fn exec_in_container(&self, cmd: Vec<String>) -> Result<String, GenericError> {
+        let exec_opts = CreateExecOptions {
+            attach_stdout: Some(true),
+            attach_stderr: Some(false),
+            cmd: Some(cmd.clone()),
+            ..Default::default()
+        };
+
+        let exec = self
+            .docker
+            .create_exec::<String>(&self.container_name, exec_opts)
+            .await
+            .with_error_context(|| format!("Failed to create exec instance for container {}.", self.container_name))?;
+
+        let output = self
+            .docker
+            .start_exec(&exec.id, None)
+            .await
+            .with_error_context(|| format!("Failed to start exec for container {}.", self.container_name))?;
+
+        let mut stdout = String::new();
+        if let StartExecResults::Attached { mut output, .. } = output {
+            while let Some(chunk) = output.try_next().await? {
+                if let LogOutput::StdOut { message } = chunk {
+                    stdout.push_str(&String::from_utf8_lossy(&message));
+                }
+            }
+        }
+
+        Ok(stdout)
     }
 
     async fn cleanup_inner(&self, container_name: &str) -> Result<(), GenericError> {

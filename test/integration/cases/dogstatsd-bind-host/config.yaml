@@ -1,0 +1,26 @@
+name: "dogstatsd-bind-host"
+description: "Verifies DogStatsD binds to the address specified by bind_host"
+timeout: 60s
+
+container:
+  image: "saluki-images/datadog-agent:testing-devel"
+  env:
+    DD_API_KEY: "test-api-key"
+    DD_HOSTNAME: "integration-test-dsd-bind-host"
+    DD_DATA_PLANE_ENABLED: "true"
+    DD_DATA_PLANE_STANDALONE_MODE: "true"
+    DD_DATA_PLANE_DOGSTATSD_ENABLED: "true"
+    PANORAMIC_DYNAMIC_CONTAINER_IP: "hostname -i | awk '{print $1}'"
+    DD_BIND_HOST: "{{PANORAMIC_DYNAMIC_CONTAINER_IP}}"
+
+assertions:
+  - type: log_contains
+    pattern: "listen_addr:{{PANORAMIC_DYNAMIC_CONTAINER_IP}}:8125"
+    timeout: 15s
+  - parallel:
+      - type: process_stable_for
+        duration: 10s
+      - type: log_not_contains
+        pattern: "panic|PANIC"
+        regex: true
+        during: 10s

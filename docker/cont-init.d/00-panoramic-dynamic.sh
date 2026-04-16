@@ -1,11 +1,15 @@
 #!/bin/bash
 
-# Panoramic dynamic variable resolution.
+# Container-side half of the panoramic dynamic variable system.
 #
-# Evaluates PANORAMIC_DYNAMIC_* env vars as shell commands and writes the
-# results to /airlock/dynamic/<KEY>. Then resolves {{PANORAMIC_DYNAMIC_*}}
-# references found in the remaining env vars and writes the resolved values to
-# /run/adp/env/ so s6-envdir can override them before ADP starts.
+# Some integration tests need values that only exist at container runtime (e.g., the
+# container's Docker-assigned IP). This script is the container-side resolver — it
+# evaluates PANORAMIC_DYNAMIC_* env vars as shell commands, writes results to
+# /airlock/dynamic/<KEY>, and resolves {{PANORAMIC_DYNAMIC_*}} references in other
+# env vars by writing the final values to /run/adp/env/ for s6-envdir.
+#
+# The panoramic-side resolver (see dynamic_vars.rs) reads from /airlock/dynamic/ and
+# substitutes the same values into assertion patterns.
 #
 # This script is a no-op when no PANORAMIC_DYNAMIC_* vars are present.
 

@@ -323,18 +323,11 @@ impl TestRunner {
         let port_mappings = self.build_port_mappings(&details);
 
         // Resolve dynamic variables if any PANORAMIC_DYNAMIC_* env vars are defined.
-        let has_dynamic_vars = self
-            .test_case
-            .container
-            .env
-            .keys()
-            .any(|k| k.starts_with("PANORAMIC_DYNAMIC_"));
-
-        if has_dynamic_vars {
+        if crate::dynamic_vars::has_dynamic_vars(&self.test_case) {
             let phase_start = Instant::now();
             debug!(test = %test_name, "Resolving dynamic variables...");
 
-            match self.resolve_dynamic_vars(&driver).await {
+            match crate::dynamic_vars::read_resolved_vars(&driver).await {
                 Ok(vars) => {
                     // Fail on empty values — indicates the init script command failed.
                     for (key, value) in &vars {
@@ -609,61 +602,6 @@ impl TestRunner {
         });
 
         Ok(())
-    }
-
-    /// Reads resolved dynamic variable values from `/airlock/dynamic/` inside the container.
-    ///
-    /// Waits for the `/airlock/dynamic/.ready` sentinel, then reads each key file.
-    async fn resolve_dynamic_vars(&self, driver: &Driver) -> Result<HashMap<String, String>, GenericError> {
-        // Poll for the .ready sentinel with a timeout.
-        let deadline = Instant::now() + Duration::from_secs(30);
-        loop {
-            let result = driver
-                .exec_in_container(vec![
-                    "cat".to_string(),
-                    "/airlock/dynamic/.ready".to_string(),
-                ])
-                .await;
-
-            if result.is_ok() {
-                break;
-            }
-
-            if Instant::now() > deadline {
-                return Err(generic_error!(
-                    "Timed out waiting for /airlock/dynamic/.ready after 30s."
-                ));
-            }
-
-            tokio::time::sleep(Duration::from_millis(200)).await;
-        }
-
-        // List all key files in /airlock/dynamic/ (excluding .ready).
-        let listing = driver
-            .exec_in_container(vec!["ls".to_string(), "/airlock/dynamic/".to_string()])
-            .await
-            .error_context("Failed to list /airlock/dynamic/.")?;
-
-        let mut vars = HashMap::new();
-        for filename in listing.lines() {
-            let filename = filename.trim();
-            if filename.is_empty() || filename == ".ready" {
-                continue;
-            }
-
-            let value = driver
-                .exec_in_container(vec![
-                    "cat".to_string(),
-                    format!("/airlock/dynamic/{}", filename),
-                ])
-                .await
-                .error_context(format!("Failed to read /airlock/dynamic/{}.", filename))?;
-
-            debug!(key = filename, value = %value.trim(), "Resolved dynamic variable.");
-            vars.insert(filename.to_string(), value.trim().to_string());
-        }
-
-        Ok(vars)
     }
 
     async fn run_assertions(&self, port_mappings: &HashMap<String, u16>, container_name: &str) -> Vec<AssertionResult> {

@@ -16,6 +16,7 @@ mod cli;
 use self::cli::{Cli, Command};
 
 mod config;
+mod dynamic_vars;
 use self::config::discover_tests;
 
 mod events;

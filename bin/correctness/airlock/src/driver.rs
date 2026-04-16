@@ -828,11 +828,12 @@ impl Driver {
 
     /// Executes a command inside the running container and returns its stdout.
     ///
-    /// The command runs as root with no TTY. Stderr is captured but discarded — only stdout is returned.
+    /// The command runs as root with no TTY. Stderr is discarded — only stdout is returned. If the command exits with a
+    /// nonzero status, an error is returned.
     ///
     /// # Errors
     ///
-    /// If the exec creation, start, or output collection fails, an error is returned.
+    /// If the exec creation, start, output collection, or command exit code indicates failure, an error is returned.
     pub async fn exec_in_container(&self, cmd: Vec<String>) -> Result<String, GenericError> {
         let exec_opts = CreateExecOptions {
             attach_stdout: Some(true),
@@ -847,6 +848,8 @@ impl Driver {
             .await
             .with_error_context(|| format!("Failed to create exec instance for container {}.", self.container_name))?;
 
+        let exec_id = exec.id.clone();
+
         let output = self
             .docker
             .start_exec(&exec.id, None)
@@ -859,6 +862,24 @@ impl Driver {
                 if let LogOutput::StdOut { message } = chunk {
                     stdout.push_str(&String::from_utf8_lossy(&message));
                 }
+            }
+        }
+
+        // Check the command's exit code.
+        let inspect = self
+            .docker
+            .inspect_exec(&exec_id)
+            .await
+            .error_context("Failed to inspect exec result.")?;
+
+        if let Some(code) = inspect.exit_code {
+            if code != 0 {
+                return Err(generic_error!(
+                    "Command {:?} exited with code {} in container {}.",
+                    cmd,
+                    code,
+                    self.container_name
+                ));
             }
         }
 

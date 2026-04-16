@@ -232,19 +232,34 @@ impl AssertionConfig {
     pub fn resolve_dynamic_vars(&mut self, vars: &HashMap<String, String>) {
         match self {
             AssertionConfig::LogContains { pattern, .. } | AssertionConfig::LogNotContains { pattern, .. } => {
-                for (key, value) in vars {
-                    *pattern = pattern.replace(&format!("{{{{PANORAMIC_DYNAMIC_{key}}}}}"), value);
-                }
+                resolve_placeholders(pattern, vars);
             }
             AssertionConfig::HealthCheck { endpoint, .. } => {
-                for (key, value) in vars {
-                    *endpoint = endpoint.replace(&format!("{{{{PANORAMIC_DYNAMIC_{key}}}}}"), value);
-                }
+                resolve_placeholders(endpoint, vars);
             }
-            AssertionConfig::ProcessStableFor { .. }
-            | AssertionConfig::ProcessExitsWith { .. }
-            | AssertionConfig::PortListening { .. } => {}
+            AssertionConfig::PortListening { protocol, .. } => {
+                resolve_placeholders(protocol, vars);
+            }
+            AssertionConfig::ProcessStableFor { .. } | AssertionConfig::ProcessExitsWith { .. } => {}
         }
+    }
+
+    /// Returns any unresolved `{{PANORAMIC_DYNAMIC_*}}` placeholders in string fields.
+    pub fn unresolved_placeholders(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        match self {
+            AssertionConfig::LogContains { pattern, .. } | AssertionConfig::LogNotContains { pattern, .. } => {
+                find_unresolved(pattern, &mut out);
+            }
+            AssertionConfig::HealthCheck { endpoint, .. } => {
+                find_unresolved(endpoint, &mut out);
+            }
+            AssertionConfig::PortListening { protocol, .. } => {
+                find_unresolved(protocol, &mut out);
+            }
+            AssertionConfig::ProcessStableFor { .. } | AssertionConfig::ProcessExitsWith { .. } => {}
+        }
+        out
     }
 }
 
@@ -260,6 +275,14 @@ impl AssertionStep {
             }
         }
     }
+
+    /// Returns any unresolved `{{PANORAMIC_DYNAMIC_*}}` placeholders in this step.
+    pub fn unresolved_placeholders(&self) -> Vec<String> {
+        match self {
+            AssertionStep::Single(config) => config.unresolved_placeholders(),
+            AssertionStep::Parallel { parallel } => parallel.iter().flat_map(|c| c.unresolved_placeholders()).collect(),
+        }
+    }
 }
 
 impl TestCase {
@@ -268,6 +291,11 @@ impl TestCase {
         for step in &mut self.assertions {
             step.resolve_dynamic_vars(vars);
         }
+    }
+
+    /// Returns any unresolved `{{PANORAMIC_DYNAMIC_*}}` placeholders across all assertion steps.
+    pub fn unresolved_placeholders(&self) -> Vec<String> {
+        self.assertions.iter().flat_map(|s| s.unresolved_placeholders()).collect()
     }
 
     /// Count total individual assertions across all steps.
@@ -306,6 +334,26 @@ impl TestCase {
             path.to_path_buf()
         } else {
             self.base_path.join(path)
+        }
+    }
+}
+
+/// Replace all `{{PANORAMIC_DYNAMIC_*}}` placeholders in a string.
+fn resolve_placeholders(s: &mut String, vars: &HashMap<String, String>) {
+    for (key, value) in vars {
+        *s = s.replace(&format!("{{{{PANORAMIC_DYNAMIC_{key}}}}}"), value);
+    }
+}
+
+/// Collect any `{{PANORAMIC_DYNAMIC_*}}` placeholders remaining in a string.
+fn find_unresolved(s: &str, out: &mut Vec<String>) {
+    let mut remaining = s;
+    while let Some(start) = remaining.find("{{PANORAMIC_DYNAMIC_") {
+        if let Some(end) = remaining[start..].find("}}") {
+            out.push(remaining[start..start + end + 2].to_string());
+            remaining = &remaining[start + end + 2..];
+        } else {
+            break;
         }
     }
 }

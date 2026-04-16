@@ -322,6 +322,51 @@ impl TestRunner {
         // Build port mappings for assertions.
         let port_mappings = self.build_port_mappings(&details);
 
+        // Resolve dynamic variables if any PANORAMIC_DYNAMIC_* env vars are defined.
+        let has_dynamic_vars = self
+            .test_case
+            .container
+            .env
+            .keys()
+            .any(|k| k.starts_with("PANORAMIC_DYNAMIC_"));
+
+        if has_dynamic_vars {
+            let phase_start = Instant::now();
+            debug!(test = %test_name, "Resolving dynamic variables...");
+
+            match self.resolve_dynamic_vars(&driver).await {
+                Ok(vars) => {
+                    info!(
+                        test = %test_name,
+                        variable_count = vars.len(),
+                        "Resolved dynamic variables."
+                    );
+                    self.test_case.resolve_dynamic_vars(&vars);
+                }
+                Err(e) => {
+                    error!(test = %test_name, error = %e, "Failed to resolve dynamic variables.");
+                    phase_timings.push(PhaseTiming {
+                        phase: "dynamic_vars".to_string(),
+                        duration: phase_start.elapsed(),
+                    });
+                    let _ = self.cleanup(&driver).await;
+                    return TestResult {
+                        name: test_name,
+                        passed: false,
+                        duration: started.elapsed(),
+                        assertion_results: vec![],
+                        error: Some(format!("Failed to resolve dynamic variables: {}", e)),
+                        phase_timings,
+                    };
+                }
+            }
+
+            phase_timings.push(PhaseTiming {
+                phase: "dynamic_vars".to_string(),
+                duration: phase_start.elapsed(),
+            });
+        }
+
         // Run assertions with overall timeout.
         info!(
             test = %test_name,
@@ -517,6 +562,61 @@ impl TestRunner {
         });
 
         Ok(())
+    }
+
+    /// Reads resolved dynamic variable values from `/airlock/dynamic/` inside the container.
+    ///
+    /// Waits for the `/airlock/dynamic/.ready` sentinel, then reads each key file.
+    async fn resolve_dynamic_vars(&self, driver: &Driver) -> Result<HashMap<String, String>, GenericError> {
+        // Poll for the .ready sentinel with a timeout.
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let result = driver
+                .exec_in_container(vec![
+                    "cat".to_string(),
+                    "/airlock/dynamic/.ready".to_string(),
+                ])
+                .await;
+
+            if result.is_ok() {
+                break;
+            }
+
+            if Instant::now() > deadline {
+                return Err(generic_error!(
+                    "Timed out waiting for /airlock/dynamic/.ready after 30s."
+                ));
+            }
+
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+
+        // List all key files in /airlock/dynamic/ (excluding .ready).
+        let listing = driver
+            .exec_in_container(vec!["ls".to_string(), "/airlock/dynamic/".to_string()])
+            .await
+            .error_context("Failed to list /airlock/dynamic/.")?;
+
+        let mut vars = HashMap::new();
+        for filename in listing.lines() {
+            let filename = filename.trim();
+            if filename.is_empty() || filename == ".ready" {
+                continue;
+            }
+
+            let value = driver
+                .exec_in_container(vec![
+                    "cat".to_string(),
+                    format!("/airlock/dynamic/{}", filename),
+                ])
+                .await
+                .error_context(format!("Failed to read /airlock/dynamic/{}.", filename))?;
+
+            debug!(key = filename, value = %value.trim(), "Resolved dynamic variable.");
+            vars.insert(filename.to_string(), value.trim().to_string());
+        }
+
+        Ok(vars)
     }
 
     async fn run_assertions(&self, port_mappings: &HashMap<String, u16>, container_name: &str) -> Vec<AssertionResult> {

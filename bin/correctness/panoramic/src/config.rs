@@ -227,7 +227,49 @@ pub enum LogStream {
     Both,
 }
 
+impl AssertionConfig {
+    /// Replaces `{{PANORAMIC_DYNAMIC_*}}` placeholders in string fields with resolved values.
+    pub fn resolve_dynamic_vars(&mut self, vars: &HashMap<String, String>) {
+        match self {
+            AssertionConfig::LogContains { pattern, .. } | AssertionConfig::LogNotContains { pattern, .. } => {
+                for (key, value) in vars {
+                    *pattern = pattern.replace(&format!("{{{{PANORAMIC_DYNAMIC_{key}}}}}"), value);
+                }
+            }
+            AssertionConfig::HealthCheck { endpoint, .. } => {
+                for (key, value) in vars {
+                    *endpoint = endpoint.replace(&format!("{{{{PANORAMIC_DYNAMIC_{key}}}}}"), value);
+                }
+            }
+            AssertionConfig::ProcessStableFor { .. }
+            | AssertionConfig::ProcessExitsWith { .. }
+            | AssertionConfig::PortListening { .. } => {}
+        }
+    }
+}
+
+impl AssertionStep {
+    /// Replaces `{{PANORAMIC_DYNAMIC_*}}` placeholders in all assertion configs within this step.
+    pub fn resolve_dynamic_vars(&mut self, vars: &HashMap<String, String>) {
+        match self {
+            AssertionStep::Single(config) => config.resolve_dynamic_vars(vars),
+            AssertionStep::Parallel { parallel } => {
+                for config in parallel {
+                    config.resolve_dynamic_vars(vars);
+                }
+            }
+        }
+    }
+}
+
 impl TestCase {
+    /// Replaces `{{PANORAMIC_DYNAMIC_*}}` placeholders in all assertion steps.
+    pub fn resolve_dynamic_vars(&mut self, vars: &HashMap<String, String>) {
+        for step in &mut self.assertions {
+            step.resolve_dynamic_vars(vars);
+        }
+    }
+
     /// Count total individual assertions across all steps.
     pub fn total_assertion_count(&self) -> usize {
         self.assertions

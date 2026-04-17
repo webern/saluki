@@ -373,6 +373,97 @@ impl TestRunner {
         // Build port mappings for assertions.
         let port_mappings = self.build_port_mappings(&details);
 
+        // Resolve dynamic variables if any PANORAMIC_DYNAMIC_* env vars are defined.
+        if crate::dynamic_vars::has_dynamic_vars(&self.test_case) {
+            let phase_start = Instant::now();
+            debug!(test = %test_name, "Resolving dynamic variables...");
+
+            match crate::dynamic_vars::read_resolved_vars(&driver).await {
+                Ok(vars) => {
+                    // Fail on empty values — indicates the init script command failed.
+                    for (key, value) in &vars {
+                        if value.is_empty() {
+                            error!(test = %test_name, key = key, "Dynamic variable resolved to empty string.");
+                            phase_timings.push(PhaseTiming {
+                                phase: "dynamic_vars".to_string(),
+                                duration: phase_start.elapsed(),
+                            });
+                            let _ = self.cleanup(&driver).await;
+                            return TestResult {
+                                name: test_name,
+                                passed: false,
+                                duration: started.elapsed(),
+                                assertion_results: vec![],
+                                error: Some(format!(
+                                    "Dynamic variable PANORAMIC_DYNAMIC_{} resolved to an empty string. \
+                                     The shell command in the test config likely failed.",
+                                    key
+                                )),
+                                phase_timings,
+                                log_dir: None,
+                                assertion_details: vec![],
+                            };
+                        }
+                    }
+
+                    info!(
+                        test = %test_name,
+                        variable_count = vars.len(),
+                        "Resolved dynamic variables."
+                    );
+                    self.test_case.resolve_dynamic_vars(&vars);
+
+                    // Fail if any placeholders remain unresolved after substitution.
+                    let unresolved = self.test_case.unresolved_placeholders();
+                    if !unresolved.is_empty() {
+                        error!(test = %test_name, unresolved = ?unresolved, "Unresolved dynamic variable placeholders.");
+                        phase_timings.push(PhaseTiming {
+                            phase: "dynamic_vars".to_string(),
+                            duration: phase_start.elapsed(),
+                        });
+                        let _ = self.cleanup(&driver).await;
+                        return TestResult {
+                            name: test_name,
+                            passed: false,
+                            duration: started.elapsed(),
+                            assertion_results: vec![],
+                            error: Some(format!(
+                                "Unresolved dynamic variable placeholders in assertions: {}. \
+                                 Check that matching PANORAMIC_DYNAMIC_* env vars are defined.",
+                                unresolved.join(", ")
+                            )),
+                            phase_timings,
+                            log_dir: None,
+                            assertion_details: vec![],
+                        };
+                    }
+                }
+                Err(e) => {
+                    error!(test = %test_name, error = %e, "Failed to resolve dynamic variables.");
+                    phase_timings.push(PhaseTiming {
+                        phase: "dynamic_vars".to_string(),
+                        duration: phase_start.elapsed(),
+                    });
+                    let _ = self.cleanup(&driver).await;
+                    return TestResult {
+                        name: test_name,
+                        passed: false,
+                        duration: started.elapsed(),
+                        assertion_results: vec![],
+                        error: Some(format!("Failed to resolve dynamic variables: {}", e)),
+                        phase_timings,
+                        log_dir: None,
+                        assertion_details: vec![],
+                    };
+                }
+            }
+
+            phase_timings.push(PhaseTiming {
+                phase: "dynamic_vars".to_string(),
+                duration: phase_start.elapsed(),
+            });
+        }
+
         // Run assertions with overall timeout.
         info!(
             test = %test_name,

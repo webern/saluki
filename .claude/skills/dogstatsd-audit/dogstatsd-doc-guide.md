@@ -33,14 +33,14 @@ wrong. Do not rewrite prose to match sub-agent wording.
 Each section in the doc is marked with an HTML comment anchor immediately before its heading. These
 are invisible in rendered output and give the skill an unambiguous location target.
 
-| Anchor                                     | Section                                  |
-|--------------------------------------------|------------------------------------------|
-| `<!-- section:unsupported-in-progress -->` | Unsupported Settings -- being worked on  |
-| `<!-- section:unsupported-not-planned -->` | Unsupported Settings -- not planned      |
-| `<!-- section:behavioral-differences -->`  | Behavioral Differences                   |
-| `<!-- section:compatibility-unknown -->`   | Compatibility Unknown                    |
-| `<!-- section:adp-only -->`                | ADP-Only Settings                        |
-| `<!-- section:reference -->`               | Configuration Reference                  |
+| Anchor                                     | Section                                 |
+|--------------------------------------------|-----------------------------------------|
+| `<!-- section:unsupported-in-progress -->` | Unsupported Settings -- being worked on |
+| `<!-- section:unsupported-not-planned -->` | Unsupported Settings -- not planned     |
+| `<!-- section:behavioral-differences -->`  | Behavioral Differences                  |
+| `<!-- section:compatibility-unknown -->`   | Compatibility Unknown                   |
+| `<!-- section:adp-only -->`                | ADP-Only Settings                       |
+| `<!-- section:reference -->`               | Configuration Reference                 |
 
 ## Table Schemas
 
@@ -128,28 +128,46 @@ Columns:
 
 ## Mapping: known-configs.json -> Doc Section
 
-| feature_state  | action                 | Section anchor                        | Notes                              |
-|----------------|------------------------|---------------------------------------|------------------------------------|
-| MISSING        | IMPLEMENT              | `section:unsupported-in-progress`     |                                    |
-| MISSING        | INVESTIGATE            | `section:compatibility-unknown`       | Omit issue column if none filed    |
-| MISSING        | NONE                   | `section:unsupported-not-planned`     | Only if customer-visible           |
-| DIVERGENT      | DOCUMENT or DOCUMENTED | `section:behavioral-differences`      |                                    |
-| DIVERGENT      | IMPLEMENT              | `section:behavioral-differences`      | Note fix is in progress            |
-| DIVERGENT      | INVESTIGATE            | `section:behavioral-differences`      | Note behavior is under review      |
-| ADP_ONLY       | NONE                   | `section:adp-only`                    |                                    |
-| PARITY         | NONE                   | `section:reference`                   | Reference table only               |
-| NOT_APPLICABLE | NONE                   | --                                    | Omit unless customer-visible       |
-| UNKNOWN        | INVESTIGATE            | `section:compatibility-unknown`       |                                    |
-| MISSING        | INVESTIGATE            | `section:compatibility-unknown`       | When divergence not yet confirmed  |
-| DIVERGENT      | INVESTIGATE            | `section:compatibility-unknown`       | When divergence not yet confirmed  |
+| feature_state  | action      | Section anchor                  |
+|----------------|-------------|---------------------------------|
+| ADP_ONLY       | DOCUMENT    | section:adp-only                |
+| ADP_ONLY       | DOCUMENTED  | section:adp-only                |
+| ADP_ONLY       | IMPLEMENT   | section:adp-only                |
+| ADP_ONLY       | INVESTIGATE | section:adp-only                |
+| ADP_ONLY       | NONE        | section:adp-only                |
+| DIVERGENT      | DOCUMENT    | section:behavioral-differences  |
+| DIVERGENT      | DOCUMENTED  | section:behavioral-differences  |
+| DIVERGENT      | IMPLEMENT   | section:unsupported-in-progress |
+| DIVERGENT      | INVESTIGATE | section:compatibility-unknown   |
+| DIVERGENT      | NONE        | section:behavioral-differences  |
+| MISSING        | DOCUMENT    | section:unsupported-not-planned |
+| MISSING        | DOCUMENTED  | section:unsupported-not-planned |
+| MISSING        | IMPLEMENT   | section:unsupported-in-progress |
+| MISSING        | INVESTIGATE | section:compatibility-unknown   |
+| MISSING        | NONE        | section:unsupported-not-planned |
+| NOT_APPLICABLE | DOCUMENT    | section:behavioral-differences  |
+| NOT_APPLICABLE | DOCUMENTED  | section:behavioral-differences  |
+| NOT_APPLICABLE | IMPLEMENT   | section:unsupported-in-progress |
+| NOT_APPLICABLE | INVESTIGATE | section:compatibility-unknown   |
+| NOT_APPLICABLE | NONE        | section:unsupported-not-planned |
+| PARITY         | DOCUMENT    | section:reference               |
+| PARITY         | DOCUMENTED  | section:reference               |
+| PARITY         | IMPLEMENT   | section:reference               |
+| PARITY         | INVESTIGATE | section:reference               |
+| PARITY         | NONE        | section:reference               |
+| UNKNOWN        | DOCUMENT    | section:compatibility-unknown   |
+| UNKNOWN        | DOCUMENTED  | section:compatibility-unknown   |
+| UNKNOWN        | IMPLEMENT   | section:compatibility-unknown   |
+| UNKNOWN        | INVESTIGATE | section:compatibility-unknown   |
+| UNKNOWN        | NONE        | section:compatibility-unknown   |
 
 Every key that appears in a section table also appears in the Configuration Reference table.
 
 ## Link Block
 
-All GitHub issue URLs are defined as Markdown reference links at the very bottom of the doc,
-after all content. This keeps tables and prose narrow and readable. Use reference-style links
-everywhere in the document body.
+All GitHub issue URLs are defined as Markdown reference links at the very bottom of the doc, after
+all content. This keeps tables and prose narrow and readable. Use reference-style links everywhere
+in the document body.
 
 Format:
 

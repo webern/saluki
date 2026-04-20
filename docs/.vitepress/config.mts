@@ -49,12 +49,20 @@ export default defineConfig({
                     { text: "Architecture", link: "/reference/architecture" },
                     { text: "ADRs", link: "/reference/adrs" },
                     { text: "Proposals", link: "/reference/proposals" },
-                    { text: "DogStatsD Features", link: "/reference/dogstatsd-features" },
                 ],
             },
+
             {
                 text: "Agent Data Plane",
-                items: [{ text: "Releasing", link: "/agent-data-plane/releasing" }],
+                items: [
+                    { text: "Releasing", link: "/agent-data-plane/releasing" },
+                    {
+                        text: "Configuration",
+                        items: [
+                            { text: "DogStatsD Parity", link: "/agent-data-plane/configuration/dogstatsd" },
+                        ],
+                    },
+                ],
             },
         ],
 

@@ -131,7 +131,7 @@ Columns:
 | feature_state  | action                 | Section anchor                        | Notes                              |
 |----------------|------------------------|---------------------------------------|------------------------------------|
 | MISSING        | IMPLEMENT              | `section:unsupported-in-progress`     |                                    |
-| MISSING        | INVESTIGATE            | `section:unsupported-in-progress`     | Omit issue column if none filed    |
+| MISSING        | INVESTIGATE            | `section:compatibility-unknown`       | Omit issue column if none filed    |
 | MISSING        | NONE                   | `section:unsupported-not-planned`     | Only if customer-visible           |
 | DIVERGENT      | DOCUMENT or DOCUMENTED | `section:behavioral-differences`      |                                    |
 | DIVERGENT      | IMPLEMENT              | `section:behavioral-differences`      | Note fix is in progress            |
@@ -139,7 +139,9 @@ Columns:
 | ADP_ONLY       | NONE                   | `section:adp-only`                    |                                    |
 | PARITY         | NONE                   | `section:reference`                   | Reference table only               |
 | NOT_APPLICABLE | NONE                   | --                                    | Omit unless customer-visible       |
-| UNKNOWN        | INVESTIGATE            | --                                    | Omit until resolved                |
+| UNKNOWN        | INVESTIGATE            | `section:compatibility-unknown`       |                                    |
+| MISSING        | INVESTIGATE            | `section:compatibility-unknown`       | When divergence not yet confirmed  |
+| DIVERGENT      | INVESTIGATE            | `section:compatibility-unknown`       | When divergence not yet confirmed  |
 
 Every key that appears in a section table also appears in the Configuration Reference table.
 

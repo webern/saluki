@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "known-configs.schema.json",
   "title": "Known Configs",
-  "description": "Persistent ledger of classified DogStatsD configuration keys.",
+  "description": "Persistent ledger of classified DogStatsD configuration keys. NOT_APPLICABLE keys live in known-configs-not-applicable.json instead.",
   "type": "array",
   "uniqueItems": true,
   "items": {
@@ -21,7 +21,6 @@
           "DIVERGENT",
           "MISSING",
           "ADP_ONLY",
-          "NOT_APPLICABLE",
           "UNKNOWN"
         ],
         "description": "Implementation reality, machine-derivable from code analysis."

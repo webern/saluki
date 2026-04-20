@@ -23,6 +23,10 @@ AskUserQuestion to confirm before proceeding.
 You may store temporary files in `{{tmp}}`=`{{saluki}}/target/.temp/dogstatsd-audit`. Delete {{tmp}}
 if exists. Create {{tmp}}
 
+`{{config_docs}}` = `{{saluki}}/docs/agent-data-plane/configuration/dogstatsd` — the directory
+that holds the data files maintained by this skill. The documentation page lives one level up at
+`{{saluki}}/docs/agent-data-plane/configuration/dogstatsd.md`.
+
 ## Initial Definitions
 
 - **ADP** (Agent Data Plane): The `agent-data-plane` binary and its components.
@@ -109,28 +113,28 @@ Combine the files. For keys found in multiple locations, prefer the most authori
 - RefImpl: `common_settings.go` > `pkg/config/` > `cmd/agent/dist/datadog.yaml` > docs
 - AdpImpl: config structs > call sites
 
-### known-configs.csv
+### Persistent ledgers
 
-`known-configs.csv` lives alongside this skill file and is the persistent ledger of all classified
-keys. It has three fields, all quoted:
+Two files in `{{config_docs}}` track classification state across runs:
 
-```csv
-"config-key","relevant","reason"
-"dogstatsd_port","true","directly configures DogStatsD listener"
-"security_agent.enabled","false","security agent only, no DogStatsD path"
-```
+**`known-configs.json`** — full classification records for all DogStatsD-relevant keys. Schema is
+defined in `known-configs.schema.json` alongside this skill file. Each entry has `key`, `feature_state`,
+`action`, `description`, `reason`, `issue`, and `adp_key`. A key present here is **known**.
 
-- `relevant=true`: the key could affect DogStatsD behavior. These are the focus of downstream
-  analysis.
-- `relevant=false`: the key is clearly unrelated to DogStatsD. These are ignored in downstream
-  analysis.
-- A key NOT present in `known-configs.csv` is **unreviewed** and needs classification.
+**`known-configs-not-applicable.json`** — flat JSON array of key name strings for keys confirmed
+as outside ADP's scope. Used to skip re-classifying already-dismissed keys on future runs. A key
+present here is **not applicable** and should be excluded from all downstream analysis.
+
+A key present in neither file is **unreviewed** and needs classification.
 
 ### Building all-conf-keys.json
 
-Cross-reference the discovered keys against `known-configs.csv`. Write to
-`{{tmp}}/all-conf-keys.json`. Include keys where `relevant=true` AND keys not yet in
-`known-configs.csv` (unreviewed). Exclude keys where `relevant=false`.
+Cross-reference the discovered keys against both ledger files. Write to
+`{{tmp}}/all-conf-keys.json`.
+
+- If the key is in `known-configs-not-applicable.json` → **exclude** entirely.
+- If the key is in `known-configs.json` → include with `"Status": "known"`.
+- If the key is in neither → include with `"Status": "unreviewed"`.
 
 Each entry includes a `"Status"` field: `"known"` or `"unreviewed"`.
 
@@ -207,16 +211,20 @@ Collect all sub-agent CSV outputs and concatenate into
 Use AskUserQuestion: report how many keys were analyzed, how many recommended-relevant vs
 recommended-irrelevant, and ask the user to review the file before proceeding.
 
-### Phase 3: Update known-configs.csv and all-conf-keys.json
+### Phase 3: Update ledgers and all-conf-keys.json
 
 After the user approves (they may have edited the recommendations file):
 
-1. Append the entries from `{{tmp}}/new-key-recommendations.csv` to `known-configs.csv`, sorted
-   alphabetically by key. Do not remove or modify existing entries in `known-configs.csv`.
+1. For each key recommended as **not applicable**: append the key string to
+   `{{config_docs}}/known-configs-not-applicable.json`, keeping the array sorted alphabetically.
 
-2. Update `{{tmp}}/all-conf-keys.json`: for every key that was just added to `known-configs.csv`,
-   change its `"Status"` from `"unreviewed"` to `"known"`. Remove entries whose key is now
-   `relevant=false` in `known-configs.csv` (they are no longer needed in the working set).
+2. For each key recommended as **relevant**: append a new entry to
+   `{{config_docs}}/known-configs.json` with `feature_state: "UNKNOWN"` and `action: "INVESTIGATE"`.
+   Fill `description` and `reason` from the recommendation. Set `issue` and `adp_key` to `null`.
+   Keep the array sorted alphabetically by `key`.
+
+3. Update `{{tmp}}/all-conf-keys.json`: change newly classified keys from `"Status": "unreviewed"`
+   to `"known"`, and remove entries for keys added to `known-configs-not-applicable.json`.
 
 After this step, `all-conf-keys.json` should contain only `"Status": "known"` entries — the
 relevant keys that downstream phases will analyze.
@@ -239,9 +247,9 @@ Collect JSON outputs into `{{tmp}}/feature-analysis.json` (single array of all a
 AskUserQuestion: report summary counts (Implemented, Missing, Divergent, ADP Only) and ask user to
 review `feature-analysis.json` before updating documentation.
 
-### Phase 3: Update docs/reference/dogstatsd-features.md
+### Phase 3: Update docs/agent-data-plane/configuration/dogstatsd.md
 
-Read the current file. Apply analysis with these rules:
+Read the current file at `{{saluki}}/docs/agent-data-plane/configuration/dogstatsd.md`. Apply analysis with these rules:
 
 **General preservation rule — applies to Features table rows AND Discussion sections:**
 - If existing content is semantically equivalent to the new analysis, keep the existing text

@@ -32,13 +32,34 @@ if exists. Create {{tmp}}
   `{{datadog-agent}}/pkg/config/common_settings.go`, but keys also appear throughout
   `{{datadog-agent}}/comp/dogstatsd/` and elsewhere
 
-### FeatureState (used in later phases)
+### FeatureState
 
-- **IMPLEMENTED**: Present in RefImpl and correctly implemented in AdpImpl.
-- **ADP_ONLY**: Present in AdpImpl but not in RefImpl.
-- **MISSING**: Present in RefImpl but not in AdpImpl.
-- **DIVERGENT**: Present in both, but AdpImpl behavior differs from RefImpl.
-- **UNSURE**: Present in both, but behavioral analysis is incomplete.
+Two orthogonal enums describe every ConfKey.
+
+**`FEATURE_STATE`** — implementation reality, machine-derivable from code analysis:
+
+- **`PARITY`**: Both RefImpl and AdpImpl have it; behavior and effective defaults match.
+- **`DIVERGENT`**: Both have it; behavior or defaults differ (intentionally or not).
+- **`MISSING`**: RefImpl has it; AdpImpl does not.
+- **`ADP_ONLY`**: AdpImpl has it; RefImpl does not.
+- **`NOT_APPLICABLE`**: RefImpl has it but it is architecturally outside ADP's scope (e.g.
+  Go-GC-specific, Windows-only, handled upstream by the core agent tagger or hostname resolver).
+- **`UNKNOWN`**: Insufficient data to determine; needs investigation.
+
+**`ACTION`** — human decision about what to do; stable across re-runs until a human changes it:
+
+- **`NONE`**: Nothing to do; acceptable as-is.
+- **`DOCUMENT`**: No code change needed; requires a doc note explaining the difference or caveat.
+- **`IMPLEMENT`**: Code work needed (should map to a GitHub issue).
+- **`INVESTIGATE`**: Research needed before deciding.
+
+Common combinations:
+- `PARITY` + `NONE` — nominal case
+- `ADP_ONLY` + `NONE` — ADP extension, no parity needed
+- `NOT_APPLICABLE` + `NONE` — outside scope
+- `DIVERGENT` + `DOCUMENT` — intentional known difference
+- `MISSING` + `IMPLEMENT` — tracked gap
+- `MISSING` or `UNKNOWN` + `INVESTIGATE` — needs research
 
 ## Action: Gather Background Knowledge
 

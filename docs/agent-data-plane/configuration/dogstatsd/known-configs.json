@@ -63,6 +63,51 @@
     "adp_key": null
   },
   {
+    "key": "aggregator_buffer_size",
+    "feature_state": "PARITY",
+    "action": "NONE",
+    "description": "Aggregator input channel size",
+    "reason": "Out of Scope (Part 1): Saluki topology uses fixed interconnect sizes and construction-time wiring; no per-component config knobs.",
+    "issue": null,
+    "adp_key": null
+  },
+  {
+    "key": "aggregator_flush_metrics_and_serialize_in_parallel_buffer_size",
+    "feature_state": "PARITY",
+    "action": "NONE",
+    "description": "Parallel flush buffer size",
+    "reason": "Out of Scope (Part 1): Saluki topology uses fixed interconnect sizes; no per-component config knobs.",
+    "issue": null,
+    "adp_key": null
+  },
+  {
+    "key": "aggregator_flush_metrics_and_serialize_in_parallel_chan_size",
+    "feature_state": "PARITY",
+    "action": "NONE",
+    "description": "Parallel flush channel size",
+    "reason": "Out of Scope (Part 1): Saluki topology uses fixed interconnect sizes; no per-component config knobs.",
+    "issue": null,
+    "adp_key": null
+  },
+  {
+    "key": "aggregator_stop_timeout",
+    "feature_state": "PARITY",
+    "action": "NONE",
+    "description": "Aggregator shutdown timeout (s)",
+    "reason": "Out of Scope (Part 1): Saluki topology uses fixed interconnect sizes and construction-time wiring; no per-component config knobs.",
+    "issue": null,
+    "adp_key": null
+  },
+  {
+    "key": "aggregator_use_tags_store",
+    "feature_state": "PARITY",
+    "action": "NONE",
+    "description": "Use tags store for dedup",
+    "reason": "Out of Scope (Part 1): Core agent concept with no ADP analog.",
+    "issue": null,
+    "adp_key": null
+  },
+  {
     "key": "allow_arbitrary_tags",
     "feature_state": "MISSING",
     "action": "IMPLEMENT",
@@ -342,6 +387,24 @@
     "adp_key": null
   },
   {
+    "key": "dogstatsd_experimental_http.enabled",
+    "feature_state": "PARITY",
+    "action": "NONE",
+    "description": "Enable HTTP DSD listener",
+    "reason": "No Action Required: Experimental HTTP/H2C DogStatsD ingestion endpoint; not needed for ADP.",
+    "issue": null,
+    "adp_key": null
+  },
+  {
+    "key": "dogstatsd_experimental_http.listen_address",
+    "feature_state": "PARITY",
+    "action": "NONE",
+    "description": "HTTP DSD listener bind address",
+    "reason": "No Action Required: Experimental HTTP/H2C DogStatsD ingestion endpoint; not needed for ADP.",
+    "issue": null,
+    "adp_key": null
+  },
+  {
     "key": "dogstatsd_expiry_seconds",
     "feature_state": "PARITY",
     "action": "NONE",
@@ -358,6 +421,15 @@
     "reason": "Issue #1366 open. ADP implements this as aggregate_flush_open_windows; the core agent key is not recognized by ADP.",
     "issue": "#1366",
     "adp_key": "aggregate_flush_open_windows"
+  },
+  {
+    "key": "dogstatsd_host_socket_path",
+    "feature_state": "PARITY",
+    "action": "NONE",
+    "description": "Host UDS socket dir for DSD",
+    "reason": "No Action Required: Kubernetes Cluster Agent admission controller plumbing, not DogStatsD server config.",
+    "issue": null,
+    "adp_key": null
   },
   {
     "key": "dogstatsd_log_file",
@@ -393,6 +465,15 @@
     "description": "Enables DSD metric logging",
     "reason": "Issue #1356 open. DogStatsD debug logging not implemented in ADP.",
     "issue": "#1356",
+    "adp_key": null
+  },
+  {
+    "key": "dogstatsd_mapper_cache_size",
+    "feature_state": "PARITY",
+    "action": "NONE",
+    "description": "Mapper result LRU cache size",
+    "reason": "Out of Scope / ADP-Only Fine As-Is: Core agent uses LRU cache; not relevant to ADP mapper implementation.",
+    "issue": null,
     "adp_key": null
   },
   {
@@ -495,6 +576,114 @@
     "adp_key": null
   },
   {
+    "key": "dogstatsd_mem_based_rate_limiter.",
+    "feature_state": "PARITY",
+    "action": "NONE",
+    "description": "Memory rate limiter group key",
+    "reason": "Issue #1351 open (Follow Up). Go-runtime-specific feature; ADP will not support. Document as known divergence.",
+    "issue": null,
+    "adp_key": null
+  },
+  {
+    "key": "dogstatsd_mem_based_rate_limiter.enabled",
+    "feature_state": "PARITY",
+    "action": "NONE",
+    "description": "Enable memory rate limiter",
+    "reason": "Issue #1351 open (Follow Up). Go-runtime-specific; ADP will not support. Document as known divergence.",
+    "issue": null,
+    "adp_key": null
+  },
+  {
+    "key": "dogstatsd_mem_based_rate_limiter.go_gc",
+    "feature_state": "PARITY",
+    "action": "NONE",
+    "description": "GC percentage for rate limiter",
+    "reason": "Issue #1351 open (Follow Up). Go-runtime-specific; ADP will not support. Document as known divergence.",
+    "issue": null,
+    "adp_key": null
+  },
+  {
+    "key": "dogstatsd_mem_based_rate_limiter.high_soft_limit",
+    "feature_state": "PARITY",
+    "action": "NONE",
+    "description": "High memory soft limit ratio",
+    "reason": "Issue #1351 open (Follow Up). Go-runtime-specific; ADP will not support. Document as known divergence.",
+    "issue": null,
+    "adp_key": null
+  },
+  {
+    "key": "dogstatsd_mem_based_rate_limiter.low_soft_limit",
+    "feature_state": "PARITY",
+    "action": "NONE",
+    "description": "Low memory soft limit ratio",
+    "reason": "Issue #1351 open (Follow Up). Go-runtime-specific; ADP will not support. Document as known divergence.",
+    "issue": null,
+    "adp_key": null
+  },
+  {
+    "key": "dogstatsd_mem_based_rate_limiter.memory_ballast",
+    "feature_state": "PARITY",
+    "action": "NONE",
+    "description": "GC ballast allocation size",
+    "reason": "Issue #1351 open (Follow Up). Go-runtime-specific; ADP will not support. Document as known divergence.",
+    "issue": null,
+    "adp_key": null
+  },
+  {
+    "key": "dogstatsd_mem_based_rate_limiter.rate_check.factor",
+    "feature_state": "PARITY",
+    "action": "NONE",
+    "description": "Rate check geometric factor",
+    "reason": "Issue #1351 open (Follow Up). Go-runtime-specific; ADP will not support. Document as known divergence.",
+    "issue": null,
+    "adp_key": null
+  },
+  {
+    "key": "dogstatsd_mem_based_rate_limiter.rate_check.max",
+    "feature_state": "PARITY",
+    "action": "NONE",
+    "description": "Rate check max interval",
+    "reason": "Issue #1351 open (Follow Up). Go-runtime-specific; ADP will not support. Document as known divergence.",
+    "issue": null,
+    "adp_key": null
+  },
+  {
+    "key": "dogstatsd_mem_based_rate_limiter.rate_check.min",
+    "feature_state": "PARITY",
+    "action": "NONE",
+    "description": "Rate check min interval",
+    "reason": "Issue #1351 open (Follow Up). Go-runtime-specific; ADP will not support. Document as known divergence.",
+    "issue": null,
+    "adp_key": null
+  },
+  {
+    "key": "dogstatsd_mem_based_rate_limiter.soft_limit_freeos_check.factor",
+    "feature_state": "PARITY",
+    "action": "NONE",
+    "description": "OS free-mem check backoff factor",
+    "reason": "Issue #1351 open (Follow Up). Go-runtime-specific; ADP will not support. Document as known divergence.",
+    "issue": null,
+    "adp_key": null
+  },
+  {
+    "key": "dogstatsd_mem_based_rate_limiter.soft_limit_freeos_check.max",
+    "feature_state": "PARITY",
+    "action": "NONE",
+    "description": "OS free-mem check max interval",
+    "reason": "Issue #1351 open (Follow Up). Go-runtime-specific; ADP will not support. Document as known divergence.",
+    "issue": null,
+    "adp_key": null
+  },
+  {
+    "key": "dogstatsd_mem_based_rate_limiter.soft_limit_freeos_check.min",
+    "feature_state": "PARITY",
+    "action": "NONE",
+    "description": "OS free-mem check min interval",
+    "reason": "Issue #1351 open (Follow Up). Go-runtime-specific; ADP will not support. Document as known divergence.",
+    "issue": null,
+    "adp_key": null
+  },
+  {
     "key": "dogstatsd_metrics_stats_enable",
     "feature_state": "MISSING",
     "action": "DOCUMENT",
@@ -518,6 +707,15 @@
     "action": "NONE",
     "description": "Enable no-agg timestamped path",
     "reason": "Confirmed implemented per dogstatsd-features.md.",
+    "issue": null,
+    "adp_key": null
+  },
+  {
+    "key": "dogstatsd_no_aggregation_pipeline_batch_size",
+    "feature_state": "PARITY",
+    "action": "NONE",
+    "description": "No-agg pipeline batch size",
+    "reason": "Out of Scope (Part 1): Fixed in topology. ADP uses time-based flush instead of count-based.",
     "issue": null,
     "adp_key": null
   },
@@ -558,6 +756,24 @@
     "adp_key": null
   },
   {
+    "key": "dogstatsd_packet_buffer_flush_timeout",
+    "feature_state": "PARITY",
+    "action": "NONE",
+    "description": "Packet buffer flush timeout",
+    "reason": "Out of Scope (Part 1): ADP decodes inline; no buffering pipeline.",
+    "issue": null,
+    "adp_key": null
+  },
+  {
+    "key": "dogstatsd_packet_buffer_size",
+    "feature_state": "PARITY",
+    "action": "NONE",
+    "description": "Datagrams per packet buffer",
+    "reason": "Out of Scope (Part 1): ADP decodes inline; no buffering pipeline.",
+    "issue": null,
+    "adp_key": null
+  },
+  {
     "key": "dogstatsd_permissive_decoding",
     "feature_state": "ADP_ONLY",
     "action": "NONE",
@@ -567,11 +783,47 @@
     "adp_key": null
   },
   {
+    "key": "dogstatsd_pipe_name",
+    "feature_state": "PARITY",
+    "action": "NONE",
+    "description": "Windows named pipe path",
+    "reason": "Out of Scope / Intentionally Not Supporting: Windows-only; ADP targets Linux for initial GA.",
+    "issue": null,
+    "adp_key": null
+  },
+  {
+    "key": "dogstatsd_pipeline_autoadjust",
+    "feature_state": "PARITY",
+    "action": "NONE",
+    "description": "Auto-adjust pipeline workers",
+    "reason": "Out of Scope (Part 1): ADP uses async, not worker pools.",
+    "issue": null,
+    "adp_key": null
+  },
+  {
+    "key": "dogstatsd_pipeline_count",
+    "feature_state": "PARITY",
+    "action": "NONE",
+    "description": "Parallel processing pipelines",
+    "reason": "Out of Scope (Part 1): ADP uses async, not worker pools.",
+    "issue": null,
+    "adp_key": null
+  },
+  {
     "key": "dogstatsd_port",
     "feature_state": "PARITY",
     "action": "NONE",
     "description": "UDP listen port",
     "reason": "Confirmed implemented. Listed in Out of Scope / Already Implemented.",
+    "issue": null,
+    "adp_key": null
+  },
+  {
+    "key": "dogstatsd_queue_size",
+    "feature_state": "PARITY",
+    "action": "NONE",
+    "description": "Packet channel buffer size",
+    "reason": "Out of Scope (Part 1): ADP uses async, not worker pools.",
     "issue": null,
     "adp_key": null
   },
@@ -666,11 +918,47 @@
     "adp_key": null
   },
   {
+    "key": "dogstatsd_tags.mappings",
+    "feature_state": "PARITY",
+    "action": "NONE",
+    "description": "Tag mapping rules for DSD metric",
+    "reason": "No Action Required: Confirmed LLM hallucination. This key does not exist in the core agent or ADP.",
+    "issue": null,
+    "adp_key": null
+  },
+  {
     "key": "dogstatsd_tcp_port",
     "feature_state": "ADP_ONLY",
     "action": "NONE",
     "description": "TCP listen port for DSD",
     "reason": "ADP-only extension. Core agent has no TCP DSD listener. Confirmed implemented and fine as-is.",
+    "issue": null,
+    "adp_key": null
+  },
+  {
+    "key": "dogstatsd_telemetry_enabled_listener_id",
+    "feature_state": "PARITY",
+    "action": "NONE",
+    "description": "Per-listener telemetry tagging",
+    "reason": "Out of Scope / ADP-Only Fine As-Is: Difficult to add, customers almost never use. Punt.",
+    "issue": null,
+    "adp_key": null
+  },
+  {
+    "key": "dogstatsd_windows_pipe_security_descriptor",
+    "feature_state": "PARITY",
+    "action": "NONE",
+    "description": "Windows named pipe ACL descripto",
+    "reason": "Out of Scope / Intentionally Not Supporting: Windows-only; ADP targets Linux for initial GA.",
+    "issue": null,
+    "adp_key": null
+  },
+  {
+    "key": "dogstatsd_workers_count",
+    "feature_state": "PARITY",
+    "action": "NONE",
+    "description": "Num DSD processing workers",
+    "reason": "Out of Scope (Part 1): ADP uses async, not worker pools.",
     "issue": null,
     "adp_key": null
   },
@@ -1401,6 +1689,24 @@
     "description": "TLS key log file path",
     "reason": "Filed as #1372 (Follow Up). Part 2 review: 'good potential issue.' Not super easy but not hard.",
     "issue": "#1372",
+    "adp_key": null
+  },
+  {
+    "key": "statsd_forward_host",
+    "feature_state": "PARITY",
+    "action": "NONE",
+    "description": "Host for packet forwarding",
+    "reason": "Reviewed \u2014 No Action Required in github-issues.md. Forwards raw DogStatsD packets to another statsd server. Not a feature ADP needs.",
+    "issue": null,
+    "adp_key": null
+  },
+  {
+    "key": "statsd_forward_port",
+    "feature_state": "PARITY",
+    "action": "NONE",
+    "description": "Port for packet forwarding",
+    "reason": "Reviewed \u2014 No Action Required in github-issues.md. Forwards raw DogStatsD packets to another statsd server. Not a feature ADP needs.",
+    "issue": null,
     "adp_key": null
   },
   {

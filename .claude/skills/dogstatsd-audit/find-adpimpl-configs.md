@@ -10,12 +10,12 @@ This is a substep of the `/dogstatsd-audit` skill. Your job is to discover the c
 
 ## System Overview
 
-Configuration values originate from `datadog.yaml` and/or `DD_`-prefixed env vars, stored in a
-map structure accessed via `GenericConfiguration` (defined in `lib/saluki-config`).
+Configuration values originate from `datadog.yaml` and/or `DD_`-prefixed env vars, stored in a map
+structure accessed via `GenericConfiguration` (defined in `lib/saluki-config`).
 
 Environment variable names are split on `__` (double underscore) to create nested objects. For
 example, `DD_FOO__BAR=baz` becomes `{ "foo": { "bar": "baz" } }`. This is why some components use
-manual `try_get_typed("dotted.key")` calls instead of serde structs — it avoids requiring users to
+manual `try_get_typed("dotted.key")` calls instead of serde structs -- it avoids requiring users to
 type awkward env var names like `DD_DATA_PLANE__OTLP__ENABLED`.
 
 ## Step 1: Discover the Config API Surface
@@ -24,7 +24,7 @@ Read `GenericConfiguration` in `lib/saluki-config/src/lib.rs` and build a comple
 public method that takes a config key string argument (e.g. `get_typed`, `try_get_typed`,
 `get_typed_or_default`, `as_typed`, `watch_for_updates`).
 
-Also search for wrapper functions that delegate to `GenericConfiguration` — these may be the actual
+Also search for wrapper functions that delegate to `GenericConfiguration` -- these may be the actual
 call sites in component code.
 
 ## Step 2: Search for Configuration Keys
@@ -56,12 +56,12 @@ pub struct DogStatsDConfiguration {
 If a field has NO `rename` attribute, the Rust field name itself is the key. For example
 `pub api_key: String` without a rename means the key is `api_key`.
 
-**Important:** `#[serde(flatten)]` means a sub-struct's fields are inlined. You must follow these
-to find all keys — they won't appear in the outer struct.
+**Important:** `#[serde(flatten)]` means a sub-struct's fields are inlined. You must follow these to
+find all keys -- they won't appear in the outer struct.
 
-**Search:** Grep all `.rs` files under `lib/` and `bin/agent-data-plane/` for `serde(rename`.
-For each match, extract the string literal as the ConfKey and record file:line. Also check
-`Deserialize` structs for fields WITHOUT `rename` — the Rust field name is the key in those cases.
+**Search:** Grep all `.rs` files under `lib/` and `bin/agent-data-plane/` for `serde(rename`. For
+each match, extract the string literal as the ConfKey and record file:line. Also check `Deserialize`
+structs for fields WITHOUT `rename` -- the Rust field name is the key in those cases.
 
 ### Pattern B: Manual key queries
 
@@ -103,8 +103,8 @@ string literal as the ConfKey and record file:line as the location.
 
 ## Output
 
-Write to `{{tmp}}/adpimpl-config-keys.csv`. Each line is a quoted ConfKey and its file:line location,
-relative to `{{saluki}}`:
+Write to `{{tmp}}/adpimpl-config-keys.csv`. Each line is a quoted ConfKey and its file:line
+location, relative to `{{saluki}}`:
 
 ```csv
 "dogstatsd_buffer_size","lib/saluki-components/src/sources/dogstatsd/mod.rs:157"
@@ -112,5 +112,5 @@ relative to `{{saluki}}`:
 "data_plane.enabled","bin/agent-data-plane/src/config.rs:35"
 ```
 
-If the same ConfKey appears in multiple locations, include the most authoritative one — prefer the
+If the same ConfKey appears in multiple locations, include the most authoritative one -- prefer the
 declaration site (serde rename or struct definition) over a secondary read site.

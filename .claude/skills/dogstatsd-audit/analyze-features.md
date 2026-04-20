@@ -18,8 +18,8 @@ Search BOTH codebases for every key regardless of what the supervising agent tel
 ### Where to search
 
 **RefImpl** (`{{datadog-agent}}`):
-- `pkg/config/setup/` — registration: `BindEnvAndSetDefault`, `SetDefault`, `BindEnv`
-- `comp/dogstatsd/` — runtime reads: `GetString`, `GetBool`, `GetInt`, etc.
+- `pkg/config/setup/` -- registration: `BindEnvAndSetDefault`, `SetDefault`, `BindEnv`
+- `comp/dogstatsd/` -- runtime reads: `GetString`, `GetBool`, `GetInt`, etc.
 - Any other `.go` file referencing the key
 
 **AdpImpl** (`{{saluki}}`):
@@ -37,17 +37,17 @@ Do a deep code analysis on how the configuration setting affects both systems.
 - **ADP Only**: Exists in AdpImpl but not RefImpl.
 
 Commit to a status. If you truly cannot determine equivalence with confidence after thorough
-analysis, use **Unsure** — but this should be rare.
+analysis, use **Unsure** -- but this should be rare.
 
 ### Write Outputs
 
-**Description** (required, max 32 chars): Terse summary of what the key controls.
-Examples: `UDP listen port`, `Tag cardinality for origin`, `Max cached DSD contexts`
+**Description** (required, max 32 chars): Terse summary of what the key controls. Examples:
+`UDP listen port`, `Tag cardinality for origin`, `Max cached DSD contexts`
 
 **Notes** (optional, max 32 chars): Only for Divergent or surprising cases. Blank otherwise.
 Examples: `ADP default differs: 256 vs 128`, `ADP ignores when standalone`
 
-**Discussion** (optional, null for most keys): Only for noteworthy features — divergent behavior,
+**Discussion** (optional, null for most keys): Only for noteworthy features -- divergent behavior,
 surprising omissions, subtle semantic differences. Include code snippets from both sides and explain
 user-visible impact. Keep focused.
 

@@ -28,7 +28,7 @@
       "action": {
         "type": "string",
         "enum": ["NONE", "INVESTIGATE", "IMPLEMENT", "DOCUMENT", "DOCUMENTED"],
-        "description": "Human decision about what to do with this key. DOCUMENTED is the terminal state for DOCUMENT — it means the documentation has been written."
+        "description": "Human decision about what to do with this key. DOCUMENTED is the terminal state for DOCUMENT -- it means the documentation has been written."
       },
       "description": {
         "type": "string",

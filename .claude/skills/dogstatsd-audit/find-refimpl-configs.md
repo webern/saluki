@@ -17,7 +17,7 @@ source code with default values and env var bindings, and can also appear in the
 ## Step 1: Discover the Config API Surface
 
 Read `pkg/config/model/types.go` and build a complete list of every method on the `Setup` interface
-(registration) and `Reader` interface (accessors). Do not rely solely on the examples in Steps 2-3 —
+(registration) and `Reader` interface (accessors). Do not rely solely on the examples in Steps 2-3 --
 methods may have been added or renamed. Search for all of them.
 
 Also check for wrapper functions that delegate to these interfaces (e.g.
@@ -83,8 +83,8 @@ Only include keys from read sites that were NOT already found at registration si
 
 ## Source 2: Example YAML File
 
-The file `cmd/agent/dist/datadog.yaml` is a ~1600-line example config with most sections
-commented out. It uses standard YAML nesting.
+The file `cmd/agent/dist/datadog.yaml` is a ~1600-line example config with most sections commented
+out. It uses standard YAML nesting.
 
 Parse this file to extract all config key paths. Use dot-separated flattening to match the format
 used in Go code:
@@ -100,7 +100,7 @@ proxy:
 # proxy.https
 ```
 
-Note: commented-out keys (lines starting with `#`) should still be included — this is an example
+Note: commented-out keys (lines starting with `#`) should still be included -- this is an example
 file where most settings are intentionally commented out.
 
 ### What NOT to include
@@ -131,4 +131,3 @@ Keys discovered from the example YAML file:
 "api_key","cmd/agent/dist/datadog.yaml:15"
 "proxy.http","cmd/agent/dist/datadog.yaml:42"
 ```
-

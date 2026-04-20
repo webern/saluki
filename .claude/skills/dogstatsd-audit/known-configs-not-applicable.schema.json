@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "known-configs-not-applicable.schema.json",
-  "title": "Known Configs — Not Applicable",
+  "title": "Known Configs -- Not Applicable",
   "description": "Keys confirmed as outside ADP's scope for DogStatsD parity. Used by the dogstatsd-audit skill to skip re-classifying already-dismissed keys on future discovery runs.",
   "type": "array",
   "uniqueItems": true,

@@ -23,8 +23,8 @@ AskUserQuestion to confirm before proceeding.
 You may store temporary files in `{{tmp}}`=`{{saluki}}/target/.temp/dogstatsd-audit`. Delete {{tmp}}
 if exists. Create {{tmp}}
 
-`{{config_docs}}` = `{{saluki}}/docs/agent-data-plane/configuration/dogstatsd` — the directory
-that holds the data files maintained by this skill. The documentation page lives one level up at
+`{{config_docs}}` = `{{saluki}}/docs/agent-data-plane/configuration/dogstatsd` -- the directory that
+holds the data files maintained by this skill. The documentation page lives one level up at
 `{{saluki}}/docs/agent-data-plane/configuration/dogstatsd.md`.
 
 ## Initial Definitions
@@ -40,7 +40,7 @@ that holds the data files maintained by this skill. The documentation page lives
 
 Two orthogonal enums describe every ConfKey.
 
-**`FEATURE_STATE`** — implementation reality, machine-derivable from code analysis:
+**`FEATURE_STATE`** -- implementation reality, machine-derivable from code analysis:
 
 - **`PARITY`**: Both RefImpl and AdpImpl have it; behavior and effective defaults match.
 - **`DIVERGENT`**: Both have it; behavior or defaults differ (intentionally or not).
@@ -50,38 +50,38 @@ Two orthogonal enums describe every ConfKey.
   Go-GC-specific, Windows-only, handled upstream by the core agent tagger or hostname resolver).
 - **`UNKNOWN`**: Insufficient data to determine; needs investigation.
 
-**`ACTION`** — human decision about what to do; stable across re-runs until a human changes it:
+**`ACTION`** -- human decision about what to do; stable across re-runs until a human changes it:
 
 - **`NONE`**: Nothing to do; acceptable as-is.
 - **`INVESTIGATE`**: Research needed before deciding. When investigation concludes, update to the
   resulting action (`NONE`, `DOCUMENT`, or `IMPLEMENT`) and record the conclusion in `reason`.
-- **`IMPLEMENT`**: Code work needed. Should have a GitHub issue. Completion is detected by the
-  skill on re-run (feature_state updates to PARITY).
+- **`IMPLEMENT`**: Code work needed. Should have a GitHub issue. Completion is detected by the skill
+  on re-run (feature_state updates to PARITY).
 - **`DOCUMENT`**: Documentation work needed. No code change required.
 - **`DOCUMENTED`**: Terminal state for `DOCUMENT`. The documentation has been written.
 
 Common combinations:
-- `PARITY` + `NONE` — nominal case
-- `ADP_ONLY` + `NONE` — ADP extension, no parity needed
-- `NOT_APPLICABLE` + `NONE` — outside scope
-- `DIVERGENT` + `DOCUMENT` — intentional known difference
-- `MISSING` + `IMPLEMENT` — tracked gap
-- `MISSING` or `UNKNOWN` + `INVESTIGATE` — needs research
+- `PARITY` + `NONE` -- nominal case
+- `ADP_ONLY` + `NONE` -- ADP extension, no parity needed
+- `NOT_APPLICABLE` + `NONE` -- outside scope
+- `DIVERGENT` + `DOCUMENT` -- intentional known difference
+- `MISSING` + `IMPLEMENT` -- tracked gap
+- `MISSING` or `UNKNOWN` + `INVESTIGATE` -- needs research
 
 ## Action: Gather Background Knowledge
 
 Read these files to understand RefImpl. Follow references as needed.
 
-- `{{documentation}}/content/en/extend/dogstatsd/_index.md` — feature overview, metric types
-- `{{datadog-agent}}/pkg/config/setup/common_settings.go` — primary config key registry; DogStatsD
+- `{{documentation}}/content/en/extend/dogstatsd/_index.md` -- feature overview, metric types
+- `{{datadog-agent}}/pkg/config/setup/common_settings.go` -- primary config key registry; DogStatsD
   keys are around lines 1523-1625
-- `{{datadog-agent}}/pkg/config/model/types.go` — Reader/Setup interfaces (all Get*/Set* methods)
-- `{{datadog-agent}}/comp/dogstatsd/server/server.go` — main server, reads config at runtime
-- `{{datadog-agent}}/comp/dogstatsd/config/config.go` — DogStatsD config accessor
+- `{{datadog-agent}}/pkg/config/model/types.go` -- Reader/Setup interfaces (all Get*/Set* methods)
+- `{{datadog-agent}}/comp/dogstatsd/server/server.go` -- main server, reads config at runtime
+- `{{datadog-agent}}/comp/dogstatsd/config/config.go` -- DogStatsD config accessor
 
 Read these files to understand AdpImpl:
-- `{{saluki}}/bin/agent-data-plane/src/config.rs` — top-level ADP config struct
-- `{{saluki}}/bin/agent-data-plane/src/cli/run.rs` — topology construction, config loading pipeline
+- `{{saluki}}/bin/agent-data-plane/src/config.rs` -- top-level ADP config struct
+- `{{saluki}}/bin/agent-data-plane/src/cli/run.rs` -- topology construction, config loading pipeline
 
 Use AskUserQuestion: briefly summarize your understanding of the audit goal and the two
 implementations. Ask the user to confirm or correct.
@@ -98,15 +98,16 @@ A ConfKey csv file looks like this:
 ## Action: Discover
 
 **Collect ALL ConfKeys across the entire codebase, not just DogStatsD-related ones.** DogStatsD keys
-can't always be identified by name alone — filtering happens in a later phase.
+can't always be identified by name alone -- filtering happens in a later phase.
 
 Create a sub-agent for each task. Store output in `{{tmp}}`.
 
 - Find all ConfKeys in {{datadog-agent}} by running ./find-refimpl-configs.md
+
 - Find all ConfKeys in {{saluki}} by running ./find-adpimpl-configs.md
 
 - AskUserQuestion - give the user the output filenames and ask the user if they look OK before
-proceeding.
+  proceeding.
 
 Combine the files. For keys found in multiple locations, prefer the most authoritative source:
 
@@ -117,12 +118,13 @@ Combine the files. For keys found in multiple locations, prefer the most authori
 
 Two files in `{{config_docs}}` track classification state across runs:
 
-**`known-configs.json`** — full classification records for all DogStatsD-relevant keys. Schema is
-defined in `known-configs.schema.json` alongside this skill file. Each entry has `key`, `feature_state`,
-`action`, `description`, `reason`, `issue`, and `adp_key`. A key present here is **known**.
+**`known-configs.json`** -- full classification records for all DogStatsD-relevant keys. Schema is
+defined in `known-configs.schema.json` alongside this skill file. Each entry has `key`,
+`feature_state`, `action`, `description`, `reason`, `issue`, and `adp_key`. A key present here is
+**known**.
 
-**`known-configs-not-applicable.json`** — flat JSON array of key name strings for keys confirmed
-as outside ADP's scope. Used to skip re-classifying already-dismissed keys on future runs. A key
+**`known-configs-not-applicable.json`** -- flat JSON array of key name strings for keys confirmed as
+outside ADP's scope. Used to skip re-classifying already-dismissed keys on future runs. A key
 present here is **not applicable** and should be excluded from all downstream analysis.
 
 A key present in neither file is **unreviewed** and needs classification.
@@ -132,9 +134,9 @@ A key present in neither file is **unreviewed** and needs classification.
 Cross-reference the discovered keys against both ledger files. Write to
 `{{tmp}}/all-conf-keys.json`.
 
-- If the key is in `known-configs-not-applicable.json` → **exclude** entirely.
-- If the key is in `known-configs.json` → include with `"Status": "known"`.
-- If the key is in neither → include with `"Status": "unreviewed"`.
+- If the key is in `known-configs-not-applicable.json` -> **exclude** entirely.
+- If the key is in `known-configs.json` -> include with `"Status": "known"`.
+- If the key is in neither -> include with `"Status": "unreviewed"`.
 
 Each entry includes a `"Status"` field: `"known"` or `"unreviewed"`.
 
@@ -166,7 +168,7 @@ Each entry includes a `"Status"` field: `"known"` or `"unreviewed"`.
 If `all-conf-keys.json` contains no `"unreviewed"` keys, skip this section.
 
 The goal is to classify each unreviewed key as relevant or irrelevant to DogStatsD behavior. This
-requires code analysis — name prefixes alone are not sufficient. A key like `forwarder_num_workers`
+requires code analysis -- name prefixes alone are not sufficient. A key like `forwarder_num_workers`
 has no `dogstatsd` prefix but directly affects how DogStatsD metrics are forwarded.
 
 ### Phase 1: Batch Triage
@@ -177,7 +179,7 @@ Filter `all-conf-keys.json` to only `"Status": "unreviewed"` entries. Split them
 > For each key in this batch, determine whether it could plausibly affect DogStatsD behavior. Read
 > the code at the listed source location(s) and trace how the key is used. A key is relevant to
 > DogStatsD if it influences any of:
->
+> 
 > - Metric reception (listeners, ports, sockets, buffers, protocols)
 > - Metric parsing or decoding (DogStatsD wire format, sample rates, timestamps)
 > - Metric aggregation, enrichment, or tagging (context resolution, tag cardinality, host tags)
@@ -185,21 +187,19 @@ Filter `all-conf-keys.json` to only `"Status": "unreviewed"` entries. Split them
 > - Origin detection or container enrichment
 > - General infrastructure that DogStatsD depends on (API keys, proxy, TLS, secrets, logging that
 >   would affect DogStatsD components)
->
-> Respond with one CSV line per key:
-> `"key_name","true/false","reasoning (20-70 chars)"`
->
+> 
+> Respond with one CSV line per key: `"key_name","true/false","reasoning (20-70 chars)"`
+> 
 > Where `true` means RELEVANT (it does or could affect DogStatsD), and `false` means NOT RELEVANT.
->
-> When uncertain, err on the side of `true` (relevant). It is much worse to miss a relevant key
-> than to include an irrelevant one.
+> 
+> When uncertain, err on the side of `true` (relevant). It is much worse to miss a relevant key than
+> to include an irrelevant one.
 
 Give each sub-agent access to both `{{datadog-agent}}` and `{{saluki}}` so it can read usage sites.
 
 ### Phase 2: Assemble and Review
 
-Collect all sub-agent CSV outputs and concatenate into
-`{{tmp}}/new-key-recommendations.csv`:
+Collect all sub-agent CSV outputs and concatenate into `{{tmp}}/new-key-recommendations.csv`:
 
 ```csv
 "api_key","true","shared infra: DogStatsD forwarder needs this"
@@ -226,8 +226,8 @@ After the user approves (they may have edited the recommendations file):
 3. Update `{{tmp}}/all-conf-keys.json`: change newly classified keys from `"Status": "unreviewed"`
    to `"known"`, and remove entries for keys added to `known-configs-not-applicable.json`.
 
-After this step, `all-conf-keys.json` should contain only `"Status": "known"` entries — the
-relevant keys that downstream phases will analyze.
+After this step, `all-conf-keys.json` should contain only `"Status": "known"` entries -- the relevant
+keys that downstream phases will analyze.
 
 ## Action: Analyze Feature Parity
 
@@ -235,10 +235,10 @@ For each relevant key in `all-conf-keys.json`, analyze both codebases to determi
 
 ### Phase 1: Dispatch Analysis Agents
 
-Split keys from `all-conf-keys.json` into batches of 10-15. For each batch, create a sub-agent
-using `./analyze-features.md`. Each sub-agent performs clean room analysis — it independently
-searches both codebases. Give it the batch of ConfKey names plus paths to `{{datadog-agent}}`,
-`{{saluki}}` and an output path consisting of {{outdir}}/{{outfile}}.
+Split keys from `all-conf-keys.json` into batches of 10-15. For each batch, create a sub-agent using
+`./analyze-features.md`. Each sub-agent performs clean room analysis -- it independently searches
+both codebases. Give it the batch of ConfKey names plus paths to `{{datadog-agent}}`, `{{saluki}}`
+and an output path consisting of {{outdir}}/{{outfile}}.
 
 ### Phase 2: Compile Results
 
@@ -249,9 +249,10 @@ review `feature-analysis.json` before updating documentation.
 
 ### Phase 3: Update docs/agent-data-plane/configuration/dogstatsd.md
 
-Read the current file at `{{saluki}}/docs/agent-data-plane/configuration/dogstatsd.md`. Apply analysis with these rules:
+Read the current file at `{{saluki}}/docs/agent-data-plane/configuration/dogstatsd.md`. Apply
+analysis with these rules:
 
-**General preservation rule — applies to Features table rows AND Discussion sections:**
+**General preservation rule -- applies to Features table rows AND Discussion sections:**
 - If existing content is semantically equivalent to the new analysis, keep the existing text
   unchanged. Don't rewrite to match sub-agent wording.
 - Only update if the analysis is substantively different (status changed, description wrong, etc.).

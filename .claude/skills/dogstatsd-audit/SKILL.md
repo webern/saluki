@@ -49,9 +49,12 @@ Two orthogonal enums describe every ConfKey.
 **`ACTION`** — human decision about what to do; stable across re-runs until a human changes it:
 
 - **`NONE`**: Nothing to do; acceptable as-is.
-- **`DOCUMENT`**: No code change needed; requires a doc note explaining the difference or caveat.
-- **`IMPLEMENT`**: Code work needed (should map to a GitHub issue).
-- **`INVESTIGATE`**: Research needed before deciding.
+- **`INVESTIGATE`**: Research needed before deciding. When investigation concludes, update to the
+  resulting action (`NONE`, `DOCUMENT`, or `IMPLEMENT`) and record the conclusion in `reason`.
+- **`IMPLEMENT`**: Code work needed. Should have a GitHub issue. Completion is detected by the
+  skill on re-run (feature_state updates to PARITY).
+- **`DOCUMENT`**: Documentation work needed. No code change required.
+- **`DOCUMENTED`**: Terminal state for `DOCUMENT`. The documentation has been written.
 
 Common combinations:
 - `PARITY` + `NONE` — nominal case

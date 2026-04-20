@@ -137,11 +137,11 @@ Columns:
 | ADP_ONLY       | NONE        | section:adp-only                |
 | DIVERGENT      | DOCUMENT    | section:behavioral-differences  |
 | DIVERGENT      | DOCUMENTED  | section:behavioral-differences  |
-| DIVERGENT      | IMPLEMENT   | section:unsupported-in-progress |
+| DIVERGENT      | IMPLEMENT   | section:behavioral-differences  |
 | DIVERGENT      | INVESTIGATE | section:compatibility-unknown   |
 | DIVERGENT      | NONE        | section:behavioral-differences  |
-| MISSING        | DOCUMENT    | section:unsupported-not-planned |
-| MISSING        | DOCUMENTED  | section:unsupported-not-planned |
+| MISSING        | DOCUMENT    | section:behavioral-differences  |
+| MISSING        | DOCUMENTED  | section:behavioral-differences  |
 | MISSING        | IMPLEMENT   | section:unsupported-in-progress |
 | MISSING        | INVESTIGATE | section:compatibility-unknown   |
 | MISSING        | NONE        | section:unsupported-not-planned |

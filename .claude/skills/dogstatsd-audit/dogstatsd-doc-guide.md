@@ -38,6 +38,7 @@ are invisible in rendered output and give the skill an unambiguous location targ
 | `<!-- section:unsupported-in-progress -->` | Unsupported Settings -- being worked on  |
 | `<!-- section:unsupported-not-planned -->` | Unsupported Settings -- not planned      |
 | `<!-- section:behavioral-differences -->`  | Behavioral Differences                   |
+| `<!-- section:compatibility-unknown -->`   | Compatibility Unknown                    |
 | `<!-- section:adp-only -->`                | ADP-Only Settings                        |
 | `<!-- section:reference -->`               | Configuration Reference                  |
 
@@ -84,6 +85,19 @@ Columns:
 - **Description**: from `known-configs.json` `description` field, max 32 chars
 - **Agent Behavior**: one short phrase
 - **ADP Behavior**: one short phrase
+
+### Compatibility Unknown
+
+Keys that are `feature_state=UNKNOWN` and `action=INVESTIGATE`, or `MISSING`/`DIVERGENT` with
+`action=INVESTIGATE` where we have not yet confirmed behavior. These are keys we have not fully
+verified in ADP.
+
+| Config Key | Description |
+|------------|-------------|
+
+Columns:
+- **Config Key**: backtick-quoted key name
+- **Description**: from `known-configs.json` `description` field, max 32 chars
 
 ### ADP-Only Settings
 

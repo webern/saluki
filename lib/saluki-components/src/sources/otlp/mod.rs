@@ -66,6 +66,8 @@ const fn default_allow_context_heap_allocations() -> bool {
 
 /// Configuration for the OTLP source.
 #[derive(Deserialize, Default)]
+#[cfg_attr(test, derive(derive_where::DeriveWhere, serde::Serialize))]
+#[cfg_attr(test, derive_where(PartialEq))]
 pub struct OtlpConfiguration {
     otlp_config: OtlpConfig,
 
@@ -117,6 +119,7 @@ pub struct OtlpConfiguration {
 
     /// Workload provider to utilize for origin detection/enrichment.
     #[serde(skip)]
+    #[cfg_attr(test, derive_where(skip))]
     workload_provider: Option<Arc<dyn WorkloadProvider + Send + Sync>>,
 }
 
@@ -478,4 +481,22 @@ async fn run_converter(
     }
 
     debug!("OTLP resource converter task stopped.");
+}
+
+#[cfg(test)]
+mod config_smoke {
+    use serde_json::json;
+
+    use super::OtlpConfiguration;
+    use crate::config_registry::structs;
+    use crate::config_registry::test_support::run_config_smoke_tests;
+
+    #[tokio::test]
+    async fn smoke_test() {
+        run_config_smoke_tests(structs::OTLP_CONFIGURATION, &[], json!({ "otlp_config": {} }), |cfg| {
+            cfg.as_typed::<OtlpConfiguration>()
+                .expect("OtlpConfiguration should deserialize")
+        })
+        .await
+    }
 }

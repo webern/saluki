@@ -30,6 +30,8 @@ const LISTENER_FILTERED_POINTS_METRIC: &str = "dogstatsd_listener_filtered_point
 ///
 /// Checks if a metric name should be allowed.
 #[derive(Deserialize, Facet)]
+#[cfg_attr(test, derive(Debug, derive_where::DeriveWhere, serde::Serialize))]
+#[cfg_attr(test, derive_where(PartialEq))]
 pub struct DogStatsDPrefixFilterConfiguration {
     #[serde(default, rename = "statsd_metric_namespace")]
     metric_prefix: String,
@@ -54,6 +56,7 @@ pub struct DogStatsDPrefixFilterConfiguration {
 
     #[serde(skip)]
     #[facet(opaque)]
+    #[cfg_attr(test, derive_where(skip))]
     configuration: Option<GenericConfiguration>,
 }
 
@@ -778,5 +781,23 @@ mod tests {
         assert!(!filter.process_metric(&mut prefix_metric));
 
         assert_eq!(recorder.counter(LISTENER_FILTERED_POINTS_METRIC), Some(2));
+    }
+}
+
+#[cfg(test)]
+mod config_smoke {
+    use serde_json::json;
+
+    use super::DogStatsDPrefixFilterConfiguration;
+    use crate::config_registry::structs;
+    use crate::config_registry::test_support::run_config_smoke_tests;
+
+    #[tokio::test]
+    async fn smoke_test() {
+        run_config_smoke_tests(structs::DOGSTATSD_PREFIX_FILTER_CONFIGURATION, &[], json!({}), |cfg| {
+            cfg.as_typed::<DogStatsDPrefixFilterConfiguration>()
+                .expect("DogStatsDPrefixFilterConfiguration should deserialize")
+        })
+        .await
     }
 }

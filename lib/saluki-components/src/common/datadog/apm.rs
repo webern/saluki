@@ -101,6 +101,11 @@ struct ApmConfiguration {
         rename = "apm_error_tracking_standalone_enabled"
     )]
     enable_error_tracking_standalone: bool,
+
+    /// Obfuscation config read from flat `apm_obfuscation_*` keys.
+    /// KEY_ALIASES in `crate::config` bridge the YAML nested paths to these flat keys.
+    #[serde(default, flatten)]
+    obfuscation: ObfuscationConfig,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -206,7 +211,8 @@ pub struct ApmConfig {
     rare_sampler: RareSamplerConfig,
 
     /// Obfuscation configuration for trace data.
-    #[serde(default)]
+    /// Populated from `ApmConfiguration.obfuscation` in `from_configuration`; not read from serde directly.
+    #[serde(skip)]
     obfuscation: ObfuscationConfig,
 }
 
@@ -216,6 +222,7 @@ impl ApmConfig {
         let mut apm_config = wrapper.apm_config;
         apm_config.enable_rare_sampler = wrapper.enable_rare_sampler;
         apm_config.error_tracking_standalone = wrapper.enable_error_tracking_standalone;
+        apm_config.obfuscation = wrapper.obfuscation;
         Ok(apm_config)
     }
 

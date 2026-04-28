@@ -327,7 +327,7 @@ where
             self.total_on_disk_bytes -= entry.size_bytes;
             push_result.track_dropped_item(event_count);
 
-            debug!(entry.path = %entry.path.display(), entry.len = entry.size_bytes, "Dropped persisted entry.");
+            warn!(entry.path = %entry.path.display(), entry.len = entry.size_bytes, "Dropped persisted entry.");
         }
 
         Ok(push_result)

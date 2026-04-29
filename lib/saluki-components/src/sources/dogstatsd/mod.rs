@@ -105,6 +105,10 @@ const fn default_tcp_port() -> u16 {
     0
 }
 
+const fn default_socket_receive_buffer_size() -> usize {
+    0
+}
+
 const fn default_allow_context_heap_allocations() -> bool {
     true
 }
@@ -216,6 +220,14 @@ pub struct DogStatsDConfiguration {
     /// Defaults to 8125.
     #[serde(rename = "dogstatsd_port", default = "default_port")]
     port: u16,
+
+    /// The size of the DogStatsD UDP/UDS socket receive buffer, in bytes.
+    ///
+    /// If set to `0`, the OS default is used.
+    ///
+    /// Defaults to 0.
+    #[serde(rename = "dogstatsd_so_rcvbuf", default = "default_socket_receive_buffer_size")]
+    socket_receive_buffer_size: usize,
 
     /// The port to listen on in TCP mode.
     ///
@@ -479,30 +491,15 @@ impl DogStatsDConfiguration {
 
         let addresses = self.build_addresses(bind_host);
         let mut listeners = Vec::new();
+        let socket_receive_buffer_size =
+            (self.socket_receive_buffer_size != 0).then_some(self.socket_receive_buffer_size);
         for address in addresses {
-            // We use a match here so that we can add context to the error message.
-            let listener = match &address {
-                ListenAddress::Tcp(_) => Listener::from_listen_address(address)
-                    .await
-                    .context(FailedToCreateListener { listener_type: "TCP" })?,
-                ListenAddress::Udp(_) => Listener::from_listen_address(address)
-                    .await
-                    .context(FailedToCreateListener { listener_type: "UDP" })?,
-                ListenAddress::Unixgram(_) => {
-                    Listener::from_listen_address(address)
-                        .await
-                        .context(FailedToCreateListener {
-                            listener_type: "UDS (datagram)",
-                        })?
-                }
-                ListenAddress::Unix(_) => {
-                    Listener::from_listen_address(address)
-                        .await
-                        .context(FailedToCreateListener {
-                            listener_type: "UDS (stream)",
-                        })?
-                }
-            };
+            let listener_type = address.listener_type();
+            let listener = Listener::from_listen_address(address)
+                .await
+                .context(FailedToCreateListener { listener_type })?
+                .with_receive_buffer_size(socket_receive_buffer_size);
+
             listeners.push(listener);
         }
         Ok(listeners)
@@ -1384,6 +1381,18 @@ mod tests {
     fn interner_size_defaults_to_2mib() {
         let config = deser_config("{}");
         assert_eq!(config.effective_context_string_interner_bytes(), ByteSize::mib(2));
+    }
+
+    #[test]
+    fn socket_receive_buffer_size_defaults_to_zero() {
+        let config = deser_config("{}");
+        assert_eq!(config.socket_receive_buffer_size, 0);
+    }
+
+    #[test]
+    fn socket_receive_buffer_size_from_config() {
+        let config = deser_config(r#"{"dogstatsd_so_rcvbuf": 131072}"#);
+        assert_eq!(config.socket_receive_buffer_size, 131_072);
     }
 
     #[test]

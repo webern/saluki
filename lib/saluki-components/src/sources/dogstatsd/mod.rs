@@ -1,5 +1,5 @@
 use std::sync::{Arc, LazyLock};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use bytes::{Buf, BufMut};
@@ -1176,13 +1176,29 @@ fn handle_event_packet(
     let tags = get_filtered_tags_iterator(packet.tags, additional_tags);
     let tags = tags_resolver.create_tag_set(tags)?;
 
+    // When no d: field is present, backfill the current time — matching the stock Datadog Agent's
+    // behavior in pkg/aggregator/aggregator.go (addEvent), which sets e.Ts = time.Now().Unix()
+    // for any event with Ts == 0.
+    let timestamp = packet
+        .timestamp
+        .or_else(|| SystemTime::now().duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs()));
+
     let eventd = EventD::new(packet.title, packet.text)
-        .with_timestamp(packet.timestamp)
+        .with_timestamp(timestamp)
         .with_hostname(packet.hostname.map(|s| s.into()))
         .with_aggregation_key(packet.aggregation_key.map(|s| s.into()))
         .with_alert_type(packet.alert_type)
         .with_priority(packet.priority)
-        .with_source_type_name(packet.source_type_name.map(|s| s.into()))
+        // When no source type is provided, default to "api" — the same default the stock Datadog
+        // Agent applies when serializing DogStatsD events to the intake JSON format. The agent
+        // groups events by source type name and uses "api" as the key for events without an
+        // explicit `s:` field. See: pkg/serializer/internal/metrics/events.go (writeItem).
+        .with_source_type_name(Some(
+            packet
+                .source_type_name
+                .map(|s| s.into())
+                .unwrap_or_else(|| "api".into()),
+        ))
         .with_alert_type(packet.alert_type)
         .with_tags(tags)
         .with_origin_tags(origin_tags);

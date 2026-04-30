@@ -247,7 +247,7 @@ fn generate_isolation_group_id() -> String {
 }
 
 /// Runner for a single test case.
-struct TestRunner {
+pub(crate) struct TestRunner {
     test_case: TestCase,
     isolation_group_id: String,
     cancel_token: CancellationToken,
@@ -258,7 +258,7 @@ struct TestRunner {
 
 impl TestRunner {
     /// Create a new test runner for the given test case.
-    fn new(test_case: TestCase, mounts_dir: PathBuf) -> Self {
+    pub(crate) fn new(test_case: TestCase, mounts_dir: PathBuf) -> Self {
         Self {
             test_case,
             isolation_group_id: generate_isolation_group_id(),
@@ -270,13 +270,13 @@ impl TestRunner {
     }
 
     /// Set the directory where container logs should be written.
-    fn with_log_dir(mut self, log_dir: PathBuf) -> Self {
+    pub(crate) fn with_log_dir(mut self, log_dir: PathBuf) -> Self {
         self.log_dir = Some(log_dir);
         self
     }
 
     /// Run the test case and return the result.
-    async fn run(&mut self) -> TestResult {
+    pub(crate) async fn run(&mut self) -> TestResult {
         let started = Instant::now();
         let test_name = self.test_case.name.clone();
         let mut phase_timings = Vec::new();

@@ -30,7 +30,12 @@ use self::events::{create_event_channel, TestEvent};
 mod reporter;
 use self::reporter::{OutputFormat, Reporter, TestResult, TestSuiteResult};
 
+mod cases;
+mod integration;
+#[allow(dead_code)]
 mod runner;
+#[allow(dead_code)]
+mod test;
 mod tui;
 
 #[tokio::main]
@@ -99,7 +104,7 @@ async fn run_tests(mut cmd: cli::RunCommand, use_tui: bool) -> ExitCode {
         return ExitCode::from(2);
     }
 
-    let mut test_cases = match discover_tests(&cmd.test_dirs) {
+    let test_cases = match discover_tests(&cmd.test_dirs) {
         Ok(tests) => tests,
         Err(e) => {
             if use_tui {
@@ -120,21 +125,6 @@ async fn run_tests(mut cmd: cli::RunCommand, use_tui: bool) -> ExitCode {
             error!("{}", msg);
         }
         return ExitCode::from(2);
-    }
-
-    // Filter tests if specific ones are requested.
-    if let Some(ref filter) = cmd.tests {
-        let requested_tests = filter.split(',').map(|s| s.trim()).collect::<Vec<_>>();
-        test_cases.retain(|t| requested_tests.contains(&t.name()));
-
-        if test_cases.is_empty() {
-            if use_tui {
-                eprintln!("No tests matched the filter '{}'.", filter);
-            } else {
-                error!("No tests matched the filter '{}'.", filter);
-            }
-            return ExitCode::from(2);
-        }
     }
 
     // Create log directory if log capture is enabled.
@@ -161,20 +151,45 @@ async fn run_tests(mut cmd: cli::RunCommand, use_tui: bool) -> ExitCode {
         }
     };
 
+    // Build the test registry from discovered tests.
+    let mut registry = test::TestRegistry::new();
+    for tc in test_cases {
+        match tc {
+            config::DiscoveredTest::Integration(tc) => {
+                registry
+                    .register(Box::new(cases::IntegrationTestCase::new(
+                        tc,
+                        log_dir.clone(),
+                        cmd.mounts_dir.clone(),
+                    )))
+                    .expect("failure to register integration test");
+            }
+            config::DiscoveredTest::Correctness { name, config } => {
+                registry
+                    .register(Box::new(cases::CorrectnessTestCase::new(
+                        name,
+                        config,
+                        log_dir.clone(),
+                        cmd.mounts_dir.clone(),
+                    )))
+                    .expect("failure to register correctness test");
+            }
+        }
+    }
+
+    // Build an optional name filter from the --tests flag.
+    let filter: Option<Box<dyn Fn(&dyn test::Test) -> bool + Send>> = cmd.tests.as_ref().map(|f| {
+        let names: Vec<String> = f.split(',').map(|s| s.trim().to_string()).collect();
+        Box::new(move |t: &dyn test::Test| names.iter().any(|n| *n == t.name())) as _
+    });
+
     // Create the event channel and cancellation token.
     let (tx, rx) = create_event_channel();
     let cancel_token = CancellationToken::new();
 
     // Spawn the test runner task (same code path for both modes).
-    let runner_handle = tokio::spawn(runner::run_tests(
-        test_cases,
-        cmd.parallelism,
-        cmd.fail_fast,
-        log_dir.clone(),
-        cmd.mounts_dir.clone(),
-        tx,
-        cancel_token.clone(),
-    ));
+    let runner_cancel = cancel_token.clone();
+    let runner_handle = tokio::spawn(async move { registry.run_tests(filter, tx, runner_cancel).await });
 
     // Spawn the appropriate consumer based on mode.
     let all_passed = if use_tui {

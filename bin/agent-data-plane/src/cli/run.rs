@@ -174,7 +174,7 @@ pub async fn handle_run_command(
                 // TODO: link to the documentation?
                 // TODO: consider returning an error to exit the program?
             }
-            (SupportLevel::NotApplicable, _) => {
+            (SupportLevel::Ignored, _) => {
                 trace!(key = %key, "Configuration key is not applicable to this system. Safely ignoring.")
             }
             (SupportLevel::Unrecognized, _) => {

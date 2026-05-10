@@ -67,7 +67,7 @@ impl ConfigClassifier {
                 is_default: is_default_value(schema, value),
             },
             Some(RegistryEntry::Ignored) => Classification {
-                support_level: SupportLevel::NotApplicable,
+                support_level: SupportLevel::Ignored,
                 is_default: true,
             },
             // If we don't know about it, we cannot know its default.
@@ -159,7 +159,7 @@ mod tests {
         let c = classifier();
         // GUI_host is in ignored_keys.yaml
         let result = c.classify("GUI_host", &Value::String("localhost".into()));
-        assert_eq!(result.support_level, SupportLevel::NotApplicable);
+        assert_eq!(result.support_level, SupportLevel::Ignored);
         assert!(result.is_default);
     }
 

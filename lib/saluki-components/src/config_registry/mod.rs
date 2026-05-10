@@ -123,11 +123,11 @@ pub enum SupportLevel {
     /// its presence; `used_by` must be empty. Support for the key may be added in the future but
     /// tracking such intent is not encoded here.
     Incompatible,
-    /// Not applicable. The key is not relevant to Saluki and we ignore it. This assignment must be
-    /// intentionally chosen and specified for a key. We never assume that a key is `NotApplicable`
-    /// just because we are unaware of it.
+    /// Intentionally ignored. The key is not relevant to Saluki. This assignment must be
+    /// intentionally chosen and specified for a key. We never assume that a key is `Ignored` just
+    /// because we are unaware of it.
     #[allow(unused)]
-    NotApplicable,
+    Ignored,
     /// Unrecognized. The Saluki codebase is unaware of the existence of this key. It is not in our
     /// vendored datadog config schema, nor is it annotated.
     #[allow(unused)]
@@ -212,7 +212,7 @@ pub struct SalukiAnnotation {
 
     /// How well saluki supports this key.
     ///
-    /// Must not be [`SupportLevel::NotApplicable`] or [`SupportLevel::Unrecognized`] which are
+    /// Must not be [`SupportLevel::Ignored`] or [`SupportLevel::Unrecognized`] which are
     /// reserved for unannotated keys.
     pub support_level: SupportLevel,
 

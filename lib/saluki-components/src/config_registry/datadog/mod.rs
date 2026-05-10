@@ -97,7 +97,7 @@ mod registry_tests {
                         path,
                     );
                 }
-                SupportLevel::NotApplicable | SupportLevel::Unrecognized => {
+                SupportLevel::Ignored | SupportLevel::Unrecognized => {
                     panic!(
                         "annotation '{}' has support level {:?} — \
                          Ignored is reserved for unannotated schema keys and must not appear \

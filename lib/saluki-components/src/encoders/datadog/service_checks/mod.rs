@@ -282,15 +282,23 @@ mod config_smoke {
     use serde_json::json;
 
     use super::DatadogServiceChecksConfiguration;
+    use crate::config::{DatadogRemapper, KEY_ALIASES};
     use crate::config_registry::structs;
     use crate::config_registry::test_support::run_config_smoke_tests;
 
     #[tokio::test]
     async fn smoke_test() {
-        run_config_smoke_tests(structs::DATADOG_SERVICE_CHECKS_CONFIGURATION, &[], json!({}), |cfg| {
-            cfg.as_typed::<DatadogServiceChecksConfiguration>()
-                .expect("DatadogServiceChecksConfiguration should deserialize")
-        })
+        run_config_smoke_tests(
+            structs::DATADOG_SERVICE_CHECKS_CONFIGURATION,
+            &[],
+            json!({}),
+            |cfg| {
+                cfg.as_typed::<DatadogServiceChecksConfiguration>()
+                    .expect("DatadogServiceChecksConfiguration should deserialize")
+            },
+            KEY_ALIASES,
+            DatadogRemapper::new,
+        )
         .await
     }
 }

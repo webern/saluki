@@ -187,14 +187,22 @@ mod config_smoke {
     use serde_json::json;
 
     use super::OtlpDecoderConfiguration;
+    use crate::config::{DatadogRemapper, KEY_ALIASES};
     use crate::config_registry::structs;
     use crate::config_registry::test_support::run_config_smoke_tests;
 
     #[tokio::test]
     async fn smoke_test() {
-        run_config_smoke_tests(structs::OTLP_DECODER_CONFIGURATION, &[], json!({}), |cfg| {
-            OtlpDecoderConfiguration::from_configuration(&cfg).expect("OtlpDecoderConfiguration should deserialize")
-        })
+        run_config_smoke_tests(
+            structs::OTLP_DECODER_CONFIGURATION,
+            &[],
+            json!({}),
+            |cfg| {
+                OtlpDecoderConfiguration::from_configuration(&cfg).expect("OtlpDecoderConfiguration should deserialize")
+            },
+            KEY_ALIASES,
+            DatadogRemapper::new,
+        )
         .await
     }
 }

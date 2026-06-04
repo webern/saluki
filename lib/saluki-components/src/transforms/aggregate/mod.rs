@@ -1522,6 +1522,7 @@ mod config_smoke {
     use serde_json::json;
 
     use super::AggregateConfiguration;
+    use crate::config::{DatadogRemapper, KEY_ALIASES};
     use crate::config_registry::structs;
     use crate::config_registry::test_support::run_config_smoke_tests;
 
@@ -1540,6 +1541,8 @@ mod config_smoke {
                 cfg.as_typed::<AggregateConfiguration>()
                     .expect("AggregateConfiguration should deserialize")
             },
+            KEY_ALIASES,
+            DatadogRemapper::new,
         )
         .await
     }

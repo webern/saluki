@@ -41,19 +41,14 @@
 //! ignored entries that reference keys no longer in the schema. Delete the stale entries.
 
 mod classifier;
+#[allow(missing_docs)]
 pub mod datadog;
-/// Generated schema entries from the vendored Datadog Agent config schema.
-pub mod generated;
 
 pub use classifier::{Classification, ConfigClassifier};
 
 pub(crate) use self::datadog::ALL_ANNOTATIONS;
 #[cfg(any(test, feature = "config-test-support"))]
 pub(crate) use self::datadog::SUPPORTED_ANNOTATIONS;
-#[cfg(test)]
-pub(crate) use self::generated::schema::ALL_SCHEMA_ENTRIES;
-#[cfg(test)]
-pub(crate) use self::generated::schema::IGNORED_ENTRIES;
 
 /// Declares a set of [`SalukiAnnotation`] constants and generates a companion `ALL` slice.
 ///
@@ -92,7 +87,9 @@ macro_rules! declare_annotations {
 
 /// Shared helpers for config smoke tests.
 #[cfg(any(test, feature = "config-test-support"))]
-pub mod test_support;
+pub mod test_support {
+    pub use datadog_agent_config_testsupport::*;
+}
 
 /// Identifiers for known configuration structs.
 ///

@@ -312,15 +312,23 @@ mod config_smoke {
     use serde_json::json;
 
     use super::TraceObfuscationConfiguration;
+    use crate::config::{DatadogRemapper, KEY_ALIASES};
     use crate::config_registry::structs;
     use crate::config_registry::test_support::run_config_smoke_tests;
 
     #[tokio::test]
     async fn smoke_test() {
-        run_config_smoke_tests(structs::TRACE_OBFUSCATION_CONFIGURATION, &[], json!({}), |cfg| {
-            TraceObfuscationConfiguration::from_apm_configuration(&cfg)
-                .expect("TraceObfuscationConfiguration should deserialize")
-        })
+        run_config_smoke_tests(
+            structs::TRACE_OBFUSCATION_CONFIGURATION,
+            &[],
+            json!({}),
+            |cfg| {
+                TraceObfuscationConfiguration::from_apm_configuration(&cfg)
+                    .expect("TraceObfuscationConfiguration should deserialize")
+            },
+            KEY_ALIASES,
+            DatadogRemapper::new,
+        )
         .await
     }
 }

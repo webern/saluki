@@ -52,7 +52,10 @@ use crate::{
         DogStatsDControlSurface, TopologyControlSurfaces,
     },
 };
-use crate::{config::DataPlaneConfiguration, internal::env::ADPEnvironmentProvider};
+use crate::{
+    config::{BootstrapConfiguration, DataPlaneConfiguration},
+    internal::env::ADPEnvironmentProvider,
+};
 
 /// Runs the data plane.
 #[derive(FromArgs, Debug)]
@@ -65,8 +68,8 @@ pub struct RunCommand {
 
 /// Entrypoint for the `run` commands.
 pub async fn handle_run_command(
-    started: Instant, bootstrap_config: GenericConfiguration, bootstrap_guard: &mut BootstrapGuard,
-    bootstrap_supervisor: Supervisor,
+    started: Instant, bootstrap_config: BootstrapConfiguration, generic_config: GenericConfiguration,
+    bootstrap_guard: &mut BootstrapGuard, bootstrap_supervisor: Supervisor,
 ) -> Result<(), GenericError> {
     let app_details = saluki_metadata::get_app_details();
     info!(
@@ -78,23 +81,30 @@ pub async fn handle_run_command(
         "Agent Data Plane starting..."
     );
 
-    // Load our "bootstrap" configuration.
+    // Parse the data plane configuration from the generic bootstrap config.
+    //
+    // This parse survives the bootstrap typing because of its runtime-config role, NOT for bootstrap
+    // gating: in standalone / non-dynamic mode this `bootstrap_dp_config` becomes the runtime
+    // `dp_config` that flows into the whole topology (see the `_ =>` arm below). The bootstrap GATE
+    // decisions are read from the typed `BootstrapConfiguration` instead.
+    let bootstrap_dp_config = DataPlaneConfiguration::from_configuration(&generic_config)
+        .error_context("Failed to load data plane configuration.")?;
+
+    // Bootstrap gate decisions, read from the typed pre-authority `BootstrapConfiguration`.
     //
     // If remote agent mode is enabled, we'll register as a remote agent, which will unlock the ability to receive
     // configuration updates from the Core Agent, which we'll use to build our final, updated configuration. Otherwise,
     // we keep the bootstrap configuration and use it as-is.
-    let bootstrap_dp_config = DataPlaneConfiguration::from_configuration(&bootstrap_config)
-        .error_context("Failed to load data plane configuration.")?;
-
-    let in_standalone_mode = bootstrap_dp_config.standalone_mode();
-    let remote_agent_enabled = bootstrap_dp_config.remote_agent_enabled();
-    let use_new_config_stream_endpoint = bootstrap_dp_config.use_new_config_stream_endpoint();
+    let in_standalone_mode = bootstrap_config.standalone_mode();
+    let remote_agent_enabled = bootstrap_config.remote_agent_enabled();
+    let use_new_config_stream_endpoint = bootstrap_config.use_new_config_stream_endpoint();
     let should_bootstrap_remote_agent = !in_standalone_mode && (remote_agent_enabled || use_new_config_stream_endpoint);
 
     let ra_bootstrap = if should_bootstrap_remote_agent {
-        let ra_bootstrap = RemoteAgentBootstrap::from_configuration(&bootstrap_config, &bootstrap_dp_config)
-            .await
-            .error_context("Failed to bootstrap remote agent state.")?;
+        let ra_bootstrap =
+            RemoteAgentBootstrap::from_configuration(&generic_config, bootstrap_config.secure_api_listen_address())
+                .await
+                .error_context("Failed to bootstrap remote agent state.")?;
 
         Some(ra_bootstrap)
     } else {
@@ -143,8 +153,9 @@ pub async fn handle_run_command(
             (dynamic_config, dynamic_dp_config)
         }
 
-        // If dynamic configuration is disabled, the bootstrap configuration is already the complete and final configuration.
-        _ => (bootstrap_config, bootstrap_dp_config),
+        // If dynamic configuration is disabled, the generic bootstrap configuration is already the complete and final
+        // configuration.
+        _ => (generic_config, bootstrap_dp_config),
     };
 
     if !in_standalone_mode && !dp_config.enabled() {

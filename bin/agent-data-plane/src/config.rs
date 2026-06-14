@@ -1,5 +1,4 @@
 use bytesize::ByteSize;
-use datadog_agent_commons::ipc::config::RemoteAgentClientConfiguration;
 use saluki_common::deser::PermissiveBool;
 use saluki_config::{ConfigurationLoader, GenericConfiguration};
 use saluki_error::{ErrorContext as _, GenericError};
@@ -12,7 +11,14 @@ use serde_with::serde_as;
 pub struct DataPlaneConfiguration {
     enabled: bool,
     standalone_mode: bool,
+    // The bootstrap GATE now reads these two from the typed `BootstrapConfiguration`, so they are no
+    // longer read off the runtime `DataPlaneConfiguration`. They remain parsed here to preserve
+    // runtime config derivation unchanged in this refactor PR (per the PR 2 scope constraint); the
+    // runtime struct simply has no consumer for them. Their eventual removal pairs with deleting the
+    // transitional gates entirely. See `design/deviations.md`.
+    #[allow(dead_code)]
     use_new_config_stream_endpoint: bool,
+    #[allow(dead_code)]
     remote_agent_enabled: bool,
     api_listen_address: ListenAddress,
     secure_api_listen_address: ListenAddress,
@@ -65,11 +71,19 @@ impl DataPlaneConfiguration {
     }
 
     /// Returns `true` if the new config stream endpoint should be used.
+    ///
+    /// Retained for runtime-struct completeness; the bootstrap gate reads this from
+    /// `BootstrapConfiguration` instead. See the field comment above.
+    #[allow(dead_code)]
     pub const fn use_new_config_stream_endpoint(&self) -> bool {
         self.use_new_config_stream_endpoint
     }
 
     /// Returns `true` if the data plane should register as a remote agent.
+    ///
+    /// Retained for runtime-struct completeness; the bootstrap gate reads this from
+    /// `BootstrapConfiguration` instead. See the field comment above.
+    #[allow(dead_code)]
     pub const fn remote_agent_enabled(&self) -> bool {
         self.remote_agent_enabled
     }
@@ -330,6 +344,82 @@ impl DataPlaneOtlpProxyConfiguration {
 // BootstrapConfiguration
 // ---------------------------------------------------------------------------
 
+/// The exact set of configuration keys read during the bootstrap phase, i.e. before
+/// `dynamic_config.ready().await` in `cli/run.rs` (the moment the first Agent config map arrives).
+///
+/// This is a pinned allowlist guard, not a mechanically derived set. We cannot trace runtime key
+/// access: `GenericConfiguration::try_get_typed` and serde `#[serde(rename = ...)]` lookups do not
+/// expose, at compile time or runtime, which keys a given parse touched. In particular the IPC keys
+/// (`cmd_port`, `auth_token_file_path`, `ipc_cert_file_path`, `vsock_addr`, `agent_ipc_endpoint`,
+/// `agent_ipc_grpc_max_message_size`, `connect_retry_attempts`, `connect_retry_backoff`) are read
+/// inside `RemoteAgentClientConfiguration`'s `Deserialize` impl, so they cannot be enumerated from
+/// here.
+///
+/// The guard works the other way: this constant is the authoritative, human-verified list (checked
+/// against `bin/agent-data-plane` startup in `design/mapless.md` "Bootstrap phase"), and the tests
+/// in this module pin it. Any change to the bootstrap key surface forces a deliberate edit to this
+/// constant, which makes a stray pre-`ready()` read visible in review rather than silent.
+///
+/// Test-only: the allowlist's sole consumer is the audit test in this module. The runtime bootstrap
+/// path is typed by [`BootstrapConfiguration`] itself, so the list does not need to exist at runtime.
+#[cfg(test)]
+pub(crate) const BOOTSTRAP_ALLOWLIST: &[&str] = &[
+    // Datadog-domain: logging keys (shared with the Core Agent schema)
+    "log_level",
+    "log_format_json",
+    "log_format_rfc3339",
+    "log_to_console",
+    "log_to_syslog",
+    "syslog_rfc",
+    "syslog_uri",
+    "log_file_max_size",
+    "log_file_max_rolls",
+    "disable_file_logging",
+    // Datadog-domain: Agent IPC/auth/TLS
+    "cmd_port",
+    "auth_token_file_path",
+    "ipc_cert_file_path",
+    "vsock_addr",
+    // Saluki-domain: ADP logging/metrics
+    "data_plane.log_file",
+    "metrics_level",
+    // Saluki-domain: startup gates
+    "data_plane.standalone_mode",
+    "data_plane.remote_agent_enabled",
+    "data_plane.use_new_config_stream_endpoint",
+    // Saluki-domain: RAR rendezvous address
+    "data_plane.secure_api_listen_address",
+    // Saluki-domain: IPC knobs
+    "agent_ipc_endpoint",
+    "agent_ipc_grpc_max_message_size",
+    "connect_retry_attempts",
+    "connect_retry_backoff",
+];
+
+/// The subset of [`BOOTSTRAP_ALLOWLIST`] that [`BootstrapConfiguration::from_configuration`] parses
+/// directly (everything except the IPC keys, whose cutover into this struct is deferred; see the
+/// note on [`BootstrapConfiguration`]). Kept in lockstep with `from_configuration` and asserted to
+/// be a subset of [`BOOTSTRAP_ALLOWLIST`] by the audit test.
+#[cfg(test)]
+pub(crate) const BOOTSTRAP_OWNED_KEYS: &[&str] = &[
+    "log_level",
+    "log_format_json",
+    "log_format_rfc3339",
+    "log_to_console",
+    "log_to_syslog",
+    "syslog_rfc",
+    "syslog_uri",
+    "log_file_max_size",
+    "log_file_max_rolls",
+    "disable_file_logging",
+    "data_plane.log_file",
+    "metrics_level",
+    "data_plane.standalone_mode",
+    "data_plane.remote_agent_enabled",
+    "data_plane.use_new_config_stream_endpoint",
+    "data_plane.secure_api_listen_address",
+];
+
 /// Pre-authority bootstrap configuration for ADP startup.
 ///
 /// Every key here is read before `dynamic_config.ready().await` in `cli/run.rs`, the point where
@@ -341,7 +431,14 @@ impl DataPlaneOtlpProxyConfiguration {
 /// currently arrive via `DD_*` / `DD_DATA_PLANE_*`. That is a known temporary wart: the intended
 /// end-state is to source them from `SALUKI_*` and reject the `DD_*` form, but that migration is
 /// deferred. See the "source authority for Saluki-domain bootstrap keys" TODO in `design/mapless.md`.
-#[allow(dead_code)]
+///
+/// The IPC/auth/TLS keys (`cmd_port`, `auth_token_file_path`, `ipc_cert_file_path`, `vsock_addr`,
+/// `agent_ipc_endpoint`, `agent_ipc_grpc_max_message_size`, `connect_retry_attempts`,
+/// `connect_retry_backoff`) are part of the bootstrap phase and appear in [`BOOTSTRAP_ALLOWLIST`],
+/// but are intentionally NOT parsed here yet. The IPC connection still builds its
+/// `RemoteAgentClientConfiguration` from the generic configuration in `internal::remote_agent`,
+/// because routing it through this typed struct would require a cross-crate constructor change in
+/// `datadog-agent-commons`. That cutover is deferred to a later PR; see `design/deviations.md`.
 pub struct BootstrapConfiguration {
     // Datadog-domain: logging keys (shared with Core Agent schema)
     pub(crate) log_level: Option<String>,
@@ -364,10 +461,6 @@ pub struct BootstrapConfiguration {
     pub(crate) use_new_config_stream_endpoint: bool,
     // Saluki-domain: RAR rendezvous address
     pub(crate) secure_api_listen_address: ListenAddress,
-    // IPC/auth/TLS — Datadog-domain: cmd_port, auth_token_file_path, ipc_cert_file_path, vsock_addr;
-    //                 Saluki-domain:  agent_ipc_endpoint, agent_ipc_grpc_max_message_size,
-    //                                 connect_retry_attempts, connect_retry_backoff
-    pub(crate) ipc_client: RemoteAgentClientConfiguration,
 }
 
 /// A helper wrapper to parse permissive booleans (accepts "true"/"false", "1"/"0", etc.) from config.
@@ -433,14 +526,32 @@ impl BootstrapConfiguration {
                 .try_get_typed("data_plane.secure_api_listen_address")
                 .error_context("Failed to read `data_plane.secure_api_listen_address`.")?
                 .unwrap_or_else(|| ListenAddress::any_tcp(5101)),
-            ipc_client: RemoteAgentClientConfiguration::from_configuration(config)
-                .error_context("Failed to read IPC client configuration from bootstrap.")?,
         })
     }
 
     /// Returns the configured metrics level string, if set.
     pub fn metrics_level(&self) -> Option<&str> {
         self.metrics_level.as_deref()
+    }
+
+    /// Returns `true` if ADP is running in standalone mode (no Core Agent connection).
+    pub const fn standalone_mode(&self) -> bool {
+        self.standalone_mode
+    }
+
+    /// Returns `true` if ADP should register as a remote agent with the Core Agent.
+    pub const fn remote_agent_enabled(&self) -> bool {
+        self.remote_agent_enabled
+    }
+
+    /// Returns `true` if ADP should use the new config-stream endpoint for dynamic configuration.
+    pub const fn use_new_config_stream_endpoint(&self) -> bool {
+        self.use_new_config_stream_endpoint
+    }
+
+    /// Returns the RAR rendezvous (secure API) listen address.
+    pub const fn secure_api_listen_address(&self) -> &ListenAddress {
+        &self.secure_api_listen_address
     }
 }
 
@@ -450,18 +561,22 @@ impl BootstrapConfiguration {
 
 /// Saluki-private runtime configuration loader (scaffolding — no component cutover in PR 2).
 ///
-/// Loads ADP-private configuration from `SALUKI_*` environment variables and an optional
-/// `saluki.yaml` file. Deliberately excludes all Datadog sources (`DD_*`, `datadog.yaml`,
-/// RAR/config-stream) and bootstrap-only keys.
+/// This is a thin wrapper over a raw `SALUKI_*` env / `saluki.yaml` configuration source. It adds
+/// only those two providers and deliberately adds NO Datadog sources (`DD_*`, `datadog.yaml`,
+/// RAR/config-stream). That source boundary is the property enforced today, and the source-boundary
+/// tests in this module verify it directly: `DD_*` cannot reach this surface, and `SALUKI_*` can.
 ///
-/// The runtime key set is the entries from `SALUKI_KEYS` minus the bootstrap-only Saluki-domain
-/// keys: `data_plane.remote_agent_enabled`, `data_plane.use_new_config_stream_endpoint`,
-/// `data_plane.standalone_mode`, `data_plane.secure_api_listen_address`, `metrics_level`,
-/// `data_plane.log_file`, `agent_ipc_endpoint`, `agent_ipc_grpc_max_message_size`,
-/// `connect_retry_attempts`, and `connect_retry_backoff`.
+/// What is NOT enforced here is a key-level allowlist. The loader does not restrict which keys are
+/// readable, and in particular it does not filter out the bootstrap-only Saluki-domain keys
+/// (`data_plane.standalone_mode`, `data_plane.remote_agent_enabled`,
+/// `data_plane.use_new_config_stream_endpoint`, `data_plane.secure_api_listen_address`,
+/// `metrics_level`, `data_plane.log_file`, `agent_ipc_endpoint`,
+/// `agent_ipc_grpc_max_message_size`, `connect_retry_attempts`, `connect_retry_backoff`). Those keys
+/// simply have no consumer on this surface yet. The key-level allowlist (carrying `SALUKI_KEYS`
+/// forward minus the bootstrap-only keys) is enforced at component cutover, when each component
+/// migrates to typed accessors over this loader (PRs 4-9).
 ///
 /// No component is cut over to this config in PR 2. Component migrations happen in PRs 4-9.
-/// Source-boundary tests verify that Datadog sources cannot reach this config surface.
 #[allow(dead_code)]
 pub struct SalukiPrivateConfiguration {
     inner: GenericConfiguration,
@@ -504,6 +619,8 @@ impl SalukiPrivateConfiguration {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use saluki_config::ConfigurationLoader;
     use serde_json::json;
 
@@ -659,6 +776,115 @@ mod tests {
         assert_eq!(bc.log_level.as_deref(), Some("warn"));
     }
 
+    #[tokio::test]
+    async fn bootstrap_source_precedence_yaml_remapper_env() {
+        use saluki_components::config::{DatadogRemapper, KEY_ALIASES};
+
+        // Exercises the full bootstrap precedence chain the real loader uses:
+        //   from_yaml < DatadogRemapper < from_environment(DD) (+ KEY_ALIASES).
+        // All three layers target the single resolved key `proxy_http`:
+        //   - YAML sets `proxy.http`, which KEY_ALIASES rewrites to `proxy_http`.
+        //   - `http_proxy` (raw env) is remapped by DatadogRemapper to `proxy_http`.
+        //   - `PROXY_HTTP` (DD/TEST env) lands directly on `proxy_http`.
+        // The harness sets each pair under both the raw name and the `TEST_` prefix; the factory
+        // (DatadogRemapper) reads the raw names, and `from_environment("TEST")` reads the prefixed
+        // ones, matching the production wiring.
+
+        // Highest layer present: the DD-style env var must win over both remapper and YAML.
+        let env_vars = [
+            ("http_proxy".to_string(), "from_remapper".to_string()),
+            ("PROXY_HTTP".to_string(), "from_env".to_string()),
+        ];
+        let (config, _) = ConfigurationLoader::for_tests_with_provider_factory(
+            Some(json!({ "proxy": { "http": "from_yaml" } })),
+            Some(&env_vars),
+            false,
+            KEY_ALIASES,
+            DatadogRemapper::new,
+        )
+        .await;
+        let resolved: Option<String> = config.try_get_typed("proxy_http").unwrap();
+        assert_eq!(resolved.as_deref(), Some("from_env"));
+
+        // Drop the env layer: the remapper output must still win over YAML.
+        let env_vars = [("http_proxy".to_string(), "from_remapper".to_string())];
+        let (config, _) = ConfigurationLoader::for_tests_with_provider_factory(
+            Some(json!({ "proxy": { "http": "from_yaml" } })),
+            Some(&env_vars),
+            false,
+            KEY_ALIASES,
+            DatadogRemapper::new,
+        )
+        .await;
+        let resolved: Option<String> = config.try_get_typed("proxy_http").unwrap();
+        assert_eq!(resolved.as_deref(), Some("from_remapper"));
+    }
+
+    // Bootstrap-allowlist audit test (see `BOOTSTRAP_ALLOWLIST` for why this is a pinned guard).
+
+    #[test]
+    fn bootstrap_allowlist_matches_verified_set() {
+        // Pin `BOOTSTRAP_ALLOWLIST` to the verified pre-`ready()` key set from `design/mapless.md`
+        // "Bootstrap phase". This duplicates the constant on purpose: adding or removing a bootstrap
+        // key must change BOTH this literal and the constant, forcing a deliberate, reviewable edit
+        // rather than a silent expansion of the pre-authority surface.
+        let expected: &[&str] = &[
+            "log_level",
+            "log_format_json",
+            "log_format_rfc3339",
+            "log_to_console",
+            "log_to_syslog",
+            "syslog_rfc",
+            "syslog_uri",
+            "log_file_max_size",
+            "log_file_max_rolls",
+            "disable_file_logging",
+            "cmd_port",
+            "auth_token_file_path",
+            "ipc_cert_file_path",
+            "vsock_addr",
+            "data_plane.log_file",
+            "metrics_level",
+            "data_plane.standalone_mode",
+            "data_plane.remote_agent_enabled",
+            "data_plane.use_new_config_stream_endpoint",
+            "data_plane.secure_api_listen_address",
+            "agent_ipc_endpoint",
+            "agent_ipc_grpc_max_message_size",
+            "connect_retry_attempts",
+            "connect_retry_backoff",
+        ];
+
+        let actual: HashSet<&str> = BOOTSTRAP_ALLOWLIST.iter().copied().collect();
+        let pinned: HashSet<&str> = expected.iter().copied().collect();
+        assert_eq!(
+            actual, pinned,
+            "BOOTSTRAP_ALLOWLIST drifted from the verified pre-ready() key set in design/mapless.md"
+        );
+
+        // No duplicates: a HashSet collapses repeats, so equal lengths prove the constant is a set.
+        assert_eq!(
+            BOOTSTRAP_ALLOWLIST.len(),
+            actual.len(),
+            "BOOTSTRAP_ALLOWLIST contains duplicate keys"
+        );
+    }
+
+    #[test]
+    fn bootstrap_owned_keys_are_subset_of_allowlist() {
+        // The keys `BootstrapConfiguration::from_configuration` parses directly must all be in the
+        // allowlist. The IPC keys are excluded here because they are not parsed by this struct yet
+        // (deferred cutover; see `BootstrapConfiguration` doc), but they remain in the allowlist
+        // because they are still read during bootstrap by the IPC client.
+        let allowlist: HashSet<&str> = BOOTSTRAP_ALLOWLIST.iter().copied().collect();
+        for key in BOOTSTRAP_OWNED_KEYS {
+            assert!(
+                allowlist.contains(key),
+                "BootstrapConfiguration parses `{key}`, which is not in BOOTSTRAP_ALLOWLIST"
+            );
+        }
+    }
+
     // SalukiPrivateConfiguration tests
 
     #[tokio::test]
@@ -675,14 +901,62 @@ mod tests {
         assert_eq!(port, Some(9999));
     }
 
+    // Serializes the env-var-mutating source-boundary tests so concurrent test threads do not see
+    // each other's process-global environment writes. `SalukiPrivateConfiguration::load` reads the
+    // real process environment (via `from_environment("SALUKI")`), so these tests cannot use the
+    // in-memory `for_tests` harness.
+    static ENV_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[tokio::test]
-    async fn saluki_private_excludes_dd_sources() {
-        // SalukiPrivateConfiguration::load() only calls from_environment("SALUKI"),
-        // never from_environment("DD_") or any Datadog-schema loader. This test
-        // verifies that a config built with no SALUKI_* vars and no saluki.yaml is empty.
-        let priv_config = SalukiPrivateConfiguration::load(None).expect("load saluki private config");
-        // dogstatsd_port would be absent since no SALUKI_DOGSTATSD_PORT or saluki.yaml set it.
-        let port: Option<u64> = priv_config.inner().try_get_typed("dogstatsd_port").unwrap();
-        assert!(port.is_none());
+    async fn saluki_private_excludes_dd_env_source() {
+        // Source-boundary (negative): a Datadog-schema key set via the DD_* env path must NOT be
+        // visible through SalukiPrivateConfiguration. `load` adds only `from_environment("SALUKI")`
+        // and the optional saluki.yaml -- never a DD_* provider -- so DD_* can never reach this
+        // surface. Uses a unique key name to avoid colliding with other keys/tests.
+        let _guard = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+
+        const DD_VAR: &str = "DD_SALUKI_PRIVATE_BOUNDARY_PROBE";
+        std::env::set_var(DD_VAR, "4321");
+
+        let result = (|| {
+            let priv_config = SalukiPrivateConfiguration::load(None).expect("load saluki private config");
+            let value: Option<u64> = priv_config
+                .inner()
+                .try_get_typed("saluki_private_boundary_probe")
+                .unwrap();
+            value
+        })();
+
+        std::env::remove_var(DD_VAR);
+
+        assert!(
+            result.is_none(),
+            "a DD_* env var leaked into SalukiPrivateConfiguration: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn saluki_private_reads_saluki_env_source() {
+        // Source-boundary (positive): a key set via the SALUKI_* env path IS visible through
+        // SalukiPrivateConfiguration. Together with the negative test above, this proves the
+        // boundary admits SALUKI_* and rejects DD_* for the same logical key.
+        let _guard = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+
+        const SALUKI_VAR: &str = "SALUKI_PRIVATE_BOUNDARY_PROBE";
+        std::env::set_var(SALUKI_VAR, "4321");
+
+        let result = (|| {
+            let priv_config = SalukiPrivateConfiguration::load(None).expect("load saluki private config");
+            let value: Option<u64> = priv_config.inner().try_get_typed("private_boundary_probe").unwrap();
+            value
+        })();
+
+        std::env::remove_var(SALUKI_VAR);
+
+        assert_eq!(
+            result,
+            Some(4321),
+            "a SALUKI_* env var was not visible via SalukiPrivateConfiguration"
+        );
     }
 }

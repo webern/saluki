@@ -20,7 +20,7 @@ use saluki_core::observability::metrics::{
     get_shared_metrics_state, AggregatedMetricsProcessor, Reflector, TelemetryProcessor,
 };
 use saluki_error::{generic_error, GenericError};
-use saluki_io::net::GrpcTargetAddress;
+use saluki_io::net::{GrpcTargetAddress, ListenAddress};
 use serde_json::{Map, Value};
 use tokio::{
     sync::{mpsc, oneshot, Mutex},
@@ -29,7 +29,6 @@ use tokio::{
 use tonic::{server::NamedService, Status};
 use tracing::{debug, error, info, warn};
 
-use crate::config::DataPlaneConfiguration;
 use crate::state::metrics::get_datadog_agent_remappings;
 
 const DEFAULT_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
@@ -70,9 +69,9 @@ impl RemoteAgentBootstrap {
     ///
     /// If the configuration is invalid, an error is returned.
     pub async fn from_configuration(
-        config: &GenericConfiguration, dp_config: &DataPlaneConfiguration,
+        config: &GenericConfiguration, secure_api_listen_address: &ListenAddress,
     ) -> Result<Self, GenericError> {
-        let api_listen_addr = GrpcTargetAddress::try_from_listen_addr(dp_config.secure_api_listen_address())
+        let api_listen_addr = GrpcTargetAddress::try_from_listen_addr(secure_api_listen_address)
             .ok_or_else(|| generic_error!("Failed to get valid gRPC target address from secure API listen address."))?;
 
         // Generate our remote agent state, which is mostly fixed but has a few dynamic bits.

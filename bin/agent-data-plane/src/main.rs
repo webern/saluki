@@ -118,6 +118,7 @@ async fn main() -> Result<(), GenericError> {
     let maybe_exit_code = run_inner(
         cli.action,
         started,
+        bootstrap_config,
         generic_config,
         &mut bootstrap_guard,
         bootstrap_supervisor,
@@ -143,8 +144,8 @@ fn parse_metrics_level(config: &BootstrapConfiguration) -> Result<Level, Generic
 }
 
 async fn run_inner(
-    action: Action, started: Instant, bootstrap_config: GenericConfiguration, bootstrap_guard: &mut BootstrapGuard,
-    bootstrap_supervisor: Supervisor,
+    action: Action, started: Instant, bootstrap_config: BootstrapConfiguration, generic_config: GenericConfiguration,
+    bootstrap_guard: &mut BootstrapGuard, bootstrap_supervisor: Supervisor,
 ) -> Result<Option<i32>, GenericError> {
     match action {
         Action::Run(cmd) => {
@@ -157,17 +158,24 @@ async fn run_inner(
                 }
             }
 
-            let exit_code =
-                match handle_run_command(started, bootstrap_config, bootstrap_guard, bootstrap_supervisor).await {
-                    Ok(()) => {
-                        info!("Agent Data Plane stopped.");
-                        None
-                    }
-                    Err(e) => {
-                        error!("{:?}", e);
-                        Some(1)
-                    }
-                };
+            let exit_code = match handle_run_command(
+                started,
+                bootstrap_config,
+                generic_config,
+                bootstrap_guard,
+                bootstrap_supervisor,
+            )
+            .await
+            {
+                Ok(()) => {
+                    info!("Agent Data Plane stopped.");
+                    None
+                }
+                Err(e) => {
+                    error!("{:?}", e);
+                    Some(1)
+                }
+            };
 
             // Remove the PID file, if configured.
             if let Some(pid_file) = &cmd.pid_file {
@@ -180,9 +188,9 @@ async fn run_inner(
                 return Ok(Some(exit_code));
             }
         }
-        Action::Debug(cmd) => handle_debug_command(&bootstrap_config, cmd).await,
-        Action::Config(_) => handle_config_command(&bootstrap_config).await,
-        Action::Dogstatsd(cmd) => handle_dogstatsd_command(&bootstrap_config, cmd).await,
+        Action::Debug(cmd) => handle_debug_command(&generic_config, cmd).await,
+        Action::Config(_) => handle_config_command(&generic_config).await,
+        Action::Dogstatsd(cmd) => handle_dogstatsd_command(&generic_config, cmd).await,
         Action::Version(v) => handle_version_command(v.json).await,
     }
 

@@ -1,7 +1,6 @@
 //! Bootstrap utilities.
 
 use metrics::Level;
-use saluki_config::GenericConfiguration;
 use saluki_core::runtime::Supervisor;
 use saluki_error::{ErrorContext as _, GenericError};
 
@@ -67,7 +66,7 @@ impl AppBootstrapper {
     /// # Errors
     ///
     /// This currently doesn't fail, but the signature returns `Result` to leave room for future failures.
-    pub fn from_configuration(_config: &GenericConfiguration) -> Result<Self, GenericError> {
+    pub fn new() -> Result<Self, GenericError> {
         Ok(Self {
             logging_config: LoggingConfiguration::simple(),
             metrics_prefix: "saluki".to_string(),

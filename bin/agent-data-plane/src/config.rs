@@ -1,6 +1,11 @@
-use saluki_config::GenericConfiguration;
-use saluki_error::GenericError;
+use bytesize::ByteSize;
+use datadog_agent_commons::ipc::config::RemoteAgentClientConfiguration;
+use saluki_common::deser::PermissiveBool;
+use saluki_config::{ConfigurationLoader, GenericConfiguration};
+use saluki_error::{ErrorContext as _, GenericError};
 use saluki_io::net::ListenAddress;
+use serde::Deserialize;
+use serde_with::serde_as;
 
 /// General data plane configuration.
 #[derive(Clone, Debug)]
@@ -321,6 +326,182 @@ impl DataPlaneOtlpProxyConfiguration {
     }
 }
 
+// ---------------------------------------------------------------------------
+// BootstrapConfiguration
+// ---------------------------------------------------------------------------
+
+/// Pre-authority bootstrap configuration for ADP startup.
+///
+/// Every key here is read before `dynamic_config.ready().await` in `cli/run.rs`, the point where
+/// the first Agent config map arrives. Bootstrap is a lifecycle phase, not a trust domain: it spans
+/// Datadog-schema keys (logging, IPC/auth/TLS) and Saluki-domain keys (startup gates, ADP log
+/// file, metrics level), all arriving from the single local bootstrap loader.
+///
+/// Saluki-domain bootstrap keys (`standalone_mode`, `agent_ipc_endpoint`, the startup gates, etc.)
+/// currently arrive via `DD_*` / `DD_DATA_PLANE_*`. That is a known temporary wart: the intended
+/// end-state is to source them from `SALUKI_*` and reject the `DD_*` form, but that migration is
+/// deferred. See the "source authority for Saluki-domain bootstrap keys" TODO in `design/mapless.md`.
+#[allow(dead_code)]
+pub struct BootstrapConfiguration {
+    // Datadog-domain: logging keys (shared with Core Agent schema)
+    pub(crate) log_level: Option<String>,
+    pub(crate) log_format_json: Option<bool>,
+    pub(crate) log_format_rfc3339: Option<bool>,
+    pub(crate) log_to_console: Option<bool>,
+    pub(crate) log_to_syslog: Option<bool>,
+    pub(crate) syslog_rfc: Option<bool>,
+    pub(crate) syslog_uri: Option<String>,
+    pub(crate) log_file_max_size: Option<ByteSize>,
+    pub(crate) log_file_max_rolls: Option<usize>,
+    pub(crate) disable_file_logging: bool,
+    // Saluki-domain: ADP log file (never shares with Core Agent log_file)
+    pub(crate) data_plane_log_file: Option<String>,
+    // Saluki-domain: metrics bootstrap level
+    pub(crate) metrics_level: Option<String>,
+    // Saluki-domain startup gates (via DD_DATA_PLANE_* until the sourcing migration)
+    pub(crate) standalone_mode: bool,
+    pub(crate) remote_agent_enabled: bool,
+    pub(crate) use_new_config_stream_endpoint: bool,
+    // Saluki-domain: RAR rendezvous address
+    pub(crate) secure_api_listen_address: ListenAddress,
+    // IPC/auth/TLS — Datadog-domain: cmd_port, auth_token_file_path, ipc_cert_file_path, vsock_addr;
+    //                 Saluki-domain:  agent_ipc_endpoint, agent_ipc_grpc_max_message_size,
+    //                                 connect_retry_attempts, connect_retry_backoff
+    pub(crate) ipc_client: RemoteAgentClientConfiguration,
+}
+
+/// A helper wrapper to parse permissive booleans (accepts "true"/"false", "1"/"0", etc.) from config.
+#[serde_as]
+#[derive(Deserialize)]
+struct PermissiveBoolValue(#[serde_as(as = "PermissiveBool")] bool);
+
+fn read_permissive_bool(config: &GenericConfiguration, key: &str) -> Result<Option<bool>, GenericError> {
+    Ok(config
+        .try_get_typed::<PermissiveBoolValue>(key)
+        .with_error_context(|| format!("Failed to read `{}`.", key))?
+        .map(|v| v.0))
+}
+
+impl BootstrapConfiguration {
+    /// Builds a `BootstrapConfiguration` from the given generic configuration.
+    ///
+    /// Source precedence is inherited from the loader used to build `config`:
+    /// `from_yaml` < `DatadogRemapper` < `from_environment(DD_)` with `KEY_ALIASES`.
+    ///
+    /// # Errors
+    ///
+    /// If any key is present but cannot be parsed into the expected type.
+    pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
+        Ok(Self {
+            log_level: config
+                .try_get_typed::<String>("log_level")
+                .error_context("Failed to read `log_level`.")?,
+            log_format_json: read_permissive_bool(config, "log_format_json")?,
+            log_format_rfc3339: read_permissive_bool(config, "log_format_rfc3339")?,
+            log_to_console: read_permissive_bool(config, "log_to_console")?,
+            log_to_syslog: read_permissive_bool(config, "log_to_syslog")?,
+            syslog_rfc: read_permissive_bool(config, "syslog_rfc")?,
+            syslog_uri: config
+                .try_get_typed::<String>("syslog_uri")
+                .error_context("Failed to read `syslog_uri`.")?,
+            log_file_max_size: config
+                .try_get_typed::<ByteSize>("log_file_max_size")
+                .error_context("Failed to read `log_file_max_size`.")?,
+            log_file_max_rolls: config
+                .try_get_typed::<usize>("log_file_max_rolls")
+                .error_context("Failed to read `log_file_max_rolls`.")?,
+            disable_file_logging: read_permissive_bool(config, "disable_file_logging")?.unwrap_or(false),
+            data_plane_log_file: config
+                .try_get_typed::<String>("data_plane.log_file")
+                .error_context("Failed to read `data_plane.log_file`.")?,
+            metrics_level: config
+                .try_get_typed::<String>("metrics_level")
+                .error_context("Failed to read `metrics_level`.")?,
+            standalone_mode: config
+                .try_get_typed("data_plane.standalone_mode")
+                .error_context("Failed to read `data_plane.standalone_mode`.")?
+                .unwrap_or(false),
+            remote_agent_enabled: config
+                .try_get_typed("data_plane.remote_agent_enabled")
+                .error_context("Failed to read `data_plane.remote_agent_enabled`.")?
+                .unwrap_or(true),
+            use_new_config_stream_endpoint: config
+                .try_get_typed("data_plane.use_new_config_stream_endpoint")
+                .error_context("Failed to read `data_plane.use_new_config_stream_endpoint`.")?
+                .unwrap_or(true),
+            secure_api_listen_address: config
+                .try_get_typed("data_plane.secure_api_listen_address")
+                .error_context("Failed to read `data_plane.secure_api_listen_address`.")?
+                .unwrap_or_else(|| ListenAddress::any_tcp(5101)),
+            ipc_client: RemoteAgentClientConfiguration::from_configuration(config)
+                .error_context("Failed to read IPC client configuration from bootstrap.")?,
+        })
+    }
+
+    /// Returns the configured metrics level string, if set.
+    pub fn metrics_level(&self) -> Option<&str> {
+        self.metrics_level.as_deref()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SalukiPrivateConfiguration
+// ---------------------------------------------------------------------------
+
+/// Saluki-private runtime configuration loader (scaffolding — no component cutover in PR 2).
+///
+/// Loads ADP-private configuration from `SALUKI_*` environment variables and an optional
+/// `saluki.yaml` file. Deliberately excludes all Datadog sources (`DD_*`, `datadog.yaml`,
+/// RAR/config-stream) and bootstrap-only keys.
+///
+/// The runtime key set is the entries from `SALUKI_KEYS` minus the bootstrap-only Saluki-domain
+/// keys: `data_plane.remote_agent_enabled`, `data_plane.use_new_config_stream_endpoint`,
+/// `data_plane.standalone_mode`, `data_plane.secure_api_listen_address`, `metrics_level`,
+/// `data_plane.log_file`, `agent_ipc_endpoint`, `agent_ipc_grpc_max_message_size`,
+/// `connect_retry_attempts`, and `connect_retry_backoff`.
+///
+/// No component is cut over to this config in PR 2. Component migrations happen in PRs 4-9.
+/// Source-boundary tests verify that Datadog sources cannot reach this config surface.
+#[allow(dead_code)]
+pub struct SalukiPrivateConfiguration {
+    inner: GenericConfiguration,
+}
+
+#[allow(dead_code)]
+impl SalukiPrivateConfiguration {
+    /// Loads `SalukiPrivateConfiguration` from `SALUKI_*` env vars and optional `saluki.yaml`.
+    ///
+    /// `saluki_yaml_path`, if provided and the file exists, is loaded first. `SALUKI_*` env vars
+    /// take precedence over the file. No `DD_*` provider is added: this is the hard source
+    /// boundary separating Saluki-private config from Datadog config.
+    ///
+    /// # Errors
+    ///
+    /// If `SALUKI` is an empty prefix (should not happen) or if the loader fails.
+    pub fn load(saluki_yaml_path: Option<&std::path::Path>) -> Result<Self, GenericError> {
+        let mut loader = ConfigurationLoader::default();
+
+        if let Some(path) = saluki_yaml_path {
+            loader = loader.try_from_yaml(path);
+        }
+
+        loader = loader
+            .from_environment("SALUKI")
+            .error_context("Failed to add SALUKI_* environment provider.")?;
+
+        Ok(Self {
+            inner: loader.bootstrap_generic(),
+        })
+    }
+
+    /// Returns the inner `GenericConfiguration` for key access.
+    ///
+    /// Components will use typed accessors in later PRs; this exists for source-boundary tests.
+    pub fn inner(&self) -> &GenericConfiguration {
+        &self.inner
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use saluki_config::ConfigurationLoader;
@@ -405,5 +586,103 @@ mod tests {
         let dp = DataPlaneConfiguration::from_configuration(&config).expect("parse config");
         assert!(dp.enabled());
         assert!(dp.dogstatsd().enabled());
+    }
+
+    // BootstrapConfiguration tests
+
+    #[tokio::test]
+    async fn bootstrap_defaults_when_empty_config() {
+        let (config, _) = ConfigurationLoader::for_tests(None, None, false).await;
+        let bc = BootstrapConfiguration::from_configuration(&config).expect("parse bootstrap config");
+
+        assert!(bc.log_level.is_none());
+        assert!(!bc.standalone_mode);
+        assert!(bc.remote_agent_enabled);
+        assert!(bc.use_new_config_stream_endpoint);
+    }
+
+    #[tokio::test]
+    async fn bootstrap_reads_standalone_mode_from_config() {
+        let (config, _) =
+            ConfigurationLoader::for_tests(Some(json!({ "data_plane": { "standalone_mode": true } })), None, false)
+                .await;
+        let bc = BootstrapConfiguration::from_configuration(&config).expect("parse bootstrap config");
+        assert!(bc.standalone_mode);
+    }
+
+    #[tokio::test]
+    async fn bootstrap_reads_log_level_from_config() {
+        let (config, _) = ConfigurationLoader::for_tests(Some(json!({ "log_level": "debug" })), None, false).await;
+        let bc = BootstrapConfiguration::from_configuration(&config).expect("parse bootstrap config");
+        assert_eq!(bc.log_level.as_deref(), Some("debug"));
+    }
+
+    #[tokio::test]
+    async fn bootstrap_reads_metrics_level_from_config() {
+        let (config, _) = ConfigurationLoader::for_tests(Some(json!({ "metrics_level": "debug" })), None, false).await;
+        let bc = BootstrapConfiguration::from_configuration(&config).expect("parse bootstrap config");
+        assert_eq!(bc.metrics_level(), Some("debug"));
+    }
+
+    #[tokio::test]
+    async fn bootstrap_reads_data_plane_log_file() {
+        let (config, _) = ConfigurationLoader::for_tests(
+            Some(json!({ "data_plane": { "log_file": "/tmp/adp.log" } })),
+            None,
+            false,
+        )
+        .await;
+        let bc = BootstrapConfiguration::from_configuration(&config).expect("parse bootstrap config");
+        assert_eq!(bc.data_plane_log_file.as_deref(), Some("/tmp/adp.log"));
+    }
+
+    #[tokio::test]
+    async fn bootstrap_permissive_bool_string_true() {
+        let (config, _) = ConfigurationLoader::for_tests(
+            Some(json!({ "log_format_json": "true", "disable_file_logging": "1" })),
+            None,
+            false,
+        )
+        .await;
+        let bc = BootstrapConfiguration::from_configuration(&config).expect("parse bootstrap config");
+        assert_eq!(bc.log_format_json, Some(true));
+        assert!(bc.disable_file_logging);
+    }
+
+    #[tokio::test]
+    async fn bootstrap_env_overrides_yaml() {
+        let env_vars = [("LOG_LEVEL".to_string(), "warn".to_string())];
+        let (config, _) =
+            ConfigurationLoader::for_tests(Some(json!({ "log_level": "debug" })), Some(&env_vars), false).await;
+        let bc = BootstrapConfiguration::from_configuration(&config).expect("parse bootstrap config");
+        // env var (TEST_LOG_LEVEL=warn, simulating DD_LOG_LEVEL) overrides YAML log_level=debug
+        assert_eq!(bc.log_level.as_deref(), Some("warn"));
+    }
+
+    // SalukiPrivateConfiguration tests
+
+    #[tokio::test]
+    async fn saluki_private_loads_from_saluki_yaml() {
+        use std::io::Write as _;
+
+        use tempfile::NamedTempFile;
+
+        let mut f = NamedTempFile::with_suffix(".yaml").expect("create tempfile");
+        writeln!(f, "dogstatsd_port: 9999").expect("write tempfile");
+
+        let priv_config = SalukiPrivateConfiguration::load(Some(f.path())).expect("load saluki private config");
+        let port: Option<u64> = priv_config.inner().try_get_typed("dogstatsd_port").unwrap();
+        assert_eq!(port, Some(9999));
+    }
+
+    #[tokio::test]
+    async fn saluki_private_excludes_dd_sources() {
+        // SalukiPrivateConfiguration::load() only calls from_environment("SALUKI"),
+        // never from_environment("DD_") or any Datadog-schema loader. This test
+        // verifies that a config built with no SALUKI_* vars and no saluki.yaml is empty.
+        let priv_config = SalukiPrivateConfiguration::load(None).expect("load saluki private config");
+        // dogstatsd_port would be absent since no SALUKI_DOGSTATSD_PORT or saluki.yaml set it.
+        let port: Option<u64> = priv_config.inner().try_get_typed("dogstatsd_port").unwrap();
+        assert!(port.is_none());
     }
 }

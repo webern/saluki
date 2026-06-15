@@ -25,11 +25,15 @@ impl RemoteAgentHostProvider {
     /// authentication token is invalid, an error will be returned.
     pub async fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
         let client = RemoteAgentClient::from_configuration(config).await?;
+        Ok(Self::from_client(client))
+    }
 
-        Ok(Self {
+    /// Creates a new `RemoteAgentHostProvider` from an already established Datadog Agent IPC client.
+    pub fn from_client(client: RemoteAgentClient) -> Self {
+        Self {
             client,
             cached_hostname: OnceCell::new(),
-        })
+        }
     }
 
     async fn get_or_fetch_hostname(&self) -> Result<String, GenericError> {

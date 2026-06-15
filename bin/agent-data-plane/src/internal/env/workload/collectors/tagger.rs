@@ -51,13 +51,17 @@ impl RemoteAgentTaggerMetadataCollector {
         config: &GenericConfiguration, health: Health, interner: GenericMapInterner,
     ) -> Result<Self, GenericError> {
         let client = RemoteAgentClient::from_configuration(config).await?;
+        Ok(Self::from_client(client, health, interner))
+    }
 
-        Ok(Self {
+    /// Creates a new `RemoteAgentTaggerMetadataCollector` from an established Datadog Agent IPC client.
+    pub fn from_client(client: RemoteAgentClient, health: Health, interner: GenericMapInterner) -> Self {
+        Self {
             client,
             interner,
             health,
             telemetry: Telemetry::new(),
-        })
+        }
     }
 
     fn try_intern(&self, value: &str) -> Option<MetaString> {

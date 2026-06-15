@@ -302,6 +302,49 @@ impl ForwarderConfiguration {
         Ok(forwarder_config)
     }
 
+    /// Creates a new `ForwarderConfiguration` from native configuration.
+    ///
+    /// Fields with no native equivalent (proxy, OPW metrics routing, HTTP protocol, recovery
+    /// settings, API-key validation interval) retain their existing defaults. The `min_tls_version`
+    /// string mirror is set to keep it consistent with the parsed value.
+    pub fn from_native(native: &saluki_component_config::DatadogForwarderConfig) -> Result<Self, GenericError> {
+        let parsed_min_tls_version = match native.tls.min_tls_version {
+            saluki_component_config::TlsMinimumVersion::Tls1_2 => TlsMinimumVersion::Tls12,
+            saluki_component_config::TlsMinimumVersion::Tls1_3 => TlsMinimumVersion::Tls13,
+        };
+        let min_tls_version = match parsed_min_tls_version {
+            TlsMinimumVersion::Tls12 => MIN_TLS_VERSION_TLS12.to_string(),
+            TlsMinimumVersion::Tls13 => MIN_TLS_VERSION_TLS13.to_string(),
+        };
+
+        Ok(Self {
+            endpoint_concurrency: native.endpoint_concurrency,
+            endpoint_concurrency_multiplier: native.endpoint_concurrency_multiplier,
+            request_timeout_secs: native.request_timeout.as_secs(),
+            endpoint_buffer_size: native.endpoint_buffer_size,
+            endpoint: EndpointConfiguration::from_native(&native.endpoints),
+            retry: RetryConfiguration::from_native(&native.retry),
+            proxy: None,
+            opw_metrics: OpwMetricsConfiguration::default(),
+            http_protocol: ForwarderHttpProtocol::default(),
+            connection_reset_interval_secs: native
+                .connection_reset_interval
+                .map(|interval| interval.as_secs())
+                .unwrap_or(0),
+            skip_ssl_validation: native.tls.skip_ssl_validation,
+            sslkeylogfile: native
+                .tls
+                .ssl_key_log_file
+                .as_ref()
+                .map(|path| path.to_string())
+                .unwrap_or_default(),
+            min_tls_version,
+            parsed_min_tls_version,
+            allow_arbitrary_tags: native.allow_arbitrary_tags,
+            api_key_validation_interval_mins: default_api_key_validation_interval_config_mins(),
+        })
+    }
+
     /// Returns the maximum number of concurrent requests for an individual endpoint.
     pub const fn endpoint_concurrency(&self) -> usize {
         let endpoint_concurrency = if self.endpoint_concurrency == 0 {

@@ -46,6 +46,21 @@ impl OtlpRelayConfiguration {
         config.as_typed().map_err(Into::into)
     }
 
+    /// Creates a new `OtlpRelayConfiguration` from native configuration.
+    ///
+    /// Only the gRPC/HTTP receiver endpoints are sourced from native configuration; the rest of the
+    /// receiver config (transport, max message size) uses its existing defaults.
+    pub fn from_native(native: &saluki_component_config::OtlpConfig) -> Result<Self, GenericError> {
+        let mut config = Self::default();
+        if let Some(grpc_endpoint) = &native.grpc_endpoint {
+            config.otlp_config.receiver.protocols.grpc.endpoint = grpc_endpoint.to_string();
+        }
+        if let Some(http_endpoint) = &native.http_endpoint {
+            config.otlp_config.receiver.protocols.http.endpoint = http_endpoint.to_string();
+        }
+        Ok(config)
+    }
+
     fn http_endpoint(&self) -> ListenAddress {
         let transport = &self.otlp_config.receiver.protocols.http.transport;
         let endpoint = &self.otlp_config.receiver.protocols.http.endpoint;

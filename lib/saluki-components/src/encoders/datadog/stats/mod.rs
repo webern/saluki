@@ -89,6 +89,17 @@ impl DatadogApmStatsEncoderConfiguration {
         Ok(stats_config)
     }
 
+    /// Creates a new `DatadogApmStatsEncoderConfiguration` from the given native configuration.
+    pub fn from_native(native: &saluki_component_config::ApmStatsEncoderConfig) -> Result<Self, GenericError> {
+        let app_details = saluki_metadata::get_app_details();
+        Ok(Self {
+            flush_timeout_secs: native.flush_timeout_secs,
+            agent_hostname: None,
+            agent_version: format!("agent-data-plane/{}", app_details.version().raw()),
+            env: native.default_env.to_string(),
+        })
+    }
+
     /// Sets the agent hostname using the environment provider.
     pub async fn with_environment_provider<E>(mut self, environment_provider: E) -> Result<Self, GenericError>
     where

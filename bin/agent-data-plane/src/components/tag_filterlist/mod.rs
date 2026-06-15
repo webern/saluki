@@ -175,6 +175,32 @@ impl TagFilterlistConfiguration {
         typed.configuration = Some(config.clone());
         Ok(typed)
     }
+
+    /// Creates a new `TagFilterlistConfiguration` from native configuration.
+    ///
+    /// Each native [`TagFilterEntry`] is an allowlist of tag keys for a metric name, which maps to a
+    /// [`MetricTagFilterEntry`] with the [`FilterAction::Include`] action. The retained
+    /// `GenericConfiguration` is left `None`, which disables the string-key runtime watcher in the
+    /// built transform; runtime updates are expected to arrive via the configuration system instead.
+    ///
+    /// [`TagFilterEntry`]: saluki_component_config::TagFilterEntry
+    pub fn from_native(native: &saluki_component_config::TagFilterlistConfig) -> Result<Self, GenericError> {
+        let entries = native
+            .entries
+            .iter()
+            .map(|entry| MetricTagFilterEntry {
+                metric_name: entry.name.to_string(),
+                action: FilterAction::Include,
+                tags: entry.allowed_tags.iter().map(|t| t.to_string()).collect(),
+            })
+            .collect();
+
+        Ok(Self {
+            entries,
+            context_cache_capacity: default_context_cache_capacity(),
+            configuration: None,
+        })
+    }
 }
 
 #[async_trait]
@@ -196,10 +222,7 @@ impl TransformBuilder for TagFilterlistConfiguration {
 
         Ok(Box::new(TagFilterlist {
             filters,
-            configuration: self
-                .configuration
-                .clone()
-                .expect("configuration must be set via from_configuration"),
+            configuration: self.configuration.clone(),
             telemetry,
             context_cache: build_context_cache(self.context_cache_capacity),
             context_cache_capacity: self.context_cache_capacity,
@@ -219,7 +242,7 @@ impl MemoryBounds for TagFilterlistConfiguration {
 
 struct TagFilterlist {
     filters: CompiledFilters,
-    configuration: GenericConfiguration,
+    configuration: Option<GenericConfiguration>,
     telemetry: Telemetry,
     context_cache: Cache<Context, Option<(Context, usize)>>,
     context_cache_capacity: usize,
@@ -241,9 +264,69 @@ impl Transform for TagFilterlist {
         let mut health = context.take_health_handle();
         health.mark_ready();
 
-        let mut watcher = self.configuration.watch_for_updates(METRIC_TAG_FILTERLIST_CONFIG_KEY);
-
         let mut view_state = TagSetMutViewState::default();
+
+        // When built from native configuration, no `GenericConfiguration` is retained and the
+        // string-key runtime watcher is not set up; runtime updates are expected to arrive via the
+        // configuration system instead. In that case, run a simplified loop without the watcher branch.
+        let Some(configuration) = self.configuration.clone() else {
+            debug!("Metric Tag Filterlist transform started (no runtime watcher).");
+
+            loop {
+                select! {
+                    _ = health.live() => continue,
+                    maybe_events = context.events().next() => match maybe_events {
+                        Some(mut events) => {
+                            for event in &mut events {
+                                if let Some(metric) = event.try_as_metric_mut() {
+                                    if metric.values().is_sketch()
+                                        || matches!(metric.values(), MetricValues::Counter(_))
+                                    {
+                                        let original_context = metric.context().clone();
+
+                                        if let Some(cached) = self.context_cache.get(&original_context) {
+                                            match cached {
+                                                None => self.telemetry.record(FilterMetricTagsOutcome::NoChange),
+                                                Some((filtered_ctx, removed_tags)) => {
+                                                    *metric.context_mut() = filtered_ctx;
+                                                    self.telemetry.record(FilterMetricTagsOutcome::Modified { removed_tags });
+                                                }
+                                            }
+                                        } else {
+                                            let outcome = filter_metric_tags(metric, &mut view_state, &self.filters);
+                                            self.telemetry.record(outcome);
+
+                                            match outcome {
+                                                FilterMetricTagsOutcome::RuleMiss => {}
+                                                FilterMetricTagsOutcome::NoChange => {
+                                                    self.context_cache.insert(original_context, None);
+                                                }
+                                                FilterMetricTagsOutcome::Modified { removed_tags } => {
+                                                    self.context_cache.insert(
+                                                        original_context,
+                                                        Some((metric.context().clone(), removed_tags)),
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if let Err(e) = context.dispatcher().dispatch(events).await {
+                                error!(error = %e, "Failed to dispatch events.");
+                            }
+                        }
+                        None => break,
+                    },
+                }
+            }
+
+            debug!("Metric Tag Filterlist transform stopped.");
+
+            return Ok(());
+        };
+
+        let mut watcher = configuration.watch_for_updates(METRIC_TAG_FILTERLIST_CONFIG_KEY);
 
         debug!("Metric Tag Filterlist transform started.");
 

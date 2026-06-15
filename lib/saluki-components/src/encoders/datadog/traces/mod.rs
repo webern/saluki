@@ -78,6 +78,14 @@ fn default_env() -> String {
     "none".to_string()
 }
 
+/// Maps a native compression kind to the compressor kind string used by `CompressionScheme`.
+fn compression_kind_str(kind: saluki_component_config::CompressionKind) -> &'static str {
+    match kind {
+        saluki_component_config::CompressionKind::Zstd => "zstd",
+        saluki_component_config::CompressionKind::Zlib => "zlib",
+    }
+}
+
 /// Configuration for the Datadog Traces encoder.
 ///
 /// This encoder converts trace events into Datadog's TracerPayload protobuf format and sends them
@@ -138,6 +146,21 @@ impl DatadogTraceConfiguration {
         trace_config.otlp_traces = config.try_get_typed("otlp_config.traces")?.unwrap_or_default();
 
         Ok(trace_config)
+    }
+
+    /// Creates a new `DatadogTraceConfiguration` from the given native configuration.
+    pub fn from_native(native: &saluki_component_config::DatadogTracesEncoderConfig) -> Result<Self, GenericError> {
+        let app_details = saluki_metadata::get_app_details();
+        Ok(Self {
+            compressor_kind: compression_kind_str(native.compression.kind).to_owned(),
+            zstd_compressor_level: native.compression.zstd_level,
+            flush_timeout_secs: default_flush_timeout_secs(),
+            default_hostname: None,
+            version: format!("agent-data-plane/{}", app_details.version().raw()),
+            apm_config: ApmConfig::default(),
+            otlp_traces: TracesConfig::default(),
+            env: native.default_env.to_string(),
+        })
     }
 }
 

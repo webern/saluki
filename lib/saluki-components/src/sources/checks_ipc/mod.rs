@@ -52,6 +52,13 @@ impl ChecksIPCConfiguration {
     pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
         Ok(config.as_typed()?)
     }
+
+    /// Creates a new `ChecksIPCConfiguration` from native configuration.
+    pub fn from_native(native: &saluki_component_config::ChecksConfig) -> Result<Self, GenericError> {
+        Ok(Self {
+            grpc_endpoint: native.grpc_endpoint.clone(),
+        })
+    }
 }
 
 #[async_trait]

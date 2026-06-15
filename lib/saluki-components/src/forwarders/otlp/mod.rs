@@ -48,6 +48,14 @@ impl OtlpForwarderConfiguration {
             core_agent_traces_internal_port,
         })
     }
+
+    /// Creates a new `OtlpForwarderConfiguration` from native configuration.
+    pub fn from_native(native: &saluki_component_config::OtlpProxyConfig) -> Result<Self, GenericError> {
+        Ok(Self {
+            core_agent_otlp_grpc_endpoint: native.core_agent_otlp_grpc_endpoint.to_string(),
+            core_agent_traces_internal_port: native.core_agent_traces_internal_port,
+        })
+    }
 }
 
 #[async_trait]

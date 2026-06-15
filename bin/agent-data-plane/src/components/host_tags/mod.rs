@@ -18,7 +18,7 @@ use stringtheory::MetaString;
 /// Temporarily adds host tags to metrics to compensate for backend delays when a new host comes online,
 /// preventing gaps in queryability until the backend starts adding these tags automatically.
 pub struct HostTagsConfiguration {
-    client: RemoteAgentClient,
+    client: Option<RemoteAgentClient>,
     expected_tags_duration: Duration,
 }
 
@@ -34,8 +34,21 @@ impl HostTagsConfiguration {
             .unwrap_or(DEFAULT_EXPECTED_TAGS_DURATION);
 
         Ok(Self {
-            client,
+            client: Some(client),
             expected_tags_duration,
+        })
+    }
+
+    /// Creates a disabled `HostTagsConfiguration` from native configuration.
+    ///
+    /// STUB: host tags are sourced from the Datadog Agent over a shared connection, and how that
+    /// connection is provided to native-configured components is an unresolved design question. This
+    /// builds a disabled config (no Agent client, zero duration) that never enriches metrics, matching
+    /// a no-host-tags configuration.
+    pub fn from_native() -> Result<Self, GenericError> {
+        Ok(Self {
+            client: None,
+            expected_tags_duration: DEFAULT_EXPECTED_TAGS_DURATION,
         })
     }
 }

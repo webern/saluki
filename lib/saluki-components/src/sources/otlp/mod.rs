@@ -132,6 +132,34 @@ impl OtlpConfiguration {
         Ok(cfg)
     }
 
+    /// Creates a new `OtlpConfiguration` from native configuration.
+    ///
+    /// The receiver sub-config is built from the native gRPC/HTTP endpoints when present, falling
+    /// back to the receiver defaults otherwise. Signal enablement is taken from native; the rest of
+    /// the per-signal configuration (notably traces) uses its existing defaults. The returned value
+    /// can be further customized via [`with_workload_provider`][Self::with_workload_provider].
+    pub fn from_native(native: &saluki_component_config::OtlpConfig) -> Result<Self, GenericError> {
+        let mut otlp_config = OtlpConfig::default();
+        otlp_config.metrics.enabled = native.metrics_enabled;
+        otlp_config.logs.enabled = native.logs_enabled;
+        otlp_config.traces.enabled = native.traces_enabled;
+        if let Some(grpc_endpoint) = &native.grpc_endpoint {
+            otlp_config.receiver.protocols.grpc.endpoint = grpc_endpoint.to_string();
+        }
+        if let Some(http_endpoint) = &native.http_endpoint {
+            otlp_config.receiver.protocols.http.endpoint = http_endpoint.to_string();
+        }
+
+        Ok(Self {
+            otlp_config,
+            context_string_interner_bytes: native.context_string_interner_bytes,
+            cached_contexts_limit: native.cached_contexts_limit,
+            cached_tagsets_limit: native.cached_tagsets_limit,
+            allow_context_heap_allocations: native.allow_context_heap_allocations,
+            workload_provider: None,
+        })
+    }
+
     /// Sets the workload provider to use for configuring origin detection/enrichment.
     ///
     /// A workload provider must be set otherwise origin detection/enrichment won't be enabled.

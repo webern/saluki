@@ -72,6 +72,16 @@ impl std::fmt::Display for MappedAPIKeys {
 pub(crate) struct AdditionalEndpoints(#[serde_as(as = "PickFirst<(DisplayFromStr, _)>")] MappedAPIKeys);
 
 impl AdditionalEndpoints {
+    /// Builds `AdditionalEndpoints` from native endpoint configs (URL plus its API keys).
+    fn from_native(endpoints: &[saluki_component_config::EndpointConfig]) -> Self {
+        let mut mapped = HashMap::new();
+        for endpoint in endpoints {
+            let keys = endpoint.api_keys.iter().map(|key| key.to_string()).collect();
+            mapped.insert(endpoint.dd_url.to_string(), APIKeys(keys));
+        }
+        Self(MappedAPIKeys(mapped))
+    }
+
     /// Returns the resolved endpoints from the additional endpoint configuration.
     ///
     /// This will generate a [`ResolvedEndpoint`] for each unique endpoint/API key pair, assigning
@@ -158,6 +168,31 @@ pub struct EndpointConfiguration {
 }
 
 impl EndpointConfiguration {
+    /// Builds an `EndpointConfiguration` from native endpoint configs.
+    ///
+    /// The first native endpoint (and its first API key) becomes the primary endpoint via `dd_url`;
+    /// any remaining endpoints become additional (dual-ship) endpoints. `site` has no native
+    /// equivalent and uses its default; API-key refresh is not wired up here (the native API key is
+    /// a resolved snapshot).
+    pub(crate) fn from_native(endpoints: &[saluki_component_config::EndpointConfig]) -> Self {
+        let primary = endpoints.first();
+        let additional = endpoints.get(1..).unwrap_or(&[]);
+
+        let api_key = primary
+            .and_then(|endpoint| endpoint.api_keys.first())
+            .map(|key| key.to_string())
+            .unwrap_or_default();
+        let dd_url = primary.map(|endpoint| endpoint.dd_url.to_string());
+
+        Self {
+            api_key,
+            api_key_refresh_config_path: None,
+            site: default_site(),
+            dd_url,
+            additional_endpoints: AdditionalEndpoints::from_native(additional),
+        }
+    }
+
     /// Sets the full URL base to send metrics to.
     pub fn set_dd_url(&mut self, url: String) {
         self.dd_url = Some(url);

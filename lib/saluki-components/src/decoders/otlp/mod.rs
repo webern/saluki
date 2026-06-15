@@ -52,6 +52,17 @@ impl OtlpDecoderConfiguration {
         cfg.otlp_config.traces.apply_env_overrides(config)?;
         Ok(cfg)
     }
+
+    /// Creates a new `OtlpDecoderConfiguration` from native configuration.
+    ///
+    /// The native OTLP config carries only `traces_enabled` for traces, so the internal traces
+    /// config is built from its defaults with `enabled` taken from native; all other traces fields
+    /// (sampler, interner size, etc.) retain their defaults.
+    pub fn from_native(native: &saluki_component_config::OtlpConfig) -> Result<Self, GenericError> {
+        let mut cfg = Self::default();
+        cfg.otlp_config.traces.enabled = native.traces_enabled;
+        Ok(cfg)
+    }
 }
 
 #[async_trait]

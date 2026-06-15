@@ -9,6 +9,7 @@ use bytesize::ByteSize;
 use regex::Regex;
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
 use saluki_common::cache::{Cache, CacheBuilder};
+use saluki_component_config::DogStatsDMapperConfig;
 use saluki_config::GenericConfiguration;
 use saluki_context::tags::SharedTagSet;
 use saluki_context::tags::TagSet;
@@ -351,6 +352,30 @@ impl DogStatsDMapperConfiguration {
     /// Creates a new `DogstatsDMapperConfiguration` from the given configuration.
     pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
         Ok(config.as_typed()?)
+    }
+
+    /// Creates a new `DogStatsDMapperConfiguration` from the given native configuration.
+    ///
+    /// The native `profiles` are summarized to just `name` and `prefix`; the per-profile mapping
+    /// rules are not carried in the native shape. Each native profile is therefore translated into a
+    /// `MappingProfileConfig` with an empty `mappings` list. The scalar fields
+    /// (`context_string_interner_bytes`, `cache_size`) map directly.
+    pub fn from_native(native: &DogStatsDMapperConfig) -> Result<Self, GenericError> {
+        let profiles = native
+            .profiles
+            .iter()
+            .map(|profile| MappingProfileConfig {
+                name: profile.name.to_string(),
+                prefix: profile.prefix.to_string(),
+                mappings: Vec::new(),
+            })
+            .collect();
+
+        Ok(Self {
+            context_string_interner_bytes: native.context_string_interner_bytes,
+            cache_size: native.cache_size,
+            dogstatsd_mapper_profiles: MapperProfileConfigs(profiles),
+        })
     }
 }
 

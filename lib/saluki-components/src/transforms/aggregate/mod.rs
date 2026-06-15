@@ -8,6 +8,7 @@ use ddsketch::DDSketch;
 use hashbrown::{hash_map::Entry, HashMap};
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder, UsageExpr};
 use saluki_common::time::get_unix_timestamp;
+use saluki_component_config::AggregateConfig;
 use saluki_config::GenericConfiguration;
 use saluki_context::Context;
 use saluki_core::{
@@ -17,7 +18,7 @@ use saluki_core::{
     topology::{interconnect::BufferedDispatcher, OutputDefinition},
     topology::{EventsBuffer, EventsDispatcher},
 };
-use saluki_error::GenericError;
+use saluki_error::{generic_error, GenericError};
 use saluki_metrics::MetricsBuilder;
 use serde::Deserialize;
 use smallvec::SmallVec;
@@ -191,6 +192,30 @@ impl AggregateConfiguration {
     /// Creates a new `AggregateConfiguration` from the given configuration.
     pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
         Ok(config.as_typed()?)
+    }
+
+    /// Creates a new `AggregateConfiguration` from the given native configuration.
+    pub fn from_native(native: &AggregateConfig) -> Result<Self, GenericError> {
+        let window_duration_seconds = NonZeroU64::new(native.window_duration.as_secs())
+            .ok_or_else(|| generic_error!("aggregate window duration must be greater than zero seconds"))?;
+
+        let hist_config = HistogramConfiguration::from_native_parts(
+            &native.histogram.statistics,
+            native.histogram.copy_to_distribution,
+            native.histogram.copy_to_distribution_prefix.to_string(),
+        )
+        .map_err(|e| generic_error!("invalid histogram configuration: {}", e))?;
+
+        Ok(Self {
+            window_duration_seconds,
+            primary_flush_interval: native.primary_flush_interval,
+            context_limit: native.context_limit,
+            flush_open_windows: native.flush_open_windows,
+            counter_expiry_seconds: native.counter_expiry.map(|d| d.as_secs()),
+            passthrough_timestamped_metrics: native.passthrough_timestamped_metrics,
+            passthrough_idle_flush_timeout: native.passthrough_idle_flush_timeout,
+            hist_config,
+        })
     }
 
     /// Creates a new `AggregateConfiguration` with default values.

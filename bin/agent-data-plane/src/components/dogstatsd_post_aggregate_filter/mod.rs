@@ -97,6 +97,26 @@ impl DogStatsDPostAggregateFilterConfiguration {
         typed_config.configuration = Some(config.clone());
         Ok(typed_config)
     }
+
+    /// Creates a new `DogStatsDPostAggregateFilterConfiguration` from native configuration.
+    ///
+    /// The post-aggregate filter shares the same filterlist/blocklist data as the listener filter, so
+    /// it is built from the same native [`PrefixFilterConfig`]. Histogram aggregate and percentile
+    /// suffixes use the Agent defaults. The retained `GenericConfiguration` is left `None`, which
+    /// disables the string-key runtime watchers in the built transform.
+    ///
+    /// [`PrefixFilterConfig`]: saluki_component_config::PrefixFilterConfig
+    pub fn from_native(native: &saluki_component_config::PrefixFilterConfig) -> Result<Self, GenericError> {
+        Ok(Self {
+            metric_filterlist: native.metric_filterlist.iter().map(|s| s.to_string()).collect(),
+            metric_filterlist_match_prefix: native.metric_filterlist_match_prefix,
+            metric_blocklist: native.metric_blocklist.iter().map(|s| s.to_string()).collect(),
+            metric_blocklist_match_prefix: native.metric_blocklist_match_prefix,
+            histogram_aggregates: default_histogram_aggregates(),
+            histogram_percentiles: default_histogram_percentiles(),
+            configuration: None,
+        })
+    }
 }
 
 #[async_trait]
@@ -261,10 +281,33 @@ impl Transform for DogStatsDPostAggregateFilter {
         let mut health = context.take_health_handle();
         health.mark_ready();
 
-        let configuration = self
-            .configuration
-            .as_ref()
-            .expect("configuration must be set via from_configuration");
+        // When built from native configuration, no `GenericConfiguration` is retained and the
+        // string-key runtime watchers are not set up; runtime updates are expected to arrive via the
+        // configuration system instead. In that case, run a simplified loop with only the events branch.
+        let Some(configuration) = self.configuration.clone() else {
+            debug!("DogStatsD post-aggregate filter transform started (no runtime watchers).");
+
+            loop {
+                select! {
+                    _ = health.live() => continue,
+                    maybe_events = context.events().next() => match maybe_events {
+                        Some(mut events) => {
+                            self.transform_buffer(&mut events);
+
+                            if let Err(e) = context.dispatcher().dispatch(events).await {
+                                error!(error = %e, "Failed to dispatch events.");
+                            }
+                        },
+                        None => break,
+                    },
+                }
+            }
+
+            debug!("DogStatsD post-aggregate filter transform stopped.");
+
+            return Ok(());
+        };
+
         let mut filterlist_watcher = configuration.watch_for_updates(METRIC_FILTERLIST_CONFIG_KEY);
         let mut filterlist_match_prefix_watcher =
             configuration.watch_for_updates(METRIC_FILTERLIST_MATCH_PREFIX_CONFIG_KEY);

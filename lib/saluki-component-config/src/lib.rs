@@ -33,7 +33,7 @@ pub mod service_checks;
 pub mod traces;
 
 pub use checks::ChecksConfig;
-pub use common::{CompressionConfig, EndpointConfig, RetryConfig, TlsClientConfig};
+pub use common::{CompressionConfig, CompressionKind, EndpointConfig, RetryConfig, TlsClientConfig, TlsMinimumVersion};
 pub use dogstatsd::{
     AggregateConfig, DogStatsDConfig, DogStatsDDebugLogConfig, DogStatsDMapperConfig, HistogramConfig,
     PrefixFilterConfig, TagFilterlistConfig,

@@ -617,6 +617,34 @@ impl DogStatsDConfiguration {
         Ok(dogstatsd_config)
     }
 
+    /// Creates a new `DogStatsDConfiguration` from native configuration.
+    ///
+    /// Fields with no native equivalent retain their existing defaults. The returned value can be
+    /// further customized via the builder methods (for example
+    /// [`with_workload_provider`][Self::with_workload_provider]).
+    pub fn from_native(native: &saluki_component_config::DogStatsDConfig) -> Result<Self, GenericError> {
+        let mut dogstatsd_config = Self {
+            buffer_size: native.buffer_size,
+            buffer_count: native.buffer_count,
+            port: native.port,
+            // Native models the OS-default receive buffer as `None`; the internal type uses `0`.
+            socket_receive_buffer_size: native.socket_receive_buffer_size.unwrap_or(0),
+            socket_path: native.socket_path.as_ref().map(|s| s.to_string()),
+            socket_stream_path: native.socket_stream_path.as_ref().map(|s| s.to_string()),
+            non_local_traffic: native.non_local_traffic,
+            enable_payloads: EnablePayloadsConfiguration {
+                series: native.enabled_payloads.series,
+                sketches: native.enabled_payloads.sketches,
+                events: native.enabled_payloads.events,
+                service_checks: native.enabled_payloads.service_checks,
+            },
+            origin_enrichment: OriginEnrichmentConfiguration::from_native(native.origin_detection_enabled),
+            ..Self::default()
+        };
+        dogstatsd_config.fix_capture_depth();
+        Ok(dogstatsd_config)
+    }
+
     /// Gets both the `additional_tags` and any others specified by other configuration fields, such as `provider_kind`.
     fn additional_tags(&self) -> Vec<String> {
         if self.provider_kind.is_empty() {

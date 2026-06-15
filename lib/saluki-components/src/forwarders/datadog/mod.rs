@@ -47,6 +47,18 @@ impl DatadogForwarderConfiguration {
         })
     }
 
+    /// Creates a new `DatadogForwarderConfiguration` from native configuration.
+    ///
+    /// The legacy `Option<GenericConfiguration>` used for runtime API-key refresh is set to `None`;
+    /// runtime refresh is handled elsewhere now.
+    pub fn from_native(native: &saluki_component_config::DatadogForwarderConfig) -> Result<Self, GenericError> {
+        let forwarder_config = ForwarderConfiguration::from_native(native)?;
+        Ok(Self {
+            forwarder_config,
+            configuration: None,
+        })
+    }
+
     /// Overrides the default endpoint and refreshes its API key from the given config path.
     ///
     /// This is for override endpoints whose API key does not refresh from the top-level `api_key`

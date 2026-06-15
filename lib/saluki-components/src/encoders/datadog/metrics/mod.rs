@@ -140,6 +140,14 @@ const fn default_log_payloads() -> bool {
     false
 }
 
+/// Maps a native compression kind to the compressor kind string used by `CompressionScheme`.
+fn compression_kind_str(kind: saluki_component_config::CompressionKind) -> &'static str {
+    match kind {
+        saluki_component_config::CompressionKind::Zstd => "zstd",
+        saluki_component_config::CompressionKind::Zlib => "zlib",
+    }
+}
+
 /// Datadog Metrics encoder.
 ///
 /// Generates Datadog metrics payloads for the Datadog platform.
@@ -287,6 +295,24 @@ impl DatadogMetricsConfiguration {
     /// Creates a new `DatadogMetricsConfiguration` from the given configuration.
     pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
         Ok(config.as_typed()?)
+    }
+
+    /// Creates a new `DatadogMetricsConfiguration` from the given native configuration.
+    pub fn from_native(native: &saluki_component_config::DatadogMetricsEncoderConfig) -> Result<Self, GenericError> {
+        Ok(Self {
+            max_metrics_per_payload: native.max_metrics_per_payload,
+            max_payload_size: native.max_payload_size,
+            max_uncompressed_payload_size: native.max_uncompressed_payload_size,
+            max_series_payload_size: native.max_series_payload_size,
+            max_series_uncompressed_payload_size: native.max_series_uncompressed_payload_size,
+            max_series_points_per_payload: native.max_series_points_per_payload,
+            flush_timeout_secs: native.flush_timeout_secs,
+            compressor_kind: compression_kind_str(native.compression.kind).to_owned(),
+            zstd_compressor_level: native.compression.zstd_level,
+            use_v2_api_series: native.use_v2_api_series,
+            log_payloads: native.log_payloads,
+            additional_tags: None,
+        })
     }
 
     /// Sets additional tags to be applied uniformly to all metrics forwarded by this destination.

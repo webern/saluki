@@ -168,6 +168,37 @@ pub struct RetryConfiguration {
 }
 
 impl RetryConfiguration {
+    /// Builds a `RetryConfiguration` from native configuration.
+    ///
+    /// Only the backoff base/max and the disk-persistence intent are carried by native config.
+    /// Backoff factor, recovery, queue sizes, storage path/ratio, file age, and capacity window all
+    /// retain their existing defaults.
+    ///
+    /// `disk_persistence_enabled` has no faithful scalar equivalent: downstream code enables disk
+    /// persistence only when `storage_max_size_bytes > 0`, and native carries no size. When
+    /// persistence is requested, this falls back to a non-zero on-disk size so the feature is
+    /// actually enabled; otherwise it leaves the size at the default (0, disabled).
+    pub(crate) fn from_native(native: &saluki_component_config::RetryConfig) -> Self {
+        Self {
+            backoff_factor: default_request_backoff_factor(),
+            backoff_base: native.base_backoff.as_secs_f64(),
+            backoff_max: native.max_backoff.as_secs_f64(),
+            recovery_error_decrease_factor: default_request_recovery_error_decrease_factor(),
+            recovery_reset: default_request_recovery_reset(),
+            retry_queue_payloads_max_size: None,
+            retry_queue_max_size: None,
+            storage_max_size_bytes: if native.disk_persistence_enabled {
+                FORWARDER_RETRY_QUEUE_PAYLOADS_MAX_SIZE_BYTES
+            } else {
+                default_storage_max_size_bytes()
+            },
+            storage_path: PathBuf::new(),
+            storage_max_disk_ratio: default_storage_max_disk_ratio(),
+            outdated_file_in_days: default_outdated_file_in_days(),
+            capacity_time_interval_secs: default_retry_queue_capacity_time_interval_secs(),
+        }
+    }
+
     pub(super) fn fix_empty_storage_path(&mut self, config: &GenericConfiguration) {
         // If `forwarder_storage_path` is empty, try setting it to a default path based on `run_path`.
         if self.storage_path.parent().is_none() {

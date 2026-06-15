@@ -10,7 +10,7 @@ use agent_data_plane_config::{
 use datadog_agent_commons::ipc::config::RemoteAgentClientConfiguration;
 use datadog_agent_config::{
     classifier::{ConfigClassifier, Pipeline, PipelineAffinity, Severity, SupportLevel},
-    DatadogRemapper, KEY_ALIASES,
+    DatadogConfiguration, DatadogRemapper, KEY_ALIASES,
 };
 use saluki_config::{ConfigurationLoader, GenericConfiguration};
 use saluki_error::{generic_error, ErrorContext as _, GenericError};
@@ -127,18 +127,16 @@ async fn start_from_local_datadog_snapshot(
 }
 
 fn translate_bootstrap_configuration(config: &GenericConfiguration) -> Result<BootstrapConfiguration, GenericError> {
+    let source = config
+        .as_typed::<DatadogConfiguration>()
+        .error_context("Failed to parse Datadog Agent bootstrap configuration.")?;
+    let data_plane = source.data_plane.unwrap_or_default();
     let standalone = config
         .try_get_typed("data_plane.standalone_mode")
         .error_context("Failed to read `data_plane.standalone_mode`.")?
         .unwrap_or(false);
-    let remote_agent_enabled = config
-        .try_get_typed("data_plane.remote_agent_enabled")
-        .error_context("Failed to read `data_plane.remote_agent_enabled`.")?
-        .unwrap_or(true);
-    let use_config_stream = config
-        .try_get_typed("data_plane.use_new_config_stream_endpoint")
-        .error_context("Failed to read `data_plane.use_new_config_stream_endpoint`.")?
-        .unwrap_or(true);
+    let remote_agent_enabled = data_plane.remote_agent_enabled;
+    let use_config_stream = data_plane.use_new_config_stream_endpoint;
 
     let runtime_config_authority = if standalone || !(remote_agent_enabled || use_config_stream) {
         RuntimeConfigAuthority::LocalSnapshot(RuntimeConfigLanguage::DatadogAgent)
@@ -159,6 +157,12 @@ fn translate_bootstrap_configuration(config: &GenericConfiguration) -> Result<Bo
 }
 
 fn translate_datadog_snapshot(config: &GenericConfiguration) -> Result<SalukiConfiguration, GenericError> {
+    let source = config
+        .as_typed::<DatadogConfiguration>()
+        .error_context("Failed to parse Datadog Agent runtime configuration.")?;
+    let data_plane_source = source.data_plane.unwrap_or_default();
+    let otlp_proxy_source = data_plane_source.otlp.and_then(|otlp| otlp.proxy).unwrap_or_default();
+
     let checks = PipelineConfiguration::new(
         config
             .try_get_typed("data_plane.checks.enabled")
@@ -180,18 +184,9 @@ fn translate_datadog_snapshot(config: &GenericConfiguration) -> Result<SalukiCon
             .try_get_typed("data_plane.otlp.proxy.receiver.protocols.grpc.endpoint")
             .error_context("Failed to read `data_plane.otlp.proxy.receiver.protocols.grpc.endpoint`.")?
             .unwrap_or_else(|| "http://localhost:4319".to_string()),
-        config
-            .try_get_typed("data_plane.otlp.proxy.metrics.enabled")
-            .error_context("Failed to read `data_plane.otlp.proxy.metrics.enabled`.")?
-            .unwrap_or(true),
-        config
-            .try_get_typed("data_plane.otlp.proxy.logs.enabled")
-            .error_context("Failed to read `data_plane.otlp.proxy.logs.enabled`.")?
-            .unwrap_or(true),
-        config
-            .try_get_typed("data_plane.otlp.proxy.traces.enabled")
-            .error_context("Failed to read `data_plane.otlp.proxy.traces.enabled`.")?
-            .unwrap_or(true),
+        otlp_proxy_source.metrics.unwrap_or_default().enabled,
+        otlp_proxy_source.logs.unwrap_or_default().enabled,
+        otlp_proxy_source.traces.unwrap_or_default().enabled,
     );
     let otlp = OtlpPipelineConfiguration::new(
         config

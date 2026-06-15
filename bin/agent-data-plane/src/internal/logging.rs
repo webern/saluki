@@ -7,6 +7,7 @@
 use async_trait::async_trait;
 use bytesize::ByteSize;
 use datadog_agent_commons::platform::PlatformSettings;
+use datadog_agent_config::TotalSalukiConfiguration;
 use saluki_app::logging::{LogLevel, LoggingConfiguration, LoggingOverrideController};
 use saluki_common::{deser::PermissiveBool, sync::shutdown::ShutdownHandle};
 use saluki_config::GenericConfiguration;
@@ -16,6 +17,8 @@ use serde::Deserialize;
 use serde_with::serde_as;
 use tokio::{pin, select};
 use tracing::{debug, warn};
+
+use crate::cli::TotalConfigWatcher;
 
 use crate::config::BootstrapConfiguration;
 
@@ -248,19 +251,25 @@ fn first_party_log_level_filter(level: &str) -> Result<LogLevel, GenericError> {
     LogLevel::try_from(filter).error_context("Failed to parse first-party log filter directives.")
 }
 
-/// A worker that watches for updates to `log_level` and adjusts the logging stack's current filter directives to match.
+/// A worker that watches for any config change and re-applies the log level when it differs.
 ///
-/// The worker relies on dynamic configuration; if it's not enabled, the worker simply idles until shutdown.
+/// The worker relies on dynamic configuration; if it's not enabled, the worker simply idles until
+/// shutdown.
 pub struct DynamicLogLevelWorker {
     config: GenericConfiguration,
+    initial_total_config: TotalSalukiConfiguration,
     controller: LoggingOverrideController,
 }
 
 impl DynamicLogLevelWorker {
     /// Creates a new `DynamicLogLevelWorker` watching the given configuration.
-    pub fn new(config: &GenericConfiguration, controller: LoggingOverrideController) -> Self {
+    pub fn new(
+        config: &GenericConfiguration, total_config: &TotalSalukiConfiguration,
+        controller: LoggingOverrideController,
+    ) -> Self {
         Self {
             config: config.clone(),
+            initial_total_config: total_config.clone(),
             controller,
         }
     }
@@ -273,7 +282,7 @@ impl Supervisable for DynamicLogLevelWorker {
     }
 
     async fn initialize(&self, process_shutdown: ShutdownHandle) -> Result<SupervisorFuture, InitializationError> {
-        let mut watcher = self.config.watch_for_updates("log_level");
+        let mut watcher = TotalConfigWatcher::new(self.config.clone(), self.initial_total_config.clone());
         let controller = self.controller.clone();
 
         Ok(Box::pin(async move {
@@ -284,8 +293,16 @@ impl Supervisable for DynamicLogLevelWorker {
             loop {
                 select! {
                     _ = &mut process_shutdown => break,
-                    (_, new_log_level) = watcher.changed::<String>() => {
-                        match parse_optional_log_level_raw(new_log_level) {
+                    (old, new) = watcher.changed() => {
+                        if old.logs.log_level == new.logs.log_level {
+                            continue;
+                        }
+                        let maybe_level = if new.logs.log_level.is_empty() {
+                            None
+                        } else {
+                            Some(new.logs.log_level.clone())
+                        };
+                        match parse_optional_log_level_raw(maybe_level) {
                             Ok(log_level) => {
                                 if let Err(e) = controller.update_base(log_level.as_env_filter()).await {
                                     warn!(error = %e, %log_level, "Failed to apply updated log level.");

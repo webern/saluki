@@ -196,6 +196,7 @@ pub async fn handle_run_command(
         control_surfaces,
         ra_bootstrap,
         bootstrap_guard.logging().controller(),
+        &total_config,
     )
     .await
     .error_context("Failed to create internal supervisor.")?;

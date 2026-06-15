@@ -6,11 +6,11 @@
 //! component's input; topology assembly hands each component its slice directly.
 
 use saluki_component_config::{
-    ApmStatsEncoderConfig, AggregateConfig, ChecksConfig, DatadogEventsEncoderConfig, DatadogForwarderConfig,
-    DatadogLogsEncoderConfig, DatadogMetricsEncoderConfig, DatadogServiceChecksEncoderConfig, DatadogTracesEncoderConfig,
-    DogStatsDConfig, DogStatsDDebugLogConfig, DogStatsDMapperConfig, MetricsEnrichmentConfig, MultiRegionFailoverConfig,
-    OtlpConfig, PrefixFilterConfig, TagFilterlistConfig, TraceObfuscationConfig, TraceSamplerConfig,
-    TracesEnrichmentConfig,
+    AggregateConfig, ApmStatsEncoderConfig, ChecksConfig, DatadogEventsEncoderConfig, DatadogForwarderConfig,
+    DatadogLogsEncoderConfig, DatadogMetricsEncoderConfig, DatadogServiceChecksEncoderConfig,
+    DatadogTracesEncoderConfig, DogStatsDConfig, DogStatsDDebugLogConfig, DogStatsDMapperConfig,
+    MetricsEnrichmentConfig, MultiRegionFailoverConfig, OtlpConfig, PrefixFilterConfig, TagFilterlistConfig,
+    TraceObfuscationConfig, TraceSamplerConfig, TracesEnrichmentConfig,
 };
 use saluki_io::net::ListenAddress;
 

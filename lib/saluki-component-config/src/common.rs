@@ -41,7 +41,7 @@ pub enum TlsMinimumVersion {
 }
 
 /// Payload compression settings for outbound encoders.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CompressionConfig {
     /// Compression algorithm.
     pub kind: CompressionKind,

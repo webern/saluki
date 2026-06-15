@@ -28,10 +28,6 @@ pub struct BootstrapConfiguration {
 
     /// Early process telemetry configuration.
     pub telemetry: BootstrapTelemetryConfiguration,
-
-    /// Datadog Agent IPC connection parameters, present only when a stream-backed authority was
-    /// selected and ADP must connect to the Agent.
-    pub ipc: Option<BootstrapIpcConfiguration>,
 }
 
 /// Startup decisions that determine how runtime configuration is resolved.

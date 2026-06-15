@@ -4,8 +4,22 @@
 //! the only production crate that may touch `saluki_config::GenericConfiguration`, and the only
 //! crate that depends on both the Datadog source model (`datadog-agent-config`) and the ADP-native
 //! target model (`agent-data-plane-config`).
+//!
+//! Runtime components and topology assembly receive typed outputs from this crate
+//! ([`SalukiConfiguration`](agent_data_plane_config::SalukiConfiguration)) rather than a raw map. No
+//! submitted configuration API hides raw-map compatibility behind names like `from_native`.
 
 #![deny(missing_docs)]
 #![deny(warnings)]
 
-// Filled in by later build-order steps (skeleton + bootstrap, connection + stream, translation).
+pub mod bootstrap;
+pub mod datadog_agent;
+pub mod stream;
+pub mod system;
+pub mod translate;
+
+pub use bootstrap::BootstrapInputs;
+pub use datadog_agent::DatadogAgentConnection;
+pub use stream::ConfigStreamHandle;
+pub use system::{ConfigurationSystem, StartedAttachments, StartedConfigurationSystem};
+pub use translate::{translate_datadog, PipelineGates, Translator};

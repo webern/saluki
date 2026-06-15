@@ -682,7 +682,8 @@ impl DatadogConfigConsumer for Translator {
 
     fn consume_log_level(&mut self, value: String) {
         // Partial support: ADP maps the Agent's level vocabulary onto its own filter.
-        self.config.logs.log_level = value;
+        // Normalise to lowercase so remote-config delivering "INFO" does not fire a spurious diff.
+        self.config.logs.log_level = value.to_lowercase();
     }
 
     fn consume_log_format_rfc3339(&mut self, value: bool) {

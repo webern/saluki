@@ -67,3 +67,92 @@ impl TotalConfigWatcher {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use saluki_config::{dynamic::ConfigUpdate, ConfigurationLoader};
+    use serde_json::json;
+
+    use crate::cli::otlp_native::build_total_config;
+
+    use super::TotalConfigWatcher;
+
+    // Send an update for a key that DatadogConfiguration does not know about. The translated
+    // TotalSalukiConfiguration should be identical before and after, so `changed()` must NOT fire.
+    #[tokio::test]
+    async fn no_diff_suppression() {
+        let (cfg, sender) = ConfigurationLoader::for_tests(
+            Some(json!({ "log_level": "info" })),
+            None,
+            true,
+        )
+        .await;
+        let sender = sender.expect("sender should exist");
+
+        sender
+            .send(ConfigUpdate::Snapshot(json!({ "log_level": "info" })))
+            .await
+            .unwrap();
+        cfg.ready().await;
+
+        let initial = build_total_config(&cfg).expect("initial build_total_config failed");
+        let mut watcher = TotalConfigWatcher::new(cfg.clone(), initial);
+
+        // Send a partial update for an unknown key; translated config is unchanged.
+        sender
+            .send(ConfigUpdate::Partial {
+                key: "some_unknown_key".to_string(),
+                value: json!("whatever"),
+            })
+            .await
+            .unwrap();
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            watcher.changed(),
+        )
+        .await;
+
+        assert!(result.is_err(), "changed() should not have fired for a no-diff update");
+    }
+
+    // Send a real log_level change; the translated TotalSalukiConfiguration differs, so
+    // `changed()` must return the correct old and new values.
+    #[tokio::test]
+    async fn fires_on_real_change() {
+        let (cfg, sender) = ConfigurationLoader::for_tests(
+            Some(json!({ "log_level": "info" })),
+            None,
+            true,
+        )
+        .await;
+        let sender = sender.expect("sender should exist");
+
+        sender
+            .send(ConfigUpdate::Snapshot(json!({ "log_level": "info" })))
+            .await
+            .unwrap();
+        cfg.ready().await;
+
+        let initial = build_total_config(&cfg).expect("initial build_total_config failed");
+        let mut watcher = TotalConfigWatcher::new(cfg.clone(), initial.clone());
+
+        sender
+            .send(ConfigUpdate::Partial {
+                key: "log_level".to_string(),
+                value: json!("debug"),
+            })
+            .await
+            .unwrap();
+
+        let (old, new) = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            watcher.changed(),
+        )
+        .await
+        .expect("timed out waiting for log_level change");
+
+        assert_eq!(old.logs.log_level, "info");
+        assert_eq!(new.logs.log_level, "debug");
+    }
+}

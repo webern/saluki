@@ -7,6 +7,7 @@ repository = { workspace = true }
 
 [dependencies]
 agent-data-plane-config = { workspace = true }
+datadog-agent-commons = { workspace = true }
 datadog-agent-config = { workspace = true }
 saluki-config = { workspace = true }
 saluki-error = { workspace = true }

@@ -42,6 +42,7 @@ use tracing::{debug, error, info, trace, warn};
 
 use crate::{
     cli::otlp_native::{build_otlp_native_config, build_total_config, OtlpNativeConfig},
+    cli::traces_native::build_traces_native_config,
     config::{BootstrapConfiguration, DataPlaneConfiguration},
     internal::env::ADPEnvironmentProvider,
 };
@@ -425,7 +426,7 @@ async fn create_topology(
     }
 
     if dp_config.traces_pipeline_required() {
-        add_baseline_traces_pipeline_to_blueprint(&mut blueprint, config, env_provider).await?;
+        add_baseline_traces_pipeline_to_blueprint(&mut blueprint, config, env_provider, total_config).await?;
     }
 
     // Now we move on to our actual data pipelines.
@@ -589,14 +590,17 @@ async fn add_baseline_service_checks_pipeline_to_blueprint(
 
 async fn add_baseline_traces_pipeline_to_blueprint(
     blueprint: &mut TopologyBlueprint, config: &GenericConfiguration, env_provider: &ADPEnvironmentProvider,
+    total_config: &TotalSalukiConfiguration,
 ) -> Result<(), GenericError> {
-    let dd_traces_config = DatadogTraceConfiguration::from_configuration(config)
+    let traces_native =
+        build_traces_native_config(total_config, config).error_context("Failed to build native traces config.")?;
+
+    let dd_traces_config = DatadogTraceConfiguration::from_native(&traces_native, config)
         .error_context("Failed to configure Datadog Traces encoder.")?
         .with_environment_provider(env_provider.clone())
         .await?;
-    let trace_obfuscation_config = TraceObfuscationConfiguration::from_apm_configuration(config)?;
-    let trace_sampler_config = TraceSamplerConfiguration::from_configuration(config)
-        .error_context("Failed to configure Trace Sampler transform.")?;
+    let trace_obfuscation_config = TraceObfuscationConfiguration::from_native(&traces_native);
+    let trace_sampler_config = TraceSamplerConfiguration::from_native(&traces_native);
     let ottl_filter_config = OttlFilterConfiguration::from_configuration(config)
         .error_context("Failed to configure OTTL filter processor.")?;
     let ottl_transform_config = OttlTransformConfiguration::from_configuration(config)
@@ -607,11 +611,10 @@ async fn add_baseline_traces_pipeline_to_blueprint(
         .with_transform_builder("apm_onboarding", ApmOnboardingConfiguration)
         .with_transform_builder("trace_obfuscation", trace_obfuscation_config)
         .with_transform_builder("trace_sampler", trace_sampler_config);
-    let apm_stats_transform_config = ApmStatsTransformConfiguration::from_configuration(config)
-        .error_context("Failed to configure APM Stats transform.")?
+    let apm_stats_transform_config = ApmStatsTransformConfiguration::from_native(&traces_native)
         .with_environment_provider(env_provider.clone())
         .await?;
-    let dd_apm_stats_encoder = DatadogApmStatsEncoderConfiguration::from_configuration(config)
+    let dd_apm_stats_encoder = DatadogApmStatsEncoderConfiguration::from_native(config)
         .error_context("Failed to configure Datadog APM Stats encoder.")?
         .with_environment_provider(env_provider.clone())
         .await?;

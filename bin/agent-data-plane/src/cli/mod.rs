@@ -16,6 +16,8 @@ use self::dogstatsd::DogstatsdCommand;
 
 mod otlp_native;
 
+mod traces_native;
+
 mod run;
 pub use self::run::handle_run_command;
 use self::run::RunCommand;

@@ -42,7 +42,7 @@ use tokio::{
 use tracing::{debug, error};
 
 use crate::common::datadog::{
-    apm::ApmConfig,
+    apm::{ApmConfig, TracesNativeConfig},
     io::RB_BUFFER_CHUNK_SIZE,
     request_builder::{EndpointEncoder, RequestBuilder},
     telemetry::ComponentTelemetry,
@@ -127,7 +127,7 @@ pub struct DatadogTraceConfiguration {
 }
 
 impl DatadogTraceConfiguration {
-    /// Creates a new `DatadogTraceConfiguration` from the given configuration.
+    /// Registry/test-only legacy path; removed when GenericConfiguration is confined to the translation layer in PR 11.
     pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
         let mut trace_config: Self = config.as_typed()?;
 
@@ -137,6 +137,20 @@ impl DatadogTraceConfiguration {
         trace_config.apm_config = ApmConfig::from_configuration(config)?;
         trace_config.otlp_traces = config.try_get_typed("otlp_config.traces")?.unwrap_or_default();
 
+        Ok(trace_config)
+    }
+
+    /// Creates a new `DatadogTraceConfiguration` from a pre-built native traces bundle and the raw config.
+    ///
+    /// Reads Saluki-private serializer settings (compressor kind, level, flush timeout, env) via
+    /// `config.as_typed()`, then overlays the translated `apm_config` and `otlp_traces` from
+    /// `native` / `GenericConfiguration` respectively.
+    pub fn from_native(native: &TracesNativeConfig, config: &GenericConfiguration) -> Result<Self, GenericError> {
+        let mut trace_config: Self = config.as_typed()?;
+        let app_details = saluki_metadata::get_app_details();
+        trace_config.version = format!("agent-data-plane/{}", app_details.version().raw());
+        trace_config.apm_config = native.apm_config.clone();
+        trace_config.otlp_traces = config.try_get_typed("otlp_config.traces")?.unwrap_or_default();
         Ok(trace_config)
     }
 }

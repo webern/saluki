@@ -139,6 +139,11 @@ impl Default for ProbabilisticSamplerConfig {
     }
 }
 
+/// APM runtime configuration shared across all trace-pipeline components.
+///
+/// Deserializes from the `apm_config.*` / `apm_enable_rare_sampler` / `apm_obfuscation_*` keys
+/// in the resolved `GenericConfiguration`. Built once by `ApmConfig::from_configuration` (legacy
+/// path) or by `build_traces_native_config` (native path) and cloned into each component.
 #[derive(Clone, Debug, Deserialize)]
 #[cfg_attr(test, derive(PartialEq))]
 pub struct ApmConfig {
@@ -218,6 +223,10 @@ pub struct ApmConfig {
 }
 
 impl ApmConfig {
+    /// Builds an `ApmConfig` from the resolved `GenericConfiguration`.
+    ///
+    /// Registry/test-only legacy path; removed when GenericConfiguration is confined to the
+    /// translation layer in PR 11.
     pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
         let wrapper = config.as_typed::<ApmConfiguration>()?;
         let mut apm_config = wrapper.apm_config;
@@ -313,6 +322,19 @@ impl ApmConfig {
     pub fn obfuscation(&self) -> &ObfuscationConfig {
         &self.obfuscation
     }
+}
+
+/// Native traces boot-time bundle for the trace pipeline components.
+///
+/// Built once by `build_traces_native_config` in the binary; consumed by the five trace components
+/// via their `from_native` constructors. Groups the shared `ApmConfig` and the OTLP sampling
+/// percentage that `TraceSamplerConfiguration` needs from the translated config.
+pub struct TracesNativeConfig {
+    /// Shared APM config (sampling, obfuscation, env, peer_tags, etc.) built once for all trace components.
+    pub apm_config: ApmConfig,
+    /// OTLP traces sampling percentage (0.0-100.0) from the translated OtlpConfig.
+    /// Used by TraceSamplerConfiguration to know the OTLP-side sampling rate.
+    pub otlp_traces_sampling_percentage: f64,
 }
 
 impl Default for ApmConfig {

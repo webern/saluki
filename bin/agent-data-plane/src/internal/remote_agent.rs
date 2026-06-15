@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::{collections::hash_map::Entry, time::Duration};
 
+use agent_data_plane_config_system::DatadogAgentConnection;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use datadog_agent_commons::ipc::client::RemoteAgentClient;
@@ -133,6 +134,16 @@ impl RemoteAgentBootstrap {
     /// Creates a new `FlareProviderServer` tied to this remote agent.
     pub fn create_flare_service(&self) -> FlareProviderServer<RemoteAgentImpl> {
         FlareProviderServer::new(self.build_impl())
+    }
+
+    /// Creates remote-agent service state from a Datadog Agent connection owned by the configuration system.
+    #[allow(dead_code)]
+    pub async fn from_datadog_connection(connection: &DatadogAgentConnection) -> Self {
+        Self {
+            client: connection.client(),
+            session_id: connection.session_id().clone(),
+            internal_metrics: get_shared_metrics_state().await,
+        }
     }
 
     /// Creates a config stream that receives configuration events from the Core Agent.

@@ -1,15 +1,18 @@
 //! Configuration system lifecycle types.
 
+use std::collections::HashSet;
+
 use agent_data_plane_config::{
     BootstrapConfiguration, BootstrapStartupConfiguration, BootstrapTelemetryConfiguration, ConfigStreamAuthority,
     DataPlaneConfiguration, OtlpPipelineConfiguration, OtlpProxyConfiguration, PipelineConfiguration,
     RuntimeConfigAuthority, RuntimeConfigLanguage, SalukiConfiguration,
 };
 use datadog_agent_commons::ipc::config::RemoteAgentClientConfiguration;
+use datadog_agent_config::classifier::{ConfigClassifier, Pipeline, PipelineAffinity, Severity, SupportLevel};
 use saluki_config::{ConfigurationLoader, GenericConfiguration};
 use saluki_error::{generic_error, ErrorContext as _, GenericError};
 use saluki_io::net::{GrpcTargetAddress, ListenAddress};
-use tracing::info;
+use tracing::{debug, error, info, trace, warn};
 
 use crate::{
     bootstrap::BootstrapInputs,
@@ -191,7 +194,7 @@ fn translate_datadog_snapshot(config: &GenericConfiguration) -> Result<SalukiCon
         otlp_proxy,
     );
 
-    Ok(SalukiConfiguration {
+    let saluki = SalukiConfiguration {
         data_plane: DataPlaneConfiguration::new(
             config
                 .try_get_typed("data_plane.enabled")
@@ -201,7 +204,93 @@ fn translate_datadog_snapshot(config: &GenericConfiguration) -> Result<SalukiCon
             dogstatsd,
             otlp,
         ),
-    })
+    };
+
+    let active_pipelines = active_pipelines(&saluki.data_plane);
+    check_and_warn_config(config, &active_pipelines).error_context("Incompatible configuration detected.")?;
+
+    Ok(saluki)
+}
+
+fn active_pipelines(dp_config: &DataPlaneConfiguration) -> HashSet<Pipeline> {
+    let mut s = HashSet::new();
+    if dp_config.dogstatsd().enabled() {
+        s.insert(Pipeline::DogStatsD);
+    }
+    if dp_config.checks().enabled() {
+        s.insert(Pipeline::Checks);
+    }
+    if dp_config.otlp().enabled() {
+        s.insert(Pipeline::Otlp);
+    }
+    if dp_config.traces_pipeline_required() {
+        s.insert(Pipeline::Traces);
+    }
+    s
+}
+
+fn check_and_warn_config(
+    config: &GenericConfiguration, active_pipelines: &HashSet<Pipeline>,
+) -> Result<(), GenericError> {
+    let classifier = ConfigClassifier::new();
+    let mut high_severity_incompatibilities = 0u32;
+    debug!("Analyzing configuration.");
+    for (key, val) in config
+        .flattened_keys()
+        .error_context("Unable to flatten configuration into a list of dot-separated keys.")?
+    {
+        let Some(classification) = classifier.classify(&key, &val) else {
+            continue;
+        };
+
+        if !is_a_pipeline_affected(active_pipelines, &classification.pipeline_affinity) {
+            continue;
+        }
+
+        if classification.is_default {
+            trace!(key = %key, "Configuration key has a default value.");
+            continue;
+        }
+
+        match classification.support_level {
+            SupportLevel::Incompatible(Severity::Low) => debug!("Low-severity incompatible key detected. Proceeding."),
+            SupportLevel::Partial => {
+                warn!(key = %key, "Partially supported configuration key. See documentation for details. Proceeding.")
+            }
+            SupportLevel::Incompatible(Severity::Medium) => {
+                warn!(key = %key, "Unsupported configuration key. Proceeding.")
+            }
+            SupportLevel::Incompatible(Severity::High) => {
+                error!(key = %key, "Unsupported configuration key with non-default value. ADP cannot run safely with this setting.");
+                high_severity_incompatibilities += 1;
+            }
+            SupportLevel::Ignored | SupportLevel::Unrecognized => {
+                trace!(key = %key, "Configuration key not-applicable. Silently ignoring.")
+            }
+        }
+    }
+
+    if high_severity_incompatibilities > 0 {
+        return Err(generic_error!(
+            "{high_severity_incompatibilities} incompatible configuration detected. ADP cannot start. Review error logs for details."
+        ));
+    }
+
+    Ok(())
+}
+
+fn is_a_pipeline_affected(active_pipelines: &HashSet<Pipeline>, pipeline_affinity: &PipelineAffinity) -> bool {
+    match pipeline_affinity {
+        PipelineAffinity::Pipelines(affected_pipelines) => {
+            for affected_pipeline in *affected_pipelines {
+                if active_pipelines.contains(affected_pipeline) {
+                    return true;
+                }
+            }
+            false
+        }
+        PipelineAffinity::CrossCutting => true,
+    }
 }
 
 /// Result of starting the configuration system.

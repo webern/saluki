@@ -14,12 +14,14 @@
 
 pub mod bootstrap;
 pub mod datadog_agent;
+pub mod dynamic;
 pub mod stream;
 pub mod system;
 pub mod translate;
 
 pub use bootstrap::BootstrapInputs;
 pub use datadog_agent::DatadogAgentConnection;
+pub use dynamic::{ConfigUpdateRouter, DynamicConfigHandles, ScopedConfigHandle};
 pub use stream::ConfigStreamHandle;
 pub use system::{ConfigurationSystem, StartedAttachments, StartedConfigurationSystem};
 pub use translate::{translate_datadog, PipelineGates, Translator};

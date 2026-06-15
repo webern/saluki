@@ -690,3 +690,62 @@ impl DatadogConfigConsumer for Translator {
     fn consume_vector_metrics_enabled(&mut self, _value: bool) {}
     fn consume_vector_metrics_url(&mut self, _value: Option<String>) {}
 }
+
+#[cfg(test)]
+mod tests {
+    use agent_data_plane_config::RuntimeConfigLanguage;
+    use bytesize::ByteSize;
+    use saluki_component_config::common::CompressionKind;
+
+    use super::*;
+
+    #[test]
+    fn translates_supported_keys_into_native_config() {
+        // A Datadog source configuration with a representative set of supported keys set.
+        let mut dd = DatadogConfiguration::default();
+        dd.dogstatsd_port = 8200;
+        dd.api_key = "test-api-key".to_string();
+        dd.forwarder_timeout = 30;
+        dd.serializer_compressor_kind = "zstd".to_string();
+        dd.skip_ssl_validation = true;
+
+        let private = SalukiPrivateConfiguration::for_language(RuntimeConfigLanguage::DatadogAgent);
+        let gates = PipelineGates {
+            enabled: true,
+            dogstatsd_enabled: true,
+            checks_enabled: false,
+            otlp_enabled: false,
+        };
+
+        let saluki = translate_datadog(&dd, &private, gates);
+
+        // Witnessed Datadog keys land in their native destinations.
+        assert_eq!(saluki.dogstatsd.source.port, 8200);
+        assert_eq!(saluki.forwarder.datadog.request_timeout, Duration::from_secs(30));
+        assert!(saluki.forwarder.datadog.tls.skip_ssl_validation);
+        assert_eq!(saluki.metrics.datadog_encoder.compression.kind, CompressionKind::Zstd);
+
+        // The primary endpoint is assembled from the API key plus the default intake URL.
+        assert_eq!(saluki.forwarder.datadog.endpoints.len(), 1);
+        let endpoint = &saluki.forwarder.datadog.endpoints[0];
+        assert_eq!(endpoint.api_keys.len(), 1);
+        assert_eq!(endpoint.api_keys[0].as_ref(), "test-api-key");
+        assert_eq!(endpoint.dd_url.as_ref(), "https://app.datadoghq.com");
+
+        // Pipeline gates flow through to the data-plane config.
+        assert!(saluki.data_plane.enabled());
+        assert!(saluki.data_plane.dogstatsd.enabled());
+        assert!(!saluki.data_plane.otlp.enabled());
+
+        // Saluki-private supplemental config is folded into the native model.
+        assert_eq!(saluki.otlp.config.context_string_interner_bytes, ByteSize::mib(2));
+    }
+
+    #[test]
+    fn no_api_key_yields_no_endpoints() {
+        let dd = DatadogConfiguration::default();
+        let private = SalukiPrivateConfiguration::for_language(RuntimeConfigLanguage::DatadogAgent);
+        let saluki = translate_datadog(&dd, &private, PipelineGates::default());
+        assert!(saluki.forwarder.datadog.endpoints.is_empty());
+    }
+}

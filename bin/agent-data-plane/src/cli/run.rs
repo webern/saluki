@@ -436,7 +436,8 @@ async fn create_topology(
     }
 
     if dp_config.dogstatsd().enabled() {
-        let dsd_control_surface = add_dsd_pipeline_to_blueprint(&mut blueprint, config, env_provider).await?;
+        let dsd_control_surface =
+            add_dsd_pipeline_to_blueprint(&mut blueprint, config, env_provider, total_config).await?;
         control_surfaces.attach_dogstatsd(dsd_control_surface);
     }
 
@@ -634,6 +635,7 @@ async fn add_baseline_traces_pipeline_to_blueprint(
 
 async fn add_dsd_pipeline_to_blueprint(
     blueprint: &mut TopologyBlueprint, config: &GenericConfiguration, env_provider: &ADPEnvironmentProvider,
+    total_config: &TotalSalukiConfiguration,
 ) -> Result<DogStatsDControlSurface, GenericError> {
     // We're creating the "front half" of the DogStatsD pipeline, which deals solely with accepting DogStatsD payloads,
     // and enriching/processing them in DSD-specific ways, relevant to how the Datadog Agent is expected to behave.
@@ -670,19 +672,19 @@ async fn add_dsd_pipeline_to_blueprint(
     //    │    (destination)    │    │                       (Datadog Platform)                        │
     //    └─────────────────────┘    └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘
 
-    let dsd_config = DogStatsDConfiguration::from_configuration(config)
+    let dsd_config = DogStatsDConfiguration::from_native(total_config, config)
         .error_context("Failed to configure DogStatsD source.")?
         .with_workload_provider(env_provider.workload().clone())
         .with_capture_entity_resolver(env_provider.workload().clone());
-    let dsd_prefix_filter_configuration = DogStatsDPrefixFilterConfiguration::from_configuration(config)?;
-    let dsd_mapper_config = DogStatsDMapperConfiguration::from_configuration(config)?;
+    let dsd_prefix_filter_configuration = DogStatsDPrefixFilterConfiguration::from_native(total_config, config)?;
+    let dsd_mapper_config = DogStatsDMapperConfiguration::from_native(total_config, config)?;
     let dsd_enrich_config =
         ChainedConfiguration::default().with_transform_builder("dogstatsd_mapper", dsd_mapper_config);
-    let dsd_tag_filterlist_config = TagFilterlistConfiguration::from_configuration(config)
+    let dsd_tag_filterlist_config = TagFilterlistConfiguration::from_native(total_config, config)
         .error_context("Failed to configure metric tag filterlist transform.")?;
-    let dsd_agg_config =
-        AggregateConfiguration::from_configuration(config).error_context("Failed to configure aggregate transform.")?;
-    let dsd_post_agg_filter_config = DogStatsDPostAggregateFilterConfiguration::from_configuration(config)
+    let dsd_agg_config = AggregateConfiguration::from_native(total_config, config)
+        .error_context("Failed to configure aggregate transform.")?;
+    let dsd_post_agg_filter_config = DogStatsDPostAggregateFilterConfiguration::from_native(total_config, config)
         .error_context("Failed to configure DogStatsD post-aggregate filter transform.")?;
     let events_enrich_config = ChainedConfiguration::default().with_transform_builder(
         "host_enrichment",
@@ -692,7 +694,8 @@ async fn add_dsd_pipeline_to_blueprint(
         "host_enrichment",
         HostEnrichmentConfiguration::from_environment_provider(env_provider.clone()),
     );
-    let dsd_debug_log_config = DogStatsDDebugLogConfiguration::from_configuration(
+    let dsd_debug_log_config = DogStatsDDebugLogConfiguration::from_native(
+        total_config,
         config,
         PlatformSettings::get_default_dogstatsd_log_file_path(),
     )

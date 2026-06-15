@@ -97,6 +97,15 @@ impl DogStatsDPostAggregateFilterConfiguration {
         typed_config.configuration = Some(config.clone());
         Ok(typed_config)
     }
+
+    /// Creates a new `DogStatsDPostAggregateFilterConfiguration` from native config.
+    ///
+    /// Delegates to `from_configuration`; `total_config` is reserved for future native migration.
+    pub fn from_native(
+        _total_config: &datadog_agent_config::TotalSalukiConfiguration, config: &GenericConfiguration,
+    ) -> Result<Self, GenericError> {
+        Self::from_configuration(config)
+    }
 }
 
 #[async_trait]

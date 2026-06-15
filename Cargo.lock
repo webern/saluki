@@ -21,6 +21,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 name = "agent-data-plane"
 version = "1.3.0"
 dependencies = [
+ "agent-data-plane-config-system",
  "antithesis-instrumentation",
  "antithesis_sdk",
  "argh",
@@ -67,6 +68,20 @@ dependencies = [
  "tonic",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "agent-data-plane-config"
+version = "0.1.0"
+
+[[package]]
+name = "agent-data-plane-config-system"
+version = "0.1.0"
+dependencies = [
+ "agent-data-plane-config",
+ "datadog-agent-config",
+ "saluki-config",
+ "saluki-error",
 ]
 
 [[package]]

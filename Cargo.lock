@@ -4275,6 +4275,7 @@ dependencies = [
  "bytes",
  "bytesize",
  "chrono",
+ "datadog-agent-config",
  "datadog-agent-config-testing",
  "datadog-protos",
  "ddsketch",

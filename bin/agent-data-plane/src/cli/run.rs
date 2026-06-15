@@ -40,6 +40,11 @@ use saluki_error::{generic_error, ErrorContext as _, GenericError};
 use tracing::{debug, error, info, trace, warn};
 
 use crate::{
+    cli::otlp_native::{build_otlp_native_config, OtlpNativeConfig},
+    config::{BootstrapConfiguration, DataPlaneConfiguration},
+    internal::env::ADPEnvironmentProvider,
+};
+use crate::{
     components::{
         apm_onboarding::ApmOnboardingConfiguration,
         dogstatsd_post_aggregate_filter::DogStatsDPostAggregateFilterConfiguration,
@@ -51,10 +56,6 @@ use crate::{
         create_internal_supervisor, logging::LoggingConfigurationTranslator, remote_agent::RemoteAgentBootstrap,
         DogStatsDControlSurface, TopologyControlSurfaces,
     },
-};
-use crate::{
-    config::{BootstrapConfiguration, DataPlaneConfiguration},
-    internal::env::ADPEnvironmentProvider,
 };
 
 /// Runs the data plane.
@@ -166,6 +167,18 @@ pub async fn handle_run_command(
     let active_pipelines = active_pipelines(&dp_config);
     check_and_warn_config(&config, &active_pipelines).error_context("Incompatible configuration detected.")?;
 
+    // Translate the typed Datadog configuration into native Saluki config for the components that have
+    // been migrated off `GenericConfiguration`. OTLP is the first such consumer (config-translation PR
+    // 4). We build the native OTLP boot config exactly once here, at the translation boundary, and
+    // thread the resulting slice into topology construction; every other component still resolves its
+    // config from `GenericConfiguration` as before. This is built only when OTLP is enabled so that
+    // non-OTLP startup is entirely unaffected by the translation path.
+    let otlp_native_config = if dp_config.otlp().enabled() {
+        Some(build_otlp_native_config(&config).error_context("Failed to build native OTLP configuration.")?)
+    } else {
+        None
+    };
+
     // Set up all of the building blocks for building our topologies and launching internal processes.
     let component_registry = ComponentRegistry::default();
     let health_registry = HealthRegistry::new();
@@ -173,8 +186,14 @@ pub async fn handle_run_command(
         ADPEnvironmentProvider::from_configuration(&config, &dp_config, &component_registry, &health_registry).await?;
 
     // Create the blueprint for our primary topology.
-    let (mut blueprint, control_surfaces) =
-        create_topology(&config, &dp_config, &env_provider, &component_registry).await?;
+    let (mut blueprint, control_surfaces) = create_topology(
+        &config,
+        &dp_config,
+        &env_provider,
+        &component_registry,
+        otlp_native_config.as_ref(),
+    )
+    .await?;
 
     // Create the internal supervisor which drives our control plane and internal observability.
     let mut internal_supervisor = create_internal_supervisor(
@@ -368,7 +387,7 @@ fn is_a_pipeline_affected(active_pipelines: &HashSet<Pipeline>, pipeline_affinit
 
 async fn create_topology(
     config: &GenericConfiguration, dp_config: &DataPlaneConfiguration, env_provider: &ADPEnvironmentProvider,
-    component_registry: &ComponentRegistry,
+    component_registry: &ComponentRegistry, otlp_native_config: Option<&OtlpNativeConfig>,
 ) -> Result<(TopologyBlueprint, TopologyControlSurfaces), GenericError> {
     let mut blueprint = TopologyBlueprint::new("primary", component_registry);
     let mut control_surfaces = TopologyControlSurfaces::default();
@@ -429,7 +448,10 @@ async fn create_topology(
     }
 
     if dp_config.otlp().enabled() {
-        add_otlp_pipeline_to_blueprint(&mut blueprint, config, dp_config, env_provider)?;
+        // OTLP is enabled, so the native OTLP config was built at the translation boundary above.
+        let otlp_native_config = otlp_native_config
+            .ok_or_else(|| generic_error!("OTLP is enabled but native OTLP configuration was not built."))?;
+        add_otlp_pipeline_to_blueprint(&mut blueprint, dp_config, env_provider, otlp_native_config)?;
     }
 
     Ok((blueprint, control_surfaces))
@@ -729,9 +751,14 @@ async fn add_dsd_pipeline_to_blueprint(
 }
 
 fn add_otlp_pipeline_to_blueprint(
-    blueprint: &mut TopologyBlueprint, config: &GenericConfiguration, dp_config: &DataPlaneConfiguration,
-    env_provider: &ADPEnvironmentProvider,
+    blueprint: &mut TopologyBlueprint, dp_config: &DataPlaneConfiguration, env_provider: &ADPEnvironmentProvider,
+    otlp_native_config: &OtlpNativeConfig,
 ) -> Result<(), GenericError> {
+    // All OTLP components are built from native translated config (config-translation PR 4); none of
+    // them consume `GenericConfiguration` here. The native slice and the Saluki-private OTLP knobs were
+    // assembled once at the translation boundary in the run path.
+    let native_otlp = &otlp_native_config.otlp;
+
     if dp_config.otlp().proxy().enabled() {
         let core_agent_otlp_grpc_endpoint = dp_config.otlp().proxy().core_agent_otlp_grpc_endpoint().to_string();
         let proxy_metrics = dp_config.otlp().proxy().proxy_metrics();
@@ -746,11 +773,11 @@ fn add_otlp_pipeline_to_blueprint(
             "OTLP proxy mode enabled. Select OTLP payloads will be proxied to the Core Agent."
         );
 
-        let otlp_relay_config = OtlpRelayConfiguration::from_configuration(config)?;
-        let otlp_decoder_config = OtlpDecoderConfiguration::from_configuration(config)?;
+        let otlp_relay_config = OtlpRelayConfiguration::from_native(native_otlp);
+        let otlp_decoder_config = OtlpDecoderConfiguration::from_native(native_otlp, otlp_native_config.traces_private);
 
         let local_agent_otlp_forwarder_config =
-            OtlpForwarderConfiguration::from_configuration(config, core_agent_otlp_grpc_endpoint)?;
+            OtlpForwarderConfiguration::from_native(native_otlp, core_agent_otlp_grpc_endpoint);
 
         blueprint
             // Components.
@@ -770,8 +797,15 @@ fn add_otlp_pipeline_to_blueprint(
     } else {
         info!("OTLP proxy mode disabled. OTLP signals will be handled natively.");
 
-        let otlp_config =
-            OtlpConfiguration::from_configuration(config)?.with_workload_provider(env_provider.workload().clone());
+        let otlp_config = OtlpConfiguration::from_native(
+            native_otlp,
+            otlp_native_config.context_interner_bytes,
+            otlp_native_config.cached_contexts_limit,
+            otlp_native_config.cached_tagsets_limit,
+            otlp_native_config.allow_context_heap_allocs,
+            otlp_native_config.traces_private,
+        )?
+        .with_workload_provider(env_provider.workload().clone());
 
         blueprint
             // Components.

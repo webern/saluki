@@ -23,8 +23,9 @@ use tracing::{debug, error, warn};
 
 use crate::common::otlp::traces::translator::OtlpTracesTranslator;
 use crate::common::otlp::{
-    build_metrics, config::TracesConfig, Metrics, OTLP_LOGS_GRPC_SERVICE_PATH, OTLP_METRICS_GRPC_SERVICE_PATH,
-    OTLP_TRACES_GRPC_SERVICE_PATH,
+    build_metrics,
+    config::{NativeTracesPrivateConfig, TracesConfig},
+    Metrics, OTLP_LOGS_GRPC_SERVICE_PATH, OTLP_METRICS_GRPC_SERVICE_PATH, OTLP_TRACES_GRPC_SERVICE_PATH,
 };
 
 /// Configuration for the OTLP decoder.
@@ -45,12 +46,31 @@ struct OtlpDecoderConfig {
 
 impl OtlpDecoderConfiguration {
     /// Creates a new `OtlpDecoderConfiguration` from the given configuration.
+    ///
+    /// This is the legacy `GenericConfiguration` path. Production construction now goes through
+    /// [`from_native`][Self::from_native]; this constructor is retained for the config-registry smoke
+    /// tests.
     pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
         let mut cfg: Self = config
             .as_typed()
             .error_context("Failed to load OTLP decoder configuration")?;
         cfg.otlp_config.traces.apply_env_overrides(config)?;
         Ok(cfg)
+    }
+
+    /// Creates a new `OtlpDecoderConfiguration` from native translated config.
+    ///
+    /// `otlp` carries the Datadog-schema traces keys (enable flag, internal port, and the env-resolved
+    /// probabilistic sampling percentage). `traces_private` carries the Saluki-private traces knobs the
+    /// run.rs caller reads from `GenericConfiguration` (see [`NativeTracesPrivateConfig`]). No separate
+    /// env-override step is needed: the sampling percentage in `otlp` already reflects the env override
+    /// applied at the translation boundary.
+    pub fn from_native(otlp: &datadog_agent_config::OtlpConfig, traces_private: NativeTracesPrivateConfig) -> Self {
+        Self {
+            otlp_config: OtlpDecoderConfig {
+                traces: TracesConfig::from_native(otlp, traces_private),
+            },
+        }
     }
 }
 

@@ -813,6 +813,22 @@ mod tests {
     }
 
     #[test]
+    fn otlp_traces_sampling_percentage_reaches_native() {
+        // The nested probabilistic-sampler percentage must land on the native OTLP slice. This is the
+        // value the migrated OTLP source/decoder read instead of deserializing it themselves; the flat
+        // env-var form is folded onto this nested path at the translation boundary before translate().
+        let config = DatadogConfiguration {
+            otlp_config: serde_json::from_value(json!({
+                "traces": {"probabilistic_sampler": {"sampling_percentage": 42.5}}
+            }))
+            .unwrap(),
+            ..Default::default()
+        };
+        let out = translate(&config);
+        assert_eq!(out.otlp.traces_sampling_percentage, 42.5);
+    }
+
+    #[test]
     fn logs_level_is_set() {
         let out = translate_with("log_level", json!("debug"));
         assert_eq!(out.logs.log_level, "debug");

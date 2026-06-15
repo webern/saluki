@@ -37,6 +37,10 @@ pub struct OtlpForwarderConfiguration {
 
 impl OtlpForwarderConfiguration {
     /// Creates a new `OtlpForwarderConfiguration` from the given configuration.
+    ///
+    /// This is the legacy `GenericConfiguration` path; production construction now goes through
+    /// [`from_native`][Self::from_native]. It is retained only for callers/tests that still hold a
+    /// `GenericConfiguration`.
     pub fn from_configuration(
         config: &GenericConfiguration, core_agent_otlp_grpc_endpoint: String,
     ) -> Result<Self, GenericError> {
@@ -47,6 +51,18 @@ impl OtlpForwarderConfiguration {
             core_agent_otlp_grpc_endpoint,
             core_agent_traces_internal_port,
         })
+    }
+
+    /// Creates a new `OtlpForwarderConfiguration` from native translated config.
+    ///
+    /// The trace-forwarding port (`otlp_config.traces.internal_port`) is a Datadog-schema key carried
+    /// in `otlp`. The Core Agent OTLP gRPC endpoint is supplied by the caller from the data-plane proxy
+    /// configuration rather than from a Datadog-schema key.
+    pub fn from_native(otlp: &datadog_agent_config::OtlpConfig, core_agent_otlp_grpc_endpoint: String) -> Self {
+        Self {
+            core_agent_otlp_grpc_endpoint,
+            core_agent_traces_internal_port: otlp.traces_internal_port,
+        }
     }
 }
 

@@ -21,6 +21,6 @@ pub mod total_config;
 pub mod translator;
 
 pub use datadog_configuration::DatadogConfiguration;
-pub use total_config::TotalSalukiConfiguration;
+pub use total_config::{OtlpConfig, OtlpGrpcConfig, OtlpHttpConfig, TotalSalukiConfiguration};
 pub use translator::translate;
 pub use witness::{drive, DatadogConfigConsumer};

@@ -18,7 +18,7 @@ use tokio::sync::mpsc;
 use tokio::{pin, select};
 use tracing::{debug, error};
 
-use crate::common::otlp::config::Receiver;
+use crate::common::otlp::config::{GrpcConfig, HttpConfig, Protocols, Receiver};
 use crate::common::otlp::{
     build_metrics, Metrics, OtlpHandler, OtlpServerBuilder, OTLP_LOGS_GRPC_SERVICE_PATH,
     OTLP_METRICS_GRPC_SERVICE_PATH, OTLP_TRACES_GRPC_SERVICE_PATH,
@@ -42,8 +42,38 @@ pub struct OtlpRelayConfig {
 
 impl OtlpRelayConfiguration {
     /// Creates a new `OtlpRelayConfiguration` from the given generic configuration.
+    ///
+    /// This is the legacy `GenericConfiguration` path. Production construction now goes through
+    /// [`from_native`][Self::from_native]; this constructor is retained for the config-registry smoke
+    /// tests.
     pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
         config.as_typed().map_err(Into::into)
+    }
+
+    /// Creates a new `OtlpRelayConfiguration` from native translated config.
+    ///
+    /// The relay only needs the receiver endpoints. All of them (the gRPC endpoint/transport/message
+    /// size and the HTTP endpoint) are Datadog-schema keys carried in `otlp`. The HTTP transport is not
+    /// a schema key, so it is fixed to `tcp` to match the component default and the only transport the
+    /// OTLP servers support.
+    pub fn from_native(otlp: &datadog_agent_config::OtlpConfig) -> Self {
+        Self {
+            otlp_config: OtlpRelayConfig {
+                receiver: Receiver {
+                    protocols: Protocols {
+                        grpc: GrpcConfig {
+                            endpoint: otlp.grpc.endpoint.clone(),
+                            transport: otlp.grpc.transport.clone(),
+                            max_recv_msg_size_mib: otlp.grpc.max_recv_msg_size_mib,
+                        },
+                        http: HttpConfig {
+                            endpoint: otlp.http.endpoint.clone(),
+                            transport: "tcp".to_string(),
+                        },
+                    },
+                },
+            },
+        }
     }
 
     fn http_endpoint(&self) -> ListenAddress {

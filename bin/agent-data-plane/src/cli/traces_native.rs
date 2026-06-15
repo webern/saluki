@@ -5,6 +5,11 @@
 //! only the builder function `build_traces_native_config`, which reads the already-translated
 //! `total_config.otlp.traces_sampling_percentage` and calls `ApmConfig::from_configuration` once for
 //! all five components.
+//!
+//! ApmConfig sampling fields (`target_traces_per_second`, `errors_per_second`, rare sampler, etc.) are
+//! still read via `ApmConfig::from_configuration` because those keys are "ignored" in the schema overlay
+//! and are absent from `DatadogConfiguration`. Only `otlp.traces_sampling_percentage` comes from the
+//! typed translation path. Promoting sampling keys to the overlay is deferred.
 
 use datadog_agent_config::TotalSalukiConfiguration;
 use saluki_components::config::{ApmConfig, TracesNativeConfig};

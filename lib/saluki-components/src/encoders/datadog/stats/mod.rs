@@ -38,6 +38,7 @@ use tokio::{
 use tracing::{debug, error};
 
 use crate::common::datadog::{
+    apm::TracesNativeConfig,
     io::RB_BUFFER_CHUNK_SIZE,
     request_builder::{EndpointEncoder, RequestBuilder},
     telemetry::ComponentTelemetry,
@@ -93,7 +94,7 @@ impl DatadogApmStatsEncoderConfiguration {
     ///
     /// This struct reads only Saluki-private serializer fields (flush timeout, env) -- no ApmConfig
     /// fields -- so the native path delegates to `from_configuration` for now.
-    pub fn from_native(config: &GenericConfiguration) -> Result<Self, GenericError> {
+    pub fn from_native(_native: &TracesNativeConfig, config: &GenericConfiguration) -> Result<Self, GenericError> {
         Self::from_configuration(config)
     }
 

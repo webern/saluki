@@ -614,7 +614,7 @@ async fn add_baseline_traces_pipeline_to_blueprint(
     let apm_stats_transform_config = ApmStatsTransformConfiguration::from_native(&traces_native)
         .with_environment_provider(env_provider.clone())
         .await?;
-    let dd_apm_stats_encoder = DatadogApmStatsEncoderConfiguration::from_native(config)
+    let dd_apm_stats_encoder = DatadogApmStatsEncoderConfiguration::from_native(&traces_native, config)
         .error_context("Failed to configure Datadog APM Stats encoder.")?
         .with_environment_provider(env_provider.clone())
         .await?;

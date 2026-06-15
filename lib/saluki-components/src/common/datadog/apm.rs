@@ -329,6 +329,8 @@ impl ApmConfig {
 /// Built once by `build_traces_native_config` in the binary; consumed by the five trace components
 /// via their `from_native` constructors. Groups the shared `ApmConfig` and the OTLP sampling
 /// percentage that `TraceSamplerConfiguration` needs from the translated config.
+#[derive(Debug, Clone)]
+#[cfg_attr(test, derive(PartialEq))]
 pub struct TracesNativeConfig {
     /// Shared APM config (sampling, obfuscation, env, peer_tags, etc.) built once for all trace components.
     pub apm_config: ApmConfig,

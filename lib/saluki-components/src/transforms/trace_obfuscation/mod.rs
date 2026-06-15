@@ -46,7 +46,10 @@ impl TraceObfuscationConfiguration {
         Self::from_apm_configuration(config)
     }
 
-    /// Registry/test-only legacy path; removed when GenericConfiguration is confined to the translation layer in PR 11.
+    /// Creates a new `TraceObfuscationConfiguration` from the APM configuration section.
+    ///
+    /// Registry/test-only legacy path; this and `from_configuration` are both removed when
+    /// `GenericConfiguration` is confined to the translation layer in PR 11.
     pub fn from_apm_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
         let apm_config = ApmConfig::from_configuration(config)?;
         Ok(Self {

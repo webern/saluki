@@ -617,6 +617,15 @@ impl DogStatsDConfiguration {
         Ok(dogstatsd_config)
     }
 
+    /// Creates a new `DogStatsDConfiguration` from native config.
+    ///
+    /// Delegates to `from_configuration`; `total_config` is reserved for future native migration.
+    pub fn from_native(
+        _total_config: &datadog_agent_config::TotalSalukiConfiguration, config: &GenericConfiguration,
+    ) -> Result<Self, GenericError> {
+        Self::from_configuration(config)
+    }
+
     /// Gets both the `additional_tags` and any others specified by other configuration fields, such as `provider_kind`.
     fn additional_tags(&self) -> Vec<String> {
         if self.provider_kind.is_empty() {

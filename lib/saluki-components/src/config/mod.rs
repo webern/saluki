@@ -8,6 +8,8 @@ use figment::{
 };
 
 pub use self::mrf::MrfConfiguration;
+pub use crate::common::datadog::apm::{ApmConfig, TracesNativeConfig};
+pub use crate::common::otlp::config::NativeTracesPrivateConfig;
 
 /// Key aliases to pass to [`ConfigurationLoader::with_key_aliases`][saluki_config::ConfigurationLoader::with_key_aliases].
 ///

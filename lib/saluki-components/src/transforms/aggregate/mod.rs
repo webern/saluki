@@ -193,6 +193,15 @@ impl AggregateConfiguration {
         Ok(config.as_typed()?)
     }
 
+    /// Creates a new `AggregateConfiguration` from native config.
+    ///
+    /// Delegates to `from_configuration`; `total_config` is reserved for future native migration.
+    pub fn from_native(
+        _total_config: &datadog_agent_config::TotalSalukiConfiguration, config: &GenericConfiguration,
+    ) -> Result<Self, GenericError> {
+        Self::from_configuration(config)
+    }
+
     /// Creates a new `AggregateConfiguration` with default values.
     pub fn with_defaults() -> Self {
         Self {

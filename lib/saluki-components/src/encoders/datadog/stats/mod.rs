@@ -38,6 +38,7 @@ use tokio::{
 use tracing::{debug, error};
 
 use crate::common::datadog::{
+    apm::TracesNativeConfig,
     io::RB_BUFFER_CHUNK_SIZE,
     request_builder::{EndpointEncoder, RequestBuilder},
     telemetry::ComponentTelemetry,
@@ -80,13 +81,21 @@ pub struct DatadogApmStatsEncoderConfiguration {
 }
 
 impl DatadogApmStatsEncoderConfiguration {
-    /// Creates a new `DatadogApmStatsEncoderConfiguration` from the given configuration.
+    /// Registry/test-only legacy path; removed when GenericConfiguration is confined to the translation layer in PR 11.
     pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
         let mut stats_config: Self = config.as_typed()?;
         let app_details = saluki_metadata::get_app_details();
         stats_config.agent_version = format!("agent-data-plane/{}", app_details.version().raw());
 
         Ok(stats_config)
+    }
+
+    /// Creates a new `DatadogApmStatsEncoderConfiguration` from the given configuration.
+    ///
+    /// This struct reads only Saluki-private serializer fields (flush timeout, env) -- no ApmConfig
+    /// fields -- so the native path delegates to `from_configuration` for now.
+    pub fn from_native(_native: &TracesNativeConfig, config: &GenericConfiguration) -> Result<Self, GenericError> {
+        Self::from_configuration(config)
     }
 
     /// Sets the agent hostname using the environment provider.

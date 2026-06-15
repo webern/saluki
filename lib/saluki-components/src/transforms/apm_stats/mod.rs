@@ -28,7 +28,10 @@ use stringtheory::MetaString;
 use tokio::{select, time::interval};
 use tracing::{debug, error};
 
-use crate::common::{datadog::apm::ApmConfig, otlp::util::extract_container_tags_from_attributes_map};
+use crate::common::{
+    datadog::apm::{ApmConfig, TracesNativeConfig},
+    otlp::util::extract_container_tags_from_attributes_map,
+};
 
 mod aggregation;
 pub(crate) use self::aggregation::{process_tags_hash, PayloadAggregationKey};
@@ -61,7 +64,7 @@ pub struct ApmStatsTransformConfiguration {
 }
 
 impl ApmStatsTransformConfiguration {
-    /// Creates a new `ApmStatsTransformConfiguration` from the given configuration.
+    /// Registry/test-only legacy path; removed when GenericConfiguration is confined to the translation layer in PR 11.
     pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
         let apm_config = ApmConfig::from_configuration(config)?;
         Ok(Self {
@@ -69,6 +72,15 @@ impl ApmStatsTransformConfiguration {
             default_hostname: None,
             workload_provider: None,
         })
+    }
+
+    /// Creates a new `ApmStatsTransformConfiguration` from a pre-built native traces bundle.
+    pub fn from_native(native: &TracesNativeConfig) -> Self {
+        Self {
+            apm_config: native.apm_config.clone(),
+            default_hostname: None,
+            workload_provider: None,
+        }
     }
 
     /// Sets the default hostname using the environment provider.

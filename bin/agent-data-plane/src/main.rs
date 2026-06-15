@@ -23,6 +23,7 @@ use tracing::{error, info, warn};
 
 mod cli;
 use self::cli::*;
+use crate::config::BootstrapConfiguration;
 use crate::internal::logging::LoggingConfigurationTranslator;
 
 mod components;
@@ -60,19 +61,31 @@ async fn main() -> Result<(), GenericError> {
 
     // Load our "bootstrap" configuration -- static configuration on disk or from environment variables -- so we can
     // initialize basic subsystems before executing the given subcommand.
+    //
+    // Two views of the same source set are built here:
+    //   - `bootstrap_config`: a typed `BootstrapConfiguration` covering exactly the keys needed
+    //     before the Agent config stream is available. Used for the bootstrap-phase operations
+    //     (logging init, metrics level). This is the allowlisted pre-authority surface.
+    //   - `generic_config`: an untyped `GenericConfiguration` over the same sources. Forwarded to
+    //     `run_inner` for the runtime configuration path, which still reads many keys generically.
+    //     Will be eliminated when `GenericConfiguration` is confined to the translation system in
+    //     PR 11.
     let bootstrap_config_path = cli.config_file.unwrap_or_else(PlatformSettings::get_config_file_path);
-    let bootstrap_config = ConfigurationLoader::default()
+    let bootstrap_loader = ConfigurationLoader::default()
         .with_key_aliases(KEY_ALIASES)
         .from_yaml(&bootstrap_config_path)
         .error_context("Failed to load Datadog Agent configuration file during bootstrap.")?
         .add_providers([DatadogRemapper::new()])
         .from_environment(PlatformSettings::get_env_var_prefix())
-        .error_context("Environment variable prefix should not be empty.")?
-        .bootstrap_generic();
+        .error_context("Environment variable prefix should not be empty.")?;
 
-    // Translate the bootstrap configuration into ADP's logging configuration, applying ADP-specific rules
-    // (per-subagent log file key, never sharing a file with the Core Agent).
-    let bootstrap_logging_config = LoggingConfigurationTranslator::translate(&bootstrap_config)
+    let generic_config = bootstrap_loader.bootstrap_generic();
+    let bootstrap_config = BootstrapConfiguration::from_configuration(&generic_config)
+        .error_context("Failed to build typed bootstrap configuration.")?;
+
+    // Translate the typed bootstrap configuration into ADP's logging configuration, applying ADP-specific
+    // rules (per-subagent log file key, never sharing a file with the Core Agent).
+    let bootstrap_logging_config = LoggingConfigurationTranslator::from_bootstrap(&bootstrap_config)
         .error_context("Failed to translate logging configuration during bootstrap phase.")?;
 
     let metrics_default_level = parse_metrics_level(&bootstrap_config)?;
@@ -81,8 +94,8 @@ async fn main() -> Result<(), GenericError> {
     //
     // This initializes logging, metrics, allocator telemetry, TLS, and more. We get handled a guard that we need to
     // hold until the application is about to exit, which ensures things like flushing any buffered logs, and so on.
-    let bootstrapper = AppBootstrapper::from_configuration(&bootstrap_config)
-        .error_context("Failed to parse bootstrap configuration during bootstrap phase.")?
+    let bootstrapper = AppBootstrapper::new()
+        .error_context("Failed to initialize bootstrapper.")?
         .with_metrics_prefix("adp")
         .with_metrics_default_level(metrics_default_level)
         .with_logging_configuration(bootstrap_logging_config);
@@ -106,6 +119,7 @@ async fn main() -> Result<(), GenericError> {
         cli.action,
         started,
         bootstrap_config,
+        generic_config,
         &mut bootstrap_guard,
         bootstrap_supervisor,
     )
@@ -122,21 +136,16 @@ async fn main() -> Result<(), GenericError> {
     Ok(())
 }
 
-fn parse_metrics_level(config: &GenericConfiguration) -> Result<Level, GenericError> {
-    let raw = config
-        .try_get_typed::<String>("metrics_level")
-        .error_context("Failed to read `metrics_level`.")?;
-    match raw {
-        Some(value) => {
-            Level::try_from(value.as_str()).map_err(|e| generic_error!("Failed to parse `metrics_level`: {}", e))
-        }
+fn parse_metrics_level(config: &BootstrapConfiguration) -> Result<Level, GenericError> {
+    match config.metrics_level() {
+        Some(value) => Level::try_from(value).map_err(|e| generic_error!("Failed to parse `metrics_level`: {}", e)),
         None => Ok(Level::INFO),
     }
 }
 
 async fn run_inner(
-    action: Action, started: Instant, bootstrap_config: GenericConfiguration, bootstrap_guard: &mut BootstrapGuard,
-    bootstrap_supervisor: Supervisor,
+    action: Action, started: Instant, bootstrap_config: BootstrapConfiguration, generic_config: GenericConfiguration,
+    bootstrap_guard: &mut BootstrapGuard, bootstrap_supervisor: Supervisor,
 ) -> Result<Option<i32>, GenericError> {
     match action {
         Action::Run(cmd) => {
@@ -149,17 +158,24 @@ async fn run_inner(
                 }
             }
 
-            let exit_code =
-                match handle_run_command(started, bootstrap_config, bootstrap_guard, bootstrap_supervisor).await {
-                    Ok(()) => {
-                        info!("Agent Data Plane stopped.");
-                        None
-                    }
-                    Err(e) => {
-                        error!("{:?}", e);
-                        Some(1)
-                    }
-                };
+            let exit_code = match handle_run_command(
+                started,
+                bootstrap_config,
+                generic_config,
+                bootstrap_guard,
+                bootstrap_supervisor,
+            )
+            .await
+            {
+                Ok(()) => {
+                    info!("Agent Data Plane stopped.");
+                    None
+                }
+                Err(e) => {
+                    error!("{:?}", e);
+                    Some(1)
+                }
+            };
 
             // Remove the PID file, if configured.
             if let Some(pid_file) = &cmd.pid_file {
@@ -172,9 +188,9 @@ async fn run_inner(
                 return Ok(Some(exit_code));
             }
         }
-        Action::Debug(cmd) => handle_debug_command(&bootstrap_config, cmd).await,
-        Action::Config(_) => handle_config_command(&bootstrap_config).await,
-        Action::Dogstatsd(cmd) => handle_dogstatsd_command(&bootstrap_config, cmd).await,
+        Action::Debug(cmd) => handle_debug_command(&generic_config, cmd).await,
+        Action::Config(_) => handle_config_command(&generic_config).await,
+        Action::Dogstatsd(cmd) => handle_dogstatsd_command(&generic_config, cmd).await,
         Action::Version(v) => handle_version_command(v.json).await,
     }
 

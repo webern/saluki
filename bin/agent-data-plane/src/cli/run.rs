@@ -7,6 +7,7 @@ use std::{
 use argh::FromArgs;
 use datadog_agent_commons::platform::PlatformSettings;
 use datadog_agent_config::classifier::{ConfigClassifier, Pipeline, PipelineAffinity, Severity, SupportLevel};
+use datadog_agent_config::TotalSalukiConfiguration;
 use resource_accounting::{ComponentBounds, ComponentRegistry};
 use saluki_app::{
     accounting::{initialize_memory_bounds, MemoryBoundsConfiguration},
@@ -22,7 +23,7 @@ use saluki_components::{
         DatadogLogsConfiguration, DatadogMetricsConfiguration, DatadogServiceChecksConfiguration,
         DatadogTraceConfiguration,
     },
-    forwarders::{DatadogConfiguration, OtlpForwarderConfiguration},
+    forwarders::{DatadogForwarderConfiguration, OtlpForwarderConfiguration},
     relays::otlp::OtlpRelayConfiguration,
     sources::{ChecksIPCConfiguration, DogStatsDConfiguration, OtlpConfiguration},
     transforms::{
@@ -40,6 +41,12 @@ use saluki_error::{generic_error, ErrorContext as _, GenericError};
 use tracing::{debug, error, info, trace, warn};
 
 use crate::{
+    cli::otlp_native::{build_otlp_native_config, build_total_config, OtlpNativeConfig},
+    cli::traces_native::build_traces_native_config,
+    config::{BootstrapConfiguration, DataPlaneConfiguration},
+    internal::env::ADPEnvironmentProvider,
+};
+use crate::{
     components::{
         apm_onboarding::ApmOnboardingConfiguration,
         dogstatsd_post_aggregate_filter::DogStatsDPostAggregateFilterConfiguration,
@@ -52,7 +59,6 @@ use crate::{
         DogStatsDControlSurface, TopologyControlSurfaces,
     },
 };
-use crate::{config::DataPlaneConfiguration, internal::env::ADPEnvironmentProvider};
 
 /// Runs the data plane.
 #[derive(FromArgs, Debug)]
@@ -65,8 +71,8 @@ pub struct RunCommand {
 
 /// Entrypoint for the `run` commands.
 pub async fn handle_run_command(
-    started: Instant, bootstrap_config: GenericConfiguration, bootstrap_guard: &mut BootstrapGuard,
-    bootstrap_supervisor: Supervisor,
+    started: Instant, bootstrap_config: BootstrapConfiguration, generic_config: GenericConfiguration,
+    bootstrap_guard: &mut BootstrapGuard, bootstrap_supervisor: Supervisor,
 ) -> Result<(), GenericError> {
     let app_details = saluki_metadata::get_app_details();
     info!(
@@ -78,23 +84,30 @@ pub async fn handle_run_command(
         "Agent Data Plane starting..."
     );
 
-    // Load our "bootstrap" configuration.
+    // Parse the data plane configuration from the generic bootstrap config.
+    //
+    // This parse survives the bootstrap typing because of its runtime-config role, NOT for bootstrap
+    // gating: in standalone / non-dynamic mode this `bootstrap_dp_config` becomes the runtime
+    // `dp_config` that flows into the whole topology (see the `_ =>` arm below). The bootstrap GATE
+    // decisions are read from the typed `BootstrapConfiguration` instead.
+    let bootstrap_dp_config = DataPlaneConfiguration::from_configuration(&generic_config)
+        .error_context("Failed to load data plane configuration.")?;
+
+    // Bootstrap gate decisions, read from the typed pre-authority `BootstrapConfiguration`.
     //
     // If remote agent mode is enabled, we'll register as a remote agent, which will unlock the ability to receive
     // configuration updates from the Core Agent, which we'll use to build our final, updated configuration. Otherwise,
     // we keep the bootstrap configuration and use it as-is.
-    let bootstrap_dp_config = DataPlaneConfiguration::from_configuration(&bootstrap_config)
-        .error_context("Failed to load data plane configuration.")?;
-
-    let in_standalone_mode = bootstrap_dp_config.standalone_mode();
-    let remote_agent_enabled = bootstrap_dp_config.remote_agent_enabled();
-    let use_new_config_stream_endpoint = bootstrap_dp_config.use_new_config_stream_endpoint();
+    let in_standalone_mode = bootstrap_config.standalone_mode();
+    let remote_agent_enabled = bootstrap_config.remote_agent_enabled();
+    let use_new_config_stream_endpoint = bootstrap_config.use_new_config_stream_endpoint();
     let should_bootstrap_remote_agent = !in_standalone_mode && (remote_agent_enabled || use_new_config_stream_endpoint);
 
     let ra_bootstrap = if should_bootstrap_remote_agent {
-        let ra_bootstrap = RemoteAgentBootstrap::from_configuration(&bootstrap_config, &bootstrap_dp_config)
-            .await
-            .error_context("Failed to bootstrap remote agent state.")?;
+        let ra_bootstrap =
+            RemoteAgentBootstrap::from_configuration(&generic_config, bootstrap_config.secure_api_listen_address())
+                .await
+                .error_context("Failed to bootstrap remote agent state.")?;
 
         Some(ra_bootstrap)
     } else {
@@ -143,8 +156,9 @@ pub async fn handle_run_command(
             (dynamic_config, dynamic_dp_config)
         }
 
-        // If dynamic configuration is disabled, the bootstrap configuration is already the complete and final configuration.
-        _ => (bootstrap_config, bootstrap_dp_config),
+        // If dynamic configuration is disabled, the generic bootstrap configuration is already the complete and final
+        // configuration.
+        _ => (generic_config, bootstrap_dp_config),
     };
 
     if !in_standalone_mode && !dp_config.enabled() {
@@ -155,6 +169,14 @@ pub async fn handle_run_command(
     let active_pipelines = active_pipelines(&dp_config);
     check_and_warn_config(&config, &active_pipelines).error_context("Incompatible configuration detected.")?;
 
+    // Translate the resolved Datadog configuration into native Saluki config, once, here at the
+    // translation boundary. This runs unconditionally regardless of which pipelines are enabled: the
+    // translator is pure and cheap, and threading the whole `TotalSalukiConfiguration` (rather than a
+    // single per-pipeline slice) is the template the later migration PRs follow as each component
+    // moves off `GenericConfiguration`. OTLP is the first such consumer (config-translation PR 4); it
+    // reads `total_config.otlp`. Every other component still resolves from `GenericConfiguration`.
+    let total_config = build_total_config(&config).error_context("Failed to translate Datadog configuration.")?;
+
     // Set up all of the building blocks for building our topologies and launching internal processes.
     let component_registry = ComponentRegistry::default();
     let health_registry = HealthRegistry::new();
@@ -163,7 +185,7 @@ pub async fn handle_run_command(
 
     // Create the blueprint for our primary topology.
     let (mut blueprint, control_surfaces) =
-        create_topology(&config, &dp_config, &env_provider, &component_registry).await?;
+        create_topology(&config, &dp_config, &env_provider, &component_registry, &total_config).await?;
 
     // Create the internal supervisor which drives our control plane and internal observability.
     let mut internal_supervisor = create_internal_supervisor(
@@ -174,6 +196,7 @@ pub async fn handle_run_command(
         control_surfaces,
         ra_bootstrap,
         bootstrap_guard.logging().controller(),
+        &total_config,
     )
     .await
     .error_context("Failed to create internal supervisor.")?;
@@ -357,7 +380,7 @@ fn is_a_pipeline_affected(active_pipelines: &HashSet<Pipeline>, pipeline_affinit
 
 async fn create_topology(
     config: &GenericConfiguration, dp_config: &DataPlaneConfiguration, env_provider: &ADPEnvironmentProvider,
-    component_registry: &ComponentRegistry,
+    component_registry: &ComponentRegistry, total_config: &TotalSalukiConfiguration,
 ) -> Result<(TopologyBlueprint, TopologyControlSurfaces), GenericError> {
     let mut blueprint = TopologyBlueprint::new("primary", component_registry);
     let mut control_surfaces = TopologyControlSurfaces::default();
@@ -382,29 +405,30 @@ async fn create_topology(
         || dp_config.service_checks_pipeline_required()
         || dp_config.traces_pipeline_required()
     {
-        let dd_forwarder_config =
-            DatadogConfiguration::from_configuration(config).error_context("Failed to configure Datadog forwarder.")?;
+        let dd_forwarder_config = DatadogForwarderConfiguration::from_native(total_config, config)
+            .error_context("Failed to configure Datadog forwarder.")?;
         blueprint.add_forwarder("dd_out", dd_forwarder_config)?;
     }
 
     if dp_config.metrics_pipeline_required() {
-        add_baseline_metrics_pipeline_to_blueprint(&mut blueprint, config, dp_config, env_provider).await?;
+        add_baseline_metrics_pipeline_to_blueprint(&mut blueprint, config, dp_config, env_provider, total_config)
+            .await?;
     }
 
     if dp_config.logs_pipeline_required() {
-        add_baseline_logs_pipeline_to_blueprint(&mut blueprint, config).await?;
+        add_baseline_logs_pipeline_to_blueprint(&mut blueprint, config, total_config).await?;
     }
 
     if dp_config.events_pipeline_required() {
-        add_baseline_events_pipeline_to_blueprint(&mut blueprint, config).await?;
+        add_baseline_events_pipeline_to_blueprint(&mut blueprint, config, total_config).await?;
     }
 
     if dp_config.service_checks_pipeline_required() {
-        add_baseline_service_checks_pipeline_to_blueprint(&mut blueprint, config).await?;
+        add_baseline_service_checks_pipeline_to_blueprint(&mut blueprint, config, total_config).await?;
     }
 
     if dp_config.traces_pipeline_required() {
-        add_baseline_traces_pipeline_to_blueprint(&mut blueprint, config, env_provider).await?;
+        add_baseline_traces_pipeline_to_blueprint(&mut blueprint, config, env_provider, total_config).await?;
     }
 
     // Now we move on to our actual data pipelines.
@@ -413,12 +437,19 @@ async fn create_topology(
     }
 
     if dp_config.dogstatsd().enabled() {
-        let dsd_control_surface = add_dsd_pipeline_to_blueprint(&mut blueprint, config, env_provider).await?;
+        let dsd_control_surface =
+            add_dsd_pipeline_to_blueprint(&mut blueprint, config, env_provider, total_config).await?;
         control_surfaces.attach_dogstatsd(dsd_control_surface);
     }
 
     if dp_config.otlp().enabled() {
-        add_otlp_pipeline_to_blueprint(&mut blueprint, config, dp_config, env_provider)?;
+        // OTLP being enabled gates whether the pipeline is BUILT, not whether translation ran:
+        // `total_config` was translated unconditionally at the run-path boundary. We assemble the OTLP
+        // boot bundle (the translated `total_config.otlp` slice plus the Saluki-private OTLP knobs) only
+        // here, where it is actually consumed.
+        let otlp_native_config = build_otlp_native_config(total_config, config)
+            .error_context("Failed to build native OTLP configuration.")?;
+        add_otlp_pipeline_to_blueprint(&mut blueprint, dp_config, env_provider, &otlp_native_config)?;
     }
 
     Ok((blueprint, control_surfaces))
@@ -441,7 +472,7 @@ async fn add_checks_pipeline_to_blueprint(
 
 async fn add_baseline_metrics_pipeline_to_blueprint(
     blueprint: &mut TopologyBlueprint, config: &GenericConfiguration, dp_config: &DataPlaneConfiguration,
-    env_provider: &ADPEnvironmentProvider,
+    env_provider: &ADPEnvironmentProvider, total_config: &TotalSalukiConfiguration,
 ) -> Result<(), GenericError> {
     // Create the back half of the metrics processing pipeline.
     let host_enrichment_config = HostEnrichmentConfiguration::from_environment_provider(env_provider.clone());
@@ -453,7 +484,7 @@ async fn add_baseline_metrics_pipeline_to_blueprint(
         metrics_enrich_config = metrics_enrich_config.with_transform_builder("host_tags", host_tags_config);
     }
 
-    let dd_metrics_config = DatadogMetricsConfiguration::from_configuration(config)
+    let dd_metrics_config = DatadogMetricsConfiguration::from_native(total_config, config)
         .error_context("Failed to configure Datadog Metrics encoder.")?;
 
     blueprint
@@ -463,15 +494,15 @@ async fn add_baseline_metrics_pipeline_to_blueprint(
         // Metrics, then forwarding.
         .connect_components_in_order(["metrics_enrich", "dd_metrics_encode", "dd_out"])?;
 
-    add_mrf_metrics_pipeline_to_blueprint(blueprint, config)?;
+    add_mrf_metrics_pipeline_to_blueprint(blueprint, config, total_config)?;
 
     Ok(())
 }
 
 fn add_mrf_metrics_pipeline_to_blueprint(
-    blueprint: &mut TopologyBlueprint, config: &GenericConfiguration,
+    blueprint: &mut TopologyBlueprint, config: &GenericConfiguration, total_config: &TotalSalukiConfiguration,
 ) -> Result<(), GenericError> {
-    let mrf_config = MrfConfiguration::from_configuration(config)
+    let mrf_config = MrfConfiguration::from_native(total_config, config)
         .error_context("Failed to configure Multi-Region Failover metrics pipeline.")?;
 
     let Some((mrf_dd_url, mrf_api_key)) = mrf_config.metrics_endpoint_override() else {
@@ -488,10 +519,10 @@ fn add_mrf_metrics_pipeline_to_blueprint(
     };
 
     let mrf_gateway_config = MrfMetricsGatewayConfiguration::new(mrf_config.clone(), config.clone());
-    let mrf_metrics_config = DatadogMetricsConfiguration::from_configuration(config)
+    let mrf_metrics_config = DatadogMetricsConfiguration::from_native(total_config, config)
         .error_context("Failed to configure Multi-Region Failover Datadog Metrics encoder.")?;
 
-    let mrf_forwarder_config = DatadogConfiguration::from_configuration(config)
+    let mrf_forwarder_config = DatadogForwarderConfiguration::from_native(total_config, config)
         .map(|config| {
             config.with_endpoint_override_and_api_key_refresh_config_path(
                 mrf_dd_url,
@@ -516,10 +547,10 @@ fn add_mrf_metrics_pipeline_to_blueprint(
 }
 
 async fn add_baseline_logs_pipeline_to_blueprint(
-    blueprint: &mut TopologyBlueprint, config: &GenericConfiguration,
+    blueprint: &mut TopologyBlueprint, config: &GenericConfiguration, total_config: &TotalSalukiConfiguration,
 ) -> Result<(), GenericError> {
     // Create the back half of the logs processing pipeline.
-    let dd_logs_config = DatadogLogsConfiguration::from_configuration(config)
+    let dd_logs_config = DatadogLogsConfiguration::from_native(total_config, config)
         .map(BufferedIncrementalConfiguration::from_encoder_builder)
         .error_context("Failed to configure Datadog Logs encoder.")?;
 
@@ -533,9 +564,9 @@ async fn add_baseline_logs_pipeline_to_blueprint(
 }
 
 async fn add_baseline_events_pipeline_to_blueprint(
-    blueprint: &mut TopologyBlueprint, config: &GenericConfiguration,
+    blueprint: &mut TopologyBlueprint, config: &GenericConfiguration, total_config: &TotalSalukiConfiguration,
 ) -> Result<(), GenericError> {
-    let dd_events_config = DatadogEventsConfiguration::from_configuration(config)
+    let dd_events_config = DatadogEventsConfiguration::from_native(total_config, config)
         .map(BufferedIncrementalConfiguration::from_encoder_builder)
         .error_context("Failed to configure Datadog Events encoder.")?;
 
@@ -547,9 +578,9 @@ async fn add_baseline_events_pipeline_to_blueprint(
 }
 
 async fn add_baseline_service_checks_pipeline_to_blueprint(
-    blueprint: &mut TopologyBlueprint, config: &GenericConfiguration,
+    blueprint: &mut TopologyBlueprint, config: &GenericConfiguration, total_config: &TotalSalukiConfiguration,
 ) -> Result<(), GenericError> {
-    let dd_service_checks_config = DatadogServiceChecksConfiguration::from_configuration(config)
+    let dd_service_checks_config = DatadogServiceChecksConfiguration::from_native(total_config, config)
         .map(BufferedIncrementalConfiguration::from_encoder_builder)
         .error_context("Failed to configure Datadog Service Checks encoder.")?;
 
@@ -562,14 +593,17 @@ async fn add_baseline_service_checks_pipeline_to_blueprint(
 
 async fn add_baseline_traces_pipeline_to_blueprint(
     blueprint: &mut TopologyBlueprint, config: &GenericConfiguration, env_provider: &ADPEnvironmentProvider,
+    total_config: &TotalSalukiConfiguration,
 ) -> Result<(), GenericError> {
-    let dd_traces_config = DatadogTraceConfiguration::from_configuration(config)
+    let traces_native =
+        build_traces_native_config(total_config, config).error_context("Failed to build native traces config.")?;
+
+    let dd_traces_config = DatadogTraceConfiguration::from_native(&traces_native, config)
         .error_context("Failed to configure Datadog Traces encoder.")?
         .with_environment_provider(env_provider.clone())
         .await?;
-    let trace_obfuscation_config = TraceObfuscationConfiguration::from_apm_configuration(config)?;
-    let trace_sampler_config = TraceSamplerConfiguration::from_configuration(config)
-        .error_context("Failed to configure Trace Sampler transform.")?;
+    let trace_obfuscation_config = TraceObfuscationConfiguration::from_native(&traces_native);
+    let trace_sampler_config = TraceSamplerConfiguration::from_native(&traces_native);
     let ottl_filter_config = OttlFilterConfiguration::from_configuration(config)
         .error_context("Failed to configure OTTL filter processor.")?;
     let ottl_transform_config = OttlTransformConfiguration::from_configuration(config)
@@ -580,11 +614,10 @@ async fn add_baseline_traces_pipeline_to_blueprint(
         .with_transform_builder("apm_onboarding", ApmOnboardingConfiguration)
         .with_transform_builder("trace_obfuscation", trace_obfuscation_config)
         .with_transform_builder("trace_sampler", trace_sampler_config);
-    let apm_stats_transform_config = ApmStatsTransformConfiguration::from_configuration(config)
-        .error_context("Failed to configure APM Stats transform.")?
+    let apm_stats_transform_config = ApmStatsTransformConfiguration::from_native(&traces_native)
         .with_environment_provider(env_provider.clone())
         .await?;
-    let dd_apm_stats_encoder = DatadogApmStatsEncoderConfiguration::from_configuration(config)
+    let dd_apm_stats_encoder = DatadogApmStatsEncoderConfiguration::from_native(&traces_native, config)
         .error_context("Failed to configure Datadog APM Stats encoder.")?
         .with_environment_provider(env_provider.clone())
         .await?;
@@ -603,6 +636,7 @@ async fn add_baseline_traces_pipeline_to_blueprint(
 
 async fn add_dsd_pipeline_to_blueprint(
     blueprint: &mut TopologyBlueprint, config: &GenericConfiguration, env_provider: &ADPEnvironmentProvider,
+    total_config: &TotalSalukiConfiguration,
 ) -> Result<DogStatsDControlSurface, GenericError> {
     // We're creating the "front half" of the DogStatsD pipeline, which deals solely with accepting DogStatsD payloads,
     // and enriching/processing them in DSD-specific ways, relevant to how the Datadog Agent is expected to behave.
@@ -639,19 +673,19 @@ async fn add_dsd_pipeline_to_blueprint(
     //    │    (destination)    │    │                       (Datadog Platform)                        │
     //    └─────────────────────┘    └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘
 
-    let dsd_config = DogStatsDConfiguration::from_configuration(config)
+    let dsd_config = DogStatsDConfiguration::from_native(total_config, config)
         .error_context("Failed to configure DogStatsD source.")?
         .with_workload_provider(env_provider.workload().clone())
         .with_capture_entity_resolver(env_provider.workload().clone());
-    let dsd_prefix_filter_configuration = DogStatsDPrefixFilterConfiguration::from_configuration(config)?;
-    let dsd_mapper_config = DogStatsDMapperConfiguration::from_configuration(config)?;
+    let dsd_prefix_filter_configuration = DogStatsDPrefixFilterConfiguration::from_native(total_config, config)?;
+    let dsd_mapper_config = DogStatsDMapperConfiguration::from_native(total_config, config)?;
     let dsd_enrich_config =
         ChainedConfiguration::default().with_transform_builder("dogstatsd_mapper", dsd_mapper_config);
-    let dsd_tag_filterlist_config = TagFilterlistConfiguration::from_configuration(config)
+    let dsd_tag_filterlist_config = TagFilterlistConfiguration::from_native(total_config, config)
         .error_context("Failed to configure metric tag filterlist transform.")?;
-    let dsd_agg_config =
-        AggregateConfiguration::from_configuration(config).error_context("Failed to configure aggregate transform.")?;
-    let dsd_post_agg_filter_config = DogStatsDPostAggregateFilterConfiguration::from_configuration(config)
+    let dsd_agg_config = AggregateConfiguration::from_native(total_config, config)
+        .error_context("Failed to configure aggregate transform.")?;
+    let dsd_post_agg_filter_config = DogStatsDPostAggregateFilterConfiguration::from_native(total_config, config)
         .error_context("Failed to configure DogStatsD post-aggregate filter transform.")?;
     let events_enrich_config = ChainedConfiguration::default().with_transform_builder(
         "host_enrichment",
@@ -661,7 +695,8 @@ async fn add_dsd_pipeline_to_blueprint(
         "host_enrichment",
         HostEnrichmentConfiguration::from_environment_provider(env_provider.clone()),
     );
-    let dsd_debug_log_config = DogStatsDDebugLogConfiguration::from_configuration(
+    let dsd_debug_log_config = DogStatsDDebugLogConfiguration::from_native(
+        total_config,
         config,
         PlatformSettings::get_default_dogstatsd_log_file_path(),
     )
@@ -718,9 +753,14 @@ async fn add_dsd_pipeline_to_blueprint(
 }
 
 fn add_otlp_pipeline_to_blueprint(
-    blueprint: &mut TopologyBlueprint, config: &GenericConfiguration, dp_config: &DataPlaneConfiguration,
-    env_provider: &ADPEnvironmentProvider,
+    blueprint: &mut TopologyBlueprint, dp_config: &DataPlaneConfiguration, env_provider: &ADPEnvironmentProvider,
+    otlp_native_config: &OtlpNativeConfig,
 ) -> Result<(), GenericError> {
+    // All OTLP components are built from native translated config (config-translation PR 4); none of
+    // them consume `GenericConfiguration` here. The native slice and the Saluki-private OTLP knobs were
+    // assembled once at the translation boundary in the run path.
+    let native_otlp = &otlp_native_config.otlp;
+
     if dp_config.otlp().proxy().enabled() {
         let core_agent_otlp_grpc_endpoint = dp_config.otlp().proxy().core_agent_otlp_grpc_endpoint().to_string();
         let proxy_metrics = dp_config.otlp().proxy().proxy_metrics();
@@ -735,11 +775,11 @@ fn add_otlp_pipeline_to_blueprint(
             "OTLP proxy mode enabled. Select OTLP payloads will be proxied to the Core Agent."
         );
 
-        let otlp_relay_config = OtlpRelayConfiguration::from_configuration(config)?;
-        let otlp_decoder_config = OtlpDecoderConfiguration::from_configuration(config)?;
+        let otlp_relay_config = OtlpRelayConfiguration::from_native(native_otlp);
+        let otlp_decoder_config = OtlpDecoderConfiguration::from_native(native_otlp, otlp_native_config.traces_private);
 
         let local_agent_otlp_forwarder_config =
-            OtlpForwarderConfiguration::from_configuration(config, core_agent_otlp_grpc_endpoint)?;
+            OtlpForwarderConfiguration::from_native(native_otlp, core_agent_otlp_grpc_endpoint);
 
         blueprint
             // Components.
@@ -759,8 +799,15 @@ fn add_otlp_pipeline_to_blueprint(
     } else {
         info!("OTLP proxy mode disabled. OTLP signals will be handled natively.");
 
-        let otlp_config =
-            OtlpConfiguration::from_configuration(config)?.with_workload_provider(env_provider.workload().clone());
+        let otlp_config = OtlpConfiguration::from_native(
+            native_otlp,
+            otlp_native_config.context_interner_bytes,
+            otlp_native_config.cached_contexts_limit,
+            otlp_native_config.cached_tagsets_limit,
+            otlp_native_config.allow_context_heap_allocs,
+            otlp_native_config.traces_private,
+        )?
+        .with_workload_provider(env_provider.workload().clone());
 
         blueprint
             // Components.

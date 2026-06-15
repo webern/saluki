@@ -39,7 +39,8 @@ mod signature;
 
 use self::probabilistic::PROB_RATE_KEY;
 use crate::common::datadog::{
-    apm::ApmConfig, sample_by_rate, DECISION_MAKER_MANUAL, DECISION_MAKER_PROBABILISTIC, OTEL_TRACE_ID_META_KEY,
+    apm::{ApmConfig, TracesNativeConfig},
+    sample_by_rate, DECISION_MAKER_MANUAL, DECISION_MAKER_PROBABILISTIC, OTEL_TRACE_ID_META_KEY,
     SAMPLING_PRIORITY_METRIC_KEY, TAG_DECISION_MAKER,
 };
 use crate::common::otlp::config::TracesConfig;
@@ -73,7 +74,7 @@ pub struct TraceSamplerConfiguration {
 }
 
 impl TraceSamplerConfiguration {
-    /// Creates a new `TraceSamplerConfiguration` from the given configuration.
+    /// Registry/test-only legacy path; removed when GenericConfiguration is confined to the translation layer in PR 11.
     pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
         let apm_config = ApmConfig::from_configuration(config)?;
         let otlp_traces: TracesConfig = config.try_get_typed("otlp_config.traces")?.unwrap_or_default();
@@ -82,6 +83,15 @@ impl TraceSamplerConfiguration {
             apm_config,
             otlp_sampling_rate,
         })
+    }
+
+    /// Creates a new `TraceSamplerConfiguration` from a pre-built native traces bundle.
+    pub fn from_native(native: &TracesNativeConfig) -> Self {
+        let otlp_sampling_rate = normalize_sampling_rate(native.otlp_traces_sampling_percentage / 100.0);
+        Self {
+            apm_config: native.apm_config.clone(),
+            otlp_sampling_rate,
+        }
     }
 }
 

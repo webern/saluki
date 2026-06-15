@@ -27,7 +27,7 @@ use serde::Deserialize;
 use stringtheory::MetaString;
 
 pub use self::obfuscator::{tags, ObfuscationConfig, Obfuscator};
-use crate::common::datadog::apm::ApmConfig;
+use crate::common::datadog::apm::{ApmConfig, TracesNativeConfig};
 
 const TEXT_NON_PARSABLE_SQL: &str = "Non-parsable SQL query";
 
@@ -41,17 +41,27 @@ pub struct TraceObfuscationConfiguration {
 }
 
 impl TraceObfuscationConfiguration {
-    /// Creates a new `TraceObfuscationConfiguration` from the given generic configuration.
+    /// Registry/test-only legacy path; removed when GenericConfiguration is confined to the translation layer in PR 11.
     pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
         Self::from_apm_configuration(config)
     }
 
     /// Creates a new `TraceObfuscationConfiguration` from the APM configuration section.
+    ///
+    /// Registry/test-only legacy path; this and `from_configuration` are both removed when
+    /// `GenericConfiguration` is confined to the translation layer in PR 11.
     pub fn from_apm_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
         let apm_config = ApmConfig::from_configuration(config)?;
         Ok(Self {
             config: apm_config.obfuscation().clone(),
         })
+    }
+
+    /// Creates a new `TraceObfuscationConfiguration` from a pre-built native traces bundle.
+    pub fn from_native(native: &TracesNativeConfig) -> Self {
+        Self {
+            config: native.apm_config.obfuscation().clone(),
+        }
     }
 
     /// Creates a new `TraceObfuscationConfiguration` with default settings.

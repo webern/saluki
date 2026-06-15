@@ -11,7 +11,6 @@ use otlp_protos::opentelemetry::proto::collector::trace::v1::{
 use prost::Message;
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
 use saluki_common::buf::FrozenChunkedBytesBuffer;
-use saluki_config::GenericConfiguration;
 use saluki_core::data_model::payload::Payload;
 use saluki_core::{
     components::{forwarders::*, ComponentContext},
@@ -36,17 +35,16 @@ pub struct OtlpForwarderConfiguration {
 }
 
 impl OtlpForwarderConfiguration {
-    /// Creates a new `OtlpForwarderConfiguration` from the given configuration.
-    pub fn from_configuration(
-        config: &GenericConfiguration, core_agent_otlp_grpc_endpoint: String,
-    ) -> Result<Self, GenericError> {
-        let core_agent_traces_internal_port = config
-            .try_get_typed("otlp_config.traces.internal_port")?
-            .unwrap_or(5003);
-        Ok(Self {
+    /// Creates a new `OtlpForwarderConfiguration` from native translated config.
+    ///
+    /// The trace-forwarding port (`otlp_config.traces.internal_port`) is a Datadog-schema key carried
+    /// in `otlp`. The Core Agent OTLP gRPC endpoint is supplied by the caller from the data-plane proxy
+    /// configuration rather than from a Datadog-schema key.
+    pub fn from_native(otlp: &datadog_agent_config::OtlpConfig, core_agent_otlp_grpc_endpoint: String) -> Self {
+        Self {
             core_agent_otlp_grpc_endpoint,
-            core_agent_traces_internal_port,
-        })
+            core_agent_traces_internal_port: otlp.traces_internal_port,
+        }
     }
 }
 

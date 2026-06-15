@@ -1,10 +1,39 @@
 //! Shared OTLP receiver configuration.
 
 use bytesize::ByteSize;
+use datadog_agent_config::OtlpConfig as NativeOtlpConfig;
 use facet::Facet;
-use saluki_config::GenericConfiguration;
-use saluki_error::GenericError;
 use serde::Deserialize;
+
+/// Saluki-private OTLP traces knobs that are not part of the Datadog Agent schema.
+///
+/// These keys (`otlp_config.traces.string_interner_size`,
+/// `otlp_config.traces.ignore_missing_datadog_fields`,
+/// `otlp_config.traces.enable_otlp_compute_top_level_by_span_kind`) are consumed by the OTLP traces
+/// translator but are not in the vendored Datadog schema, so they have no destination in
+/// `datadog_agent_config::OtlpConfig`. Until they move to `SalukiPrivateConfiguration` (a later
+/// migration PR), the run.rs caller reads them from `GenericConfiguration` and passes them into the
+/// native OTLP constructors via this struct. This keeps the migrated constructors free of any
+/// `GenericConfiguration` dependency while preserving the existing behavior of these knobs.
+#[derive(Clone, Copy, Debug)]
+pub struct NativeTracesPrivateConfig {
+    /// `otlp_config.traces.string_interner_size`: interner capacity for the traces translator.
+    pub string_interner_bytes: ByteSize,
+    /// `otlp_config.traces.ignore_missing_datadog_fields`: skip OTLP-semantic-convention fallback.
+    pub ignore_missing_datadog_fields: bool,
+    /// `otlp_config.traces.enable_otlp_compute_top_level_by_span_kind`: derive top-level by span kind.
+    pub enable_otlp_compute_top_level_by_span_kind: bool,
+}
+
+impl Default for NativeTracesPrivateConfig {
+    fn default() -> Self {
+        Self {
+            string_interner_bytes: default_traces_string_interner_size(),
+            ignore_missing_datadog_fields: false,
+            enable_otlp_compute_top_level_by_span_kind: default_enable_otlp_compute_top_level_by_span_kind(),
+        }
+    }
+}
 
 fn default_grpc_endpoint() -> String {
     "0.0.0.0:4317".to_string()
@@ -131,6 +160,48 @@ pub struct OtlpConfig {
     /// Traces-specific OTLP configuration.
     #[serde(default)]
     pub traces: TracesConfig,
+}
+
+impl OtlpConfig {
+    /// Builds the component OTLP config from native translated config plus the Saluki-private traces
+    /// knobs.
+    ///
+    /// `native` carries the Datadog-schema OTLP keys (receiver endpoints/transport/size, the
+    /// metrics/logs/traces enable flags, the traces internal port, and the env-resolved probabilistic
+    /// sampling percentage). `traces_private` carries the non-schema traces knobs the run.rs caller
+    /// reads from `GenericConfiguration` (see [`NativeTracesPrivateConfig`]).
+    ///
+    /// The receiver HTTP transport is not a Datadog-schema key, so it is fixed to `tcp` here, matching
+    /// the component default and the only transport the OTLP servers support.
+    ///
+    /// The `metrics`/`logs`/`traces` `enabled` flags are carried verbatim from `native`. The resolved
+    /// default for OTLP logs (on, matching legacy ADP) is preserved at the translation boundary in the
+    /// run path (`cli::otlp_native::build_total_config` folds `otlp_config.logs.enabled = true` when the
+    /// operator leaves it unset), NOT here: this constructor simply reflects whatever `native` carries.
+    pub fn from_native(native: &NativeOtlpConfig, traces_private: NativeTracesPrivateConfig) -> Self {
+        Self {
+            receiver: Receiver {
+                protocols: Protocols {
+                    grpc: GrpcConfig {
+                        endpoint: native.grpc.endpoint.clone(),
+                        transport: native.grpc.transport.clone(),
+                        max_recv_msg_size_mib: native.grpc.max_recv_msg_size_mib,
+                    },
+                    http: HttpConfig {
+                        endpoint: native.http.endpoint.clone(),
+                        transport: default_transport(),
+                    },
+                },
+            },
+            metrics: MetricsConfig {
+                enabled: native.metrics_enabled,
+            },
+            logs: LogsConfig {
+                enabled: native.logs_enabled,
+            },
+            traces: TracesConfig::from_native(native, traces_private),
+        }
+    }
 }
 
 /// Configuration for OTLP logs processing.
@@ -271,21 +342,27 @@ fn default_traces_enabled() -> bool {
 }
 
 impl TracesConfig {
-    /// Applies env var overrides for keys whose `DD_`-stripped flat form can't reach the nested
-    /// struct through normal serde deserialization.
+    /// Builds the component traces config from native translated config plus Saluki-private knobs.
     ///
-    /// `DD_OTLP_CONFIG_TRACES_PROBABILISTIC_SAMPLER_SAMPLING_PERCENTAGE` strips to flat Figment key
-    /// `otlp_config_traces_probabilistic_sampler_sampling_percentage`. KEY_ALIASES ensures YAML and
-    /// env var land on the same key, but a nested struct can't see a flat key—so we read it
-    /// explicitly and override.
-    pub(crate) fn apply_env_overrides(&mut self, config: &GenericConfiguration) -> Result<(), GenericError> {
-        if let Some(pct) =
-            config.try_get_typed::<f64>("otlp_config_traces_probabilistic_sampler_sampling_percentage")?
-        {
-            self.probabilistic_sampler.sampling_percentage = pct;
+    /// The schema keys (`enabled`, `internal_port`, and the probabilistic sampler percentage) come
+    /// from `native`; the sampling percentage there already reflects any
+    /// `DD_OTLP_CONFIG_TRACES_PROBABILISTIC_SAMPLER_SAMPLING_PERCENTAGE` env override applied at the
+    /// translation boundary (see `bin/agent-data-plane` run path), so no separate env-override step
+    /// is needed on the migrated path. The
+    /// non-schema knobs come from `private`.
+    pub fn from_native(native: &NativeOtlpConfig, private: NativeTracesPrivateConfig) -> Self {
+        Self {
+            enabled: native.traces_enabled,
+            ignore_missing_datadog_fields: private.ignore_missing_datadog_fields,
+            enable_otlp_compute_top_level_by_span_kind: private.enable_otlp_compute_top_level_by_span_kind,
+            probabilistic_sampler: ProbabilisticSampler {
+                sampling_percentage: native.traces_sampling_percentage,
+            },
+            string_interner_bytes: private.string_interner_bytes,
+            internal_port: native.traces_internal_port,
         }
-        Ok(())
     }
+
 }
 
 impl Default for TracesConfig {

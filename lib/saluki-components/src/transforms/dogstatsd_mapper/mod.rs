@@ -352,6 +352,15 @@ impl DogStatsDMapperConfiguration {
     pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
         Ok(config.as_typed()?)
     }
+
+    /// Creates a new `DogStatsDMapperConfiguration` from native config.
+    ///
+    /// Delegates to `from_configuration`; `total_config` is reserved for future native migration.
+    pub fn from_native(
+        _total_config: &datadog_agent_config::TotalSalukiConfiguration, config: &GenericConfiguration,
+    ) -> Result<Self, GenericError> {
+        Self::from_configuration(config)
+    }
 }
 
 #[async_trait]

@@ -15,7 +15,6 @@ use prost::Message;
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
 use saluki_common::sync::shutdown::{ShutdownCoordinator, ShutdownHandle};
 use saluki_common::task::HandleExt as _;
-use saluki_config::GenericConfiguration;
 use saluki_context::ContextResolver;
 use saluki_core::topology::interconnect::BufferedDispatcher;
 use saluki_core::{
@@ -37,7 +36,7 @@ use tokio::sync::mpsc;
 use tokio::time::{interval, MissedTickBehavior};
 use tracing::{debug, error};
 
-use crate::common::otlp::config::OtlpConfig;
+use crate::common::otlp::config::{NativeTracesPrivateConfig, OtlpConfig};
 use crate::common::otlp::{build_metrics, Metrics, OtlpHandler, OtlpServerBuilder};
 
 mod logs;
@@ -125,11 +124,27 @@ pub struct OtlpConfiguration {
 }
 
 impl OtlpConfiguration {
-    /// Creates a new `OTLPConfiguration` from the given configuration.
-    pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
-        let mut cfg: Self = config.as_typed()?;
-        cfg.otlp_config.traces.apply_env_overrides(config)?;
-        Ok(cfg)
+    /// Creates a new `OtlpConfiguration` from native translated config.
+    ///
+    /// `otlp` carries the Datadog-schema OTLP keys (receiver endpoints, enable flags, traces internal
+    /// port, and the env-resolved probabilistic sampling percentage). The four interner/cache knobs
+    /// (`otlp_string_interner_size`, `otlp_cached_contexts_limit`, `otlp_cached_tagsets_limit`,
+    /// `otlp_allow_context_heap_allocs`) and the `traces_private` knobs are Saluki-private keys, not in
+    /// the Datadog schema, so they are not carried in `TotalSalukiConfiguration`. The run.rs caller
+    /// reads them from `GenericConfiguration` and passes them in here. This is a temporary
+    /// compatibility path: those keys move to `SalukiPrivateConfiguration` in a later migration PR.
+    pub fn from_native(
+        otlp: &datadog_agent_config::OtlpConfig, interner_bytes: ByteSize, cached_contexts_limit: usize,
+        cached_tagsets_limit: usize, allow_heap_allocs: bool, traces_private: NativeTracesPrivateConfig,
+    ) -> Result<Self, GenericError> {
+        Ok(Self {
+            otlp_config: OtlpConfig::from_native(otlp, traces_private),
+            context_string_interner_bytes: interner_bytes,
+            cached_contexts_limit,
+            cached_tagsets_limit,
+            allow_context_heap_allocations: allow_heap_allocs,
+            workload_provider: None,
+        })
     }
 
     /// Sets the workload provider to use for configuring origin detection/enrichment.
@@ -490,24 +505,88 @@ async fn run_converter(
 }
 
 #[cfg(test)]
-mod config_smoke {
-    use datadog_agent_config_testing::config_registry::structs;
-    use datadog_agent_config_testing::run_config_smoke_tests;
+mod native_config {
+    use bytesize::ByteSize;
+    use datadog_agent_config::{translate, DatadogConfiguration};
     use serde_json::json;
 
     use super::OtlpConfiguration;
-    use crate::config::{DatadogRemapper, KEY_ALIASES};
+    use crate::config::NativeTracesPrivateConfig;
 
+    // The native constructor must carry the Datadog-schema OTLP keys through to the component config:
+    // receiver endpoints, enable flags, traces internal port, and the probabilistic sampling
+    // percentage. The explicitly-set keys here exercise the wiring; the Saluki-private knobs are passed
+    // explicitly.
     #[tokio::test]
-    async fn smoke_test() {
-        run_config_smoke_tests(
-            structs::OTLP_CONFIGURATION,
-            &[],
-            json!({ "otlp_config": {} }),
-            |cfg| OtlpConfiguration::from_configuration(&cfg).expect("OtlpConfiguration should deserialize"),
-            KEY_ALIASES,
-            DatadogRemapper::new,
+    async fn from_native_carries_schema_keys() {
+        let dd_config: DatadogConfiguration = serde_json::from_value(json!({
+            "otlp_config": {
+                "receiver": {"protocols": {
+                    "grpc": {"endpoint": "127.0.0.1:14317", "max_recv_msg_size_mib": 8},
+                    "http": {"endpoint": "127.0.0.1:14318"}
+                }},
+                "metrics": {"enabled": false},
+                "logs": {"enabled": true},
+                "traces": {"enabled": true, "internal_port": 5999,
+                           "probabilistic_sampler": {"sampling_percentage": 33.0}}
+            }
+        }))
+        .unwrap();
+        let total = translate(&dd_config);
+
+        let native = OtlpConfiguration::from_native(
+            &total.otlp,
+            ByteSize::mib(2),
+            500_000,
+            500_000,
+            true,
+            NativeTracesPrivateConfig::default(),
         )
-        .await
+        .expect("native config should build");
+
+        let cfg = &native.otlp_config;
+        assert_eq!(cfg.receiver.protocols.grpc.endpoint, "127.0.0.1:14317");
+        assert_eq!(cfg.receiver.protocols.grpc.max_recv_msg_size_mib, 8);
+        assert_eq!(cfg.receiver.protocols.http.endpoint, "127.0.0.1:14318");
+        assert!(!cfg.metrics.enabled);
+        assert!(cfg.logs.enabled);
+        assert!(cfg.traces.enabled);
+        assert_eq!(cfg.traces.internal_port, 5999);
+        assert_eq!(cfg.traces.probabilistic_sampler.sampling_percentage, 33.0);
+    }
+
+    // The native constructor carries the enable flags from `native` verbatim. This test feeds it a
+    // translated config that did NOT go through the run-path legacy-logs fold, so the flags here are the
+    // raw Datadog Agent schema defaults (metrics on, logs OFF, traces on). This pins the constructor's
+    // faithfulness, NOT ADP's resolved default: the run path folds the legacy ADP "logs on by default"
+    // behavior onto the typed config before translation (see `cli::otlp_native::build_total_config`), so
+    // an operator who never sets `otlp_config.logs.enabled` still gets logs on in practice. Adopting the
+    // Agent schema default (off) is a deliberate future decision, not part of this migration.
+    #[tokio::test]
+    async fn from_native_carries_schema_enable_flags_verbatim() {
+        let dd_config: DatadogConfiguration = serde_json::from_value(json!({
+            "otlp_config": { "receiver": {"protocols": {"grpc": {"endpoint": "0.0.0.0:4317"}}} }
+        }))
+        .unwrap();
+        let total = translate(&dd_config);
+
+        let native = OtlpConfiguration::from_native(
+            &total.otlp,
+            ByteSize::mib(2),
+            500_000,
+            500_000,
+            true,
+            NativeTracesPrivateConfig::default(),
+        )
+        .expect("native config should build");
+
+        let cfg = &native.otlp_config;
+        assert!(cfg.metrics.enabled, "schema default carried verbatim: metrics on");
+        assert!(
+            !cfg.logs.enabled,
+            "schema default carried verbatim: logs off (the run path's legacy fold, not the \
+             constructor, restores logs-on when the key is unset)"
+        );
+        assert!(cfg.traces.enabled, "schema default carried verbatim: traces on");
     }
 }

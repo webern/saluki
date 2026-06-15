@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use datadog_agent_config::TotalSalukiConfiguration;
 use http::Uri;
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder, UsageExpr};
 use saluki_common::buf::FrozenChunkedBytesBuffer;
@@ -28,7 +29,7 @@ use crate::common::datadog::{
 /// Forwards Datadog-specific payloads to the Datadog platform. Handles the standard Datadog Agent configuration,
 /// in terms of specifying additional endpoints, adding the necessary HTTP request headers for authentication,
 /// identification, and more.
-pub struct DatadogConfiguration {
+pub struct DatadogForwarderConfiguration {
     /// Forwarder configuration settings.
     ///
     /// See [`ForwarderConfiguration`] for more information about the available settings.
@@ -37,14 +38,33 @@ pub struct DatadogConfiguration {
     configuration: Option<GenericConfiguration>,
 }
 
-impl DatadogConfiguration {
-    /// Creates a new `DatadogConfiguration` from the given configuration.
+impl DatadogForwarderConfiguration {
+    /// Creates a new `DatadogForwarderConfiguration` from the given configuration.
+    ///
+    /// # Legacy
+    ///
+    /// This method uses the legacy `GenericConfiguration`-based approach. Prefer `from_native` for new call sites.
     pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
         let forwarder_config = ForwarderConfiguration::from_configuration(config)?;
         Ok(Self {
             forwarder_config,
             configuration: Some(config.clone()),
         })
+    }
+
+    /// Creates a new `DatadogForwarderConfiguration` from the translated config plus Saluki-private settings.
+    ///
+    /// The forwarder API key, endpoint, and all tuning settings are in `total_config.forwarder`
+    /// (translator coverage is complete). Full migration requires rebuilding `ForwarderConfiguration`
+    /// field-by-field from the translated types, including endpoint construction, TLS parsing, and retry
+    /// path fixup. Deferred: `from_native` delegates to `from_configuration` for correctness.
+    ///
+    /// NOTE: The stored `GenericConfiguration` is retained for runtime API key refresh. Any future
+    /// migration must preserve this capability.
+    pub fn from_native(
+        _total_config: &TotalSalukiConfiguration, config: &GenericConfiguration,
+    ) -> Result<Self, GenericError> {
+        Self::from_configuration(config)
     }
 
     /// Overrides the default endpoint and refreshes its API key from the given config path.
@@ -73,7 +93,7 @@ impl DatadogConfiguration {
 }
 
 #[async_trait]
-impl ForwarderBuilder for DatadogConfiguration {
+impl ForwarderBuilder for DatadogForwarderConfiguration {
     fn input_payload_type(&self) -> PayloadType {
         PayloadType::Http
     }
@@ -94,7 +114,7 @@ impl ForwarderBuilder for DatadogConfiguration {
     }
 }
 
-impl MemoryBounds for DatadogConfiguration {
+impl MemoryBounds for DatadogForwarderConfiguration {
     fn specify_bounds(&self, builder: &mut MemoryBoundsBuilder) {
         builder
             .minimum()
@@ -220,8 +240,8 @@ mod tests {
             .expect("initial dynamic snapshot should be sent");
         generic_config.ready().await;
 
-        let config = DatadogConfiguration::from_configuration(&generic_config)
-            .expect("DatadogConfiguration should parse")
+        let config = DatadogForwarderConfiguration::from_configuration(&generic_config)
+            .expect("DatadogForwarderConfiguration should parse")
             .with_endpoint_override_and_api_key_refresh_config_path(
                 "http://mrf.example.test".to_string(),
                 "mrf-api-key".to_string(),

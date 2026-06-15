@@ -148,6 +148,16 @@ impl DogStatsDDebugLogConfiguration {
         Ok(cfg)
     }
 
+    /// Creates a new `DogStatsDDebugLogConfiguration` from native config.
+    ///
+    /// Delegates to `from_configuration`; `total_config` is reserved for future native migration.
+    pub fn from_native(
+        _total_config: &datadog_agent_config::TotalSalukiConfiguration, config: &GenericConfiguration,
+        default_log_file_path: std::path::PathBuf,
+    ) -> Result<Self, GenericError> {
+        Self::from_configuration(config, default_log_file_path)
+    }
+
     /// Returns `true` if the debug log destination should be added to the topology.
     pub const fn enabled(&self) -> bool {
         self.logging_enabled

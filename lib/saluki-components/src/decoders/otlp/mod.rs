@@ -4,7 +4,6 @@ use async_trait::async_trait;
 use otlp_protos::opentelemetry::proto::collector::trace::v1::ExportTraceServiceRequest;
 use prost::Message;
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
-use saluki_config::GenericConfiguration;
 use saluki_core::{
     components::{
         decoders::{Decoder, DecoderBuilder, DecoderContext},
@@ -13,7 +12,7 @@ use saluki_core::{
     data_model::{event::EventType, payload::PayloadType},
     topology::interconnect::EventBufferManager,
 };
-use saluki_error::{generic_error, ErrorContext as _, GenericError};
+use saluki_error::{generic_error, GenericError};
 use serde::Deserialize;
 use tokio::{
     select,
@@ -23,8 +22,9 @@ use tracing::{debug, error, warn};
 
 use crate::common::otlp::traces::translator::OtlpTracesTranslator;
 use crate::common::otlp::{
-    build_metrics, config::TracesConfig, Metrics, OTLP_LOGS_GRPC_SERVICE_PATH, OTLP_METRICS_GRPC_SERVICE_PATH,
-    OTLP_TRACES_GRPC_SERVICE_PATH,
+    build_metrics,
+    config::{NativeTracesPrivateConfig, TracesConfig},
+    Metrics, OTLP_LOGS_GRPC_SERVICE_PATH, OTLP_METRICS_GRPC_SERVICE_PATH, OTLP_TRACES_GRPC_SERVICE_PATH,
 };
 
 /// Configuration for the OTLP decoder.
@@ -44,13 +44,19 @@ struct OtlpDecoderConfig {
 }
 
 impl OtlpDecoderConfiguration {
-    /// Creates a new `OtlpDecoderConfiguration` from the given configuration.
-    pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
-        let mut cfg: Self = config
-            .as_typed()
-            .error_context("Failed to load OTLP decoder configuration")?;
-        cfg.otlp_config.traces.apply_env_overrides(config)?;
-        Ok(cfg)
+    /// Creates a new `OtlpDecoderConfiguration` from native translated config.
+    ///
+    /// `otlp` carries the Datadog-schema traces keys (enable flag, internal port, and the env-resolved
+    /// probabilistic sampling percentage). `traces_private` carries the Saluki-private traces knobs the
+    /// run.rs caller reads from `GenericConfiguration` (see [`NativeTracesPrivateConfig`]). No separate
+    /// env-override step is needed: the sampling percentage in `otlp` already reflects the env override
+    /// applied at the translation boundary.
+    pub fn from_native(otlp: &datadog_agent_config::OtlpConfig, traces_private: NativeTracesPrivateConfig) -> Self {
+        Self {
+            otlp_config: OtlpDecoderConfig {
+                traces: TracesConfig::from_native(otlp, traces_private),
+            },
+        }
     }
 }
 
@@ -182,27 +188,3 @@ impl Decoder for OtlpDecoder {
     }
 }
 
-#[cfg(test)]
-mod config_smoke {
-    use datadog_agent_config_testing::config_registry::structs;
-    use datadog_agent_config_testing::run_config_smoke_tests;
-    use serde_json::json;
-
-    use super::OtlpDecoderConfiguration;
-    use crate::config::{DatadogRemapper, KEY_ALIASES};
-
-    #[tokio::test]
-    async fn smoke_test() {
-        run_config_smoke_tests(
-            structs::OTLP_DECODER_CONFIGURATION,
-            &[],
-            json!({}),
-            |cfg| {
-                OtlpDecoderConfiguration::from_configuration(&cfg).expect("OtlpDecoderConfiguration should deserialize")
-            },
-            KEY_ALIASES,
-            DatadogRemapper::new,
-        )
-        .await
-    }
-}

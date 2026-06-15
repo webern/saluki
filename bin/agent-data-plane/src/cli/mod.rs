@@ -14,6 +14,13 @@ mod dogstatsd;
 pub use self::dogstatsd::handle_dogstatsd_command;
 use self::dogstatsd::DogstatsdCommand;
 
+mod otlp_native;
+
+mod total_config_watcher;
+pub(crate) use self::total_config_watcher::TotalConfigWatcher;
+
+mod traces_native;
+
 mod run;
 pub use self::run::handle_run_command;
 use self::run::RunCommand;

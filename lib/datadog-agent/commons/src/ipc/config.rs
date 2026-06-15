@@ -63,6 +63,16 @@ impl IpcAuthConfiguration {
             .error_context("Failed to parse Datadog Agent IPC authentication configuration.")
     }
 
+    /// Creates a new `IpcAuthConfiguration` from already-resolved typed parts.
+    ///
+    /// Used by the configuration system to build IPC auth configuration without raw-map access.
+    pub fn new(auth_token_file_path: PathBuf, ipc_cert_file_path: Option<PathBuf>) -> Self {
+        Self {
+            auth_token_file_path,
+            ipc_cert_file_path,
+        }
+    }
+
     /// Gets the path to the Agent authentication token file from the configuration.
     pub fn auth_token_file_path(&self) -> PathBuf {
         if self.auth_token_file_path.as_os_str().is_empty() {
@@ -210,6 +220,30 @@ impl RemoteAgentClientConfiguration {
         }
 
         Ok(this)
+    }
+
+    /// Creates a new `RemoteAgentClientConfiguration` from already-resolved typed parts.
+    ///
+    /// This is the typed constructor the configuration system uses to build IPC client
+    /// configuration from native bootstrap inputs, without any raw-map access. `vsock_cid` is only
+    /// meaningful on Linux; it is ignored on other platforms.
+    #[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
+    pub fn new(
+        ipc_endpoint: Uri, cmd_port: Option<u16>, auth: IpcAuthConfiguration, connect_retry_attempts: usize,
+        connect_retry_backoff: Duration, grpc_max_message_size: usize, vsock_cid: Option<u32>,
+    ) -> Self {
+        Self {
+            ipc_endpoint,
+            cmd_port,
+            auth,
+            connect_retry_attempts,
+            connect_retry_backoff,
+            grpc_max_message_size,
+            #[cfg(target_os = "linux")]
+            vsock_addr: vsock_cid,
+            #[cfg(not(target_os = "linux"))]
+            vsock_addr: String::new(),
+        }
     }
 
     /// Returns a reference to the authentication configuration for the Remote Agent client.

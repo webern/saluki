@@ -44,7 +44,22 @@ impl RemoteAgentClient {
     /// authentication token is invalid, an error will be returned.
     pub async fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
         let config = RemoteAgentClientConfiguration::from_configuration(config)?;
+        Self::connect(config).await
+    }
 
+    /// Connects a new `RemoteAgentClient` from an already-parsed typed configuration.
+    ///
+    /// This is the side-effectful half of client construction: it reads the auth token file, builds
+    /// the TLS configuration, connects to the Agent endpoint (with retry), and performs a basic
+    /// health check. Pure configuration parsing is [`RemoteAgentClientConfiguration::from_configuration`],
+    /// kept separate so the configuration system can build the typed configuration without raw-map
+    /// access leaking into the connection step.
+    ///
+    /// # Errors
+    ///
+    /// If the Agent gRPC client can't be created (invalid API endpoint, missing authentication token, etc), or if the
+    /// authentication token is invalid, an error will be returned.
+    pub async fn connect(config: RemoteAgentClientConfiguration) -> Result<Self, GenericError> {
         // TODO: We need to write a Tower middleware service that allows applying a backoff between failed calls,
         // specifically so that we can throttle reconnection attempts.
         //

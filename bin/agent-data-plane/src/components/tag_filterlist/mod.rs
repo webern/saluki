@@ -167,6 +167,9 @@ pub struct TagFilterlistConfiguration {
 
 impl TagFilterlistConfiguration {
     /// Creates a new `TagFilterlistConfiguration` from the given configuration.
+    ///
+    /// Transitional: superseded by `from_native`; retained until the raw-map path is removed.
+    #[allow(dead_code)]
     pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
         let mut typed: Self = config.as_typed()?;
         typed.context_cache_capacity = config

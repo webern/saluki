@@ -23,5 +23,5 @@ pub use bootstrap::BootstrapInputs;
 pub use datadog_agent::DatadogAgentConnection;
 pub use dynamic::{ConfigUpdateRouter, DynamicConfigHandles, ScopedConfigHandle};
 pub use stream::ConfigStreamHandle;
-pub use system::{ConfigurationSystem, StartedAttachments, StartedConfigurationSystem};
+pub use system::{translate_from_generic, ConfigurationSystem, StartedAttachments, StartedConfigurationSystem};
 pub use translate::{translate_datadog, PipelineGates, Translator};

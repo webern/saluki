@@ -92,6 +92,9 @@ fn default_metric_prefix_blocklist() -> Vec<String> {
 
 impl DogStatsDPrefixFilterConfiguration {
     /// Creates a new `DogStatsDPrefixFilterConfiguration` from the given configuration.
+    ///
+    /// Transitional: superseded by `from_native`; retained until the raw-map path is removed.
+    #[allow(dead_code)]
     pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
         let mut typed_config: DogStatsDPrefixFilterConfiguration = config.as_typed()?;
         typed_config.configuration = Some(config.clone());

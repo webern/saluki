@@ -92,6 +92,9 @@ impl DogStatsDPostAggregateFilterConfiguration {
     /// # Errors
     ///
     /// If the configuration can't be deserialized, an error is returned.
+    ///
+    /// Transitional: superseded by `from_native`; retained until the raw-map path is removed.
+    #[allow(dead_code)]
     pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
         let mut typed_config: Self = config.as_typed()?;
         typed_config.configuration = Some(config.clone());

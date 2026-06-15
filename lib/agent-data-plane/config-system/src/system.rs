@@ -93,6 +93,23 @@ impl ConfigurationSystem {
     }
 }
 
+/// Translate an already-resolved raw configuration into [`SalukiConfiguration`].
+///
+/// Transitional helper for the binary's incremental cutover: it lets `run.rs` obtain the ADP-native
+/// configuration from the configuration it has already resolved, so topology components are built
+/// from native slices. In the fully collapsed end state `run.rs` receives `SalukiConfiguration`
+/// directly from [`ConfigurationSystem::start`] and this helper is unnecessary.
+pub fn translate_from_generic(
+    config: &saluki_config::GenericConfiguration, language: RuntimeConfigLanguage,
+) -> Result<SalukiConfiguration, GenericError> {
+    let dd_config: DatadogConfiguration = config
+        .as_typed()
+        .error_context("Failed to parse Datadog configuration for translation.")?;
+    let gates = crate::bootstrap::read_pipeline_gates(config);
+    let private = SalukiPrivateConfiguration::for_language(language);
+    Ok(translate_datadog(&dd_config, &private, gates))
+}
+
 async fn wait_for_initial_snapshot(
     updates: &mut tokio::sync::mpsc::Receiver<ConfigUpdate>,
 ) -> Result<serde_json::Value, GenericError> {

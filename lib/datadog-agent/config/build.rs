@@ -6,6 +6,8 @@ use datadog_agent_config_overlay_model::{schema_gen, Files, SchemaOverlay};
 mod classifier_gen;
 #[path = "build/datadog_config_gen.rs"]
 mod datadog_config_gen;
+#[path = "build/prelude_paths.rs"]
+mod prelude_paths;
 #[path = "build/witness_gen.rs"]
 mod witness_gen;
 
@@ -19,6 +21,7 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=build/classifier_gen.rs");
     println!("cargo:rerun-if-changed=build/datadog_config_gen.rs");
+    println!("cargo:rerun-if-changed=build/prelude_paths.rs");
     println!("cargo:rerun-if-changed=build/witness_gen.rs");
 
     let schema_path = files.schema.clone();

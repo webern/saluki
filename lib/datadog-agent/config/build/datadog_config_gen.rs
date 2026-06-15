@@ -213,19 +213,13 @@ impl VisitMut for PathShortener {
         }
         let idents: Vec<String> = path.segments.iter().map(|s| s.ident.to_string()).collect();
         let segments: Vec<&str> = idents.iter().map(String::as_str).collect();
-        let shorten = match segments.as_slice() {
-            ["std", "option", "Option"]
-            | ["std", "string", "String"]
-            | ["std", "vec", "Vec"]
-            | ["std", "boxed", "Box"]
-            | ["std", "default", "Default"]
-            | ["std", "convert", "TryFrom"]
-            | ["std", "convert", "TryInto"] => true,
-            ["std", "collections", "HashMap"] => {
+        let shorten = match crate::prelude_paths::classify(&segments) {
+            crate::prelude_paths::Shorten::Yes => true,
+            crate::prelude_paths::Shorten::YesHashMap => {
                 self.needs_hashmap = true;
                 true
             }
-            _ => false,
+            crate::prelude_paths::Shorten::No => false,
         };
         if shorten {
             let last = path.segments.last().cloned().expect("non-empty path");

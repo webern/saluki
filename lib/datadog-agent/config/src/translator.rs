@@ -21,6 +21,18 @@ use crate::DatadogConfiguration;
 /// Translate a typed `DatadogConfiguration` into native `TotalSalukiConfiguration`.
 ///
 /// Runs the generated [`drive`] over a fresh [`Translator`], then finalizes any accumulated state.
+///
+/// # Invariant: translation is lossy w.r.t. absent vs. explicit-default
+///
+/// [`drive`] resolves an absent `Option<Section>` to its schema default via
+/// `.clone().unwrap_or_default()`, and several `consume_*` methods fold the schema's `""` "unset"
+/// sentinel into `None`. Both collapse "the key was absent" and "the key was set to its
+/// default/empty value" onto the same native value, so the translated `TotalSalukiConfiguration`
+/// cannot distinguish the two. This is intentional: the native model carries values, not presence.
+///
+/// Consequently, any logic that must observe whether a key was *explicitly* set -- in particular
+/// the dynamic-config diffing planned for PR 10 -- must diff at the typed [`DatadogConfiguration`]
+/// layer (where absence is still an `Option::None`), NOT against this translated output.
 pub fn translate(config: &DatadogConfiguration) -> TotalSalukiConfiguration {
     let mut translator = Translator::new();
     drive(config, &mut translator);
@@ -63,6 +75,9 @@ impl Default for Translator {
 ///
 /// Ports and similar small counts are typed `number` in the schema (hence `f64` after typify) but
 /// are conceptually unsigned 16-bit. Negative or oversized values are clamped rather than wrapped.
+///
+/// Like the other `f64_to_*` helpers, the fractional part is truncated toward zero (an `as` cast),
+/// and values outside the target type's range are saturated at its bounds; both are intentional.
 fn f64_to_u16(value: f64) -> u16 {
     if value.is_nan() || value <= 0.0 {
         0
@@ -74,6 +89,8 @@ fn f64_to_u16(value: f64) -> u16 {
 }
 
 /// Narrow a schema `f64` to `u64`, saturating negatives/NaN to 0 and oversized values to `u64::MAX`.
+///
+/// The fractional part is truncated toward zero; out-of-range values are saturated at the bounds.
 fn f64_to_u64(value: f64) -> u64 {
     if value.is_nan() || value <= 0.0 {
         0
@@ -85,6 +102,9 @@ fn f64_to_u64(value: f64) -> u64 {
 }
 
 /// Narrow a schema `f64` to `i32` (signed levels such as the zstd compressor level), saturating.
+///
+/// The fractional part is truncated toward zero; values below `i32::MIN` or above `i32::MAX` are
+/// saturated at the respective bound rather than wrapping.
 fn f64_to_i32(value: f64) -> i32 {
     if value.is_nan() {
         0
@@ -374,8 +394,9 @@ impl DatadogConfigConsumer for Translator {
     fn consume_min_tls_version(&mut self, value: String) {
         // Partial support: rustls cannot negotiate TLS 1.0/1.1, so those (accepted for config
         // compatibility) are clamped up to 1.2. 1.3 passes through; unrecognized values fall back
-        // to the schema default of 1.2. Matching is case-insensitive per the schema documentation.
-        self.config.forwarder.min_tls_version = match value.to_ascii_lowercase().as_str() {
+        // to the schema default of 1.2. Matching is case-insensitive per the schema documentation;
+        // surrounding whitespace is trimmed so e.g. `"tlsv1.3 "` is not silently downgraded.
+        self.config.forwarder.min_tls_version = match value.trim().to_ascii_lowercase().as_str() {
             "tlsv1.3" => TlsVersion::Tls13,
             // "tlsv1.0", "tlsv1.1", "tlsv1.2", and any unknown value resolve to TLS 1.2.
             _ => TlsVersion::Tls12,
@@ -911,5 +932,66 @@ mod tests {
         // Partial-support divergence: 0 is carried through (ADP disables only the cache).
         let out = translate_with("dogstatsd_mapper_cache_size", json!(0));
         assert_eq!(out.dogstatsd.mapper_cache_size, 0);
+    }
+
+    // (d) f64 narrowing edge cases beyond the u16 port path already covered above.
+
+    #[test]
+    fn f64_to_i32_negative_and_saturates() {
+        // The zstd compressor level is signed: negatives pass through, out-of-range values saturate.
+        let neg = translate_with("serializer_zstd_compressor_level", json!(-5));
+        assert_eq!(neg.metrics.serializer_zstd_compressor_level, -5);
+
+        let over = translate_with("serializer_zstd_compressor_level", json!(5_000_000_000.0_f64));
+        assert_eq!(over.metrics.serializer_zstd_compressor_level, i32::MAX);
+
+        let under = translate_with("serializer_zstd_compressor_level", json!(-5_000_000_000.0_f64));
+        assert_eq!(under.metrics.serializer_zstd_compressor_level, i32::MIN);
+    }
+
+    #[test]
+    fn f64_to_u64_saturates_large_and_negative() {
+        // forwarder_timeout is an unsigned count: huge values clamp to u64::MAX, negatives to 0.
+        let over = translate_with("forwarder_timeout", json!(2.0e19_f64));
+        assert_eq!(over.forwarder.timeout_secs, u64::MAX);
+
+        let neg = translate_with("forwarder_timeout", json!(-1));
+        assert_eq!(neg.forwarder.timeout_secs, 0);
+    }
+
+    #[test]
+    fn statsd_forward_host_and_port_set() {
+        // A non-empty host maps to Some(host)...
+        let host = translate_with("statsd_forward_host", json!("relay.example.com"));
+        assert_eq!(host.metrics.statsd_forward_host.as_deref(), Some("relay.example.com"));
+        // ...and the forward port narrows from the schema's f64.
+        let port = translate_with("statsd_forward_port", json!(8126));
+        assert_eq!(port.metrics.statsd_forward_port, 8126);
+    }
+
+    #[test]
+    fn mrf_metric_allowlist_opaque_value_round_trips() {
+        // An MRF override is an opaque Option<serde_json::Value> nested under an Option<Section>;
+        // it must reach its native field verbatim.
+        let config = DatadogConfiguration {
+            multi_region_failover: serde_json::from_value(json!({
+                "metric_allowlist": ["system.cpu.user", "system.mem.used"]
+            }))
+            .unwrap(),
+            ..Default::default()
+        };
+        let out = translate(&config);
+        assert_eq!(
+            out.metrics.multi_region_failover.metric_allowlist,
+            Some(json!(["system.cpu.user", "system.mem.used"]))
+        );
+    }
+
+    // (e) min_tls_version tolerates surrounding whitespace (otherwise silently downgraded to 1.2).
+
+    #[test]
+    fn min_tls_version_trims_whitespace_and_case() {
+        let out = translate_with("min_tls_version", json!("  TLSv1.3 "));
+        assert_eq!(out.forwarder.min_tls_version, TlsVersion::Tls13);
     }
 }

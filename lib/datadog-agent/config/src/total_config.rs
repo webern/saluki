@@ -19,6 +19,12 @@ use std::collections::HashMap;
 use serde_json::Value;
 
 /// The complete native Saluki configuration produced by translating `DatadogConfiguration`.
+///
+/// Translation into this type is lossy with respect to absent-vs-explicit-default: an absent
+/// Datadog key and one set to its schema default (or the empty-string "unset" sentinel) both
+/// resolve to the same native value here. Logic that must observe explicit presence (the PR 10
+/// dynamic-config diff) must operate on `DatadogConfiguration`, not this type. See
+/// [`crate::translator::translate`] for the full invariant.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct TotalSalukiConfiguration {
     /// ADP data-plane-specific tuning.

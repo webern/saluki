@@ -1,5 +1,7 @@
 //! Component-native configuration structs shared by ADP translators and components.
 
+use saluki_io::net::ListenAddress;
+
 /// Native enablement for a simple component pipeline.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PipelineConfiguration {
@@ -89,6 +91,153 @@ impl OtlpProxyConfiguration {
     /// Returns whether traces are proxied.
     pub const fn proxy_traces(&self) -> bool {
         self.proxy_traces
+    }
+}
+
+/// Native Checks IPC source settings.
+#[derive(Clone, Debug)]
+pub struct ChecksIpcConfiguration {
+    grpc_endpoint: ListenAddress,
+}
+
+impl ChecksIpcConfiguration {
+    /// Creates Checks IPC settings.
+    pub const fn new(grpc_endpoint: ListenAddress) -> Self {
+        Self { grpc_endpoint }
+    }
+
+    /// Returns the gRPC listen endpoint.
+    pub const fn grpc_endpoint(&self) -> &ListenAddress {
+        &self.grpc_endpoint
+    }
+}
+
+/// Native Datadog logs encoder settings.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DatadogLogsEncoderConfiguration {
+    compressor_kind: String,
+    zstd_compressor_level: i32,
+}
+
+impl DatadogLogsEncoderConfiguration {
+    /// Creates Datadog logs encoder settings.
+    pub fn new(compressor_kind: String, zstd_compressor_level: i32) -> Self {
+        Self {
+            compressor_kind,
+            zstd_compressor_level,
+        }
+    }
+
+    /// Returns the compression algorithm name.
+    pub fn compressor_kind(&self) -> &str {
+        &self.compressor_kind
+    }
+
+    /// Returns the zstd compression level.
+    pub const fn zstd_compressor_level(&self) -> i32 {
+        self.zstd_compressor_level
+    }
+}
+
+/// Native Datadog events encoder settings.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DatadogEventsEncoderConfiguration {
+    max_payload_size: usize,
+    max_uncompressed_payload_size: usize,
+    compressor_kind: String,
+    zstd_compressor_level: i32,
+    log_payloads: bool,
+}
+
+impl DatadogEventsEncoderConfiguration {
+    /// Creates Datadog events encoder settings.
+    pub fn new(
+        max_payload_size: usize, max_uncompressed_payload_size: usize, compressor_kind: String,
+        zstd_compressor_level: i32, log_payloads: bool,
+    ) -> Self {
+        Self {
+            max_payload_size,
+            max_uncompressed_payload_size,
+            compressor_kind,
+            zstd_compressor_level,
+            log_payloads,
+        }
+    }
+
+    /// Returns the maximum compressed payload size.
+    pub const fn max_payload_size(&self) -> usize {
+        self.max_payload_size
+    }
+
+    /// Returns the maximum uncompressed payload size.
+    pub const fn max_uncompressed_payload_size(&self) -> usize {
+        self.max_uncompressed_payload_size
+    }
+
+    /// Returns the compression algorithm name.
+    pub fn compressor_kind(&self) -> &str {
+        &self.compressor_kind
+    }
+
+    /// Returns the zstd compression level.
+    pub const fn zstd_compressor_level(&self) -> i32 {
+        self.zstd_compressor_level
+    }
+
+    /// Returns whether decoded payloads should be logged.
+    pub const fn log_payloads(&self) -> bool {
+        self.log_payloads
+    }
+}
+
+/// Native Datadog service-checks encoder settings.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DatadogServiceChecksEncoderConfiguration {
+    max_payload_size: usize,
+    max_uncompressed_payload_size: usize,
+    compressor_kind: String,
+    zstd_compressor_level: i32,
+    log_payloads: bool,
+}
+
+impl DatadogServiceChecksEncoderConfiguration {
+    /// Creates Datadog service-checks encoder settings.
+    pub fn new(
+        max_payload_size: usize, max_uncompressed_payload_size: usize, compressor_kind: String,
+        zstd_compressor_level: i32, log_payloads: bool,
+    ) -> Self {
+        Self {
+            max_payload_size,
+            max_uncompressed_payload_size,
+            compressor_kind,
+            zstd_compressor_level,
+            log_payloads,
+        }
+    }
+
+    /// Returns the maximum compressed payload size.
+    pub const fn max_payload_size(&self) -> usize {
+        self.max_payload_size
+    }
+
+    /// Returns the maximum uncompressed payload size.
+    pub const fn max_uncompressed_payload_size(&self) -> usize {
+        self.max_uncompressed_payload_size
+    }
+
+    /// Returns the compression algorithm name.
+    pub fn compressor_kind(&self) -> &str {
+        &self.compressor_kind
+    }
+
+    /// Returns the zstd compression level.
+    pub const fn zstd_compressor_level(&self) -> i32 {
+        self.zstd_compressor_level
+    }
+
+    /// Returns whether decoded payloads should be logged.
+    pub const fn log_payloads(&self) -> bool {
+        self.log_payloads
     }
 }
 

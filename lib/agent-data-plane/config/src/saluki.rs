@@ -1,6 +1,9 @@
 //! ADP-native runtime configuration.
 
-use saluki_component_config::{OtlpPipelineConfiguration, PipelineConfiguration};
+use saluki_component_config::{
+    ChecksIpcConfiguration, DatadogEventsEncoderConfiguration, DatadogLogsEncoderConfiguration,
+    DatadogServiceChecksEncoderConfiguration, OtlpPipelineConfiguration, PipelineConfiguration,
+};
 use saluki_io::net::ListenAddress;
 
 /// Complete ADP-native runtime configuration.
@@ -8,6 +11,18 @@ use saluki_io::net::ListenAddress;
 pub struct SalukiConfiguration {
     /// Top-level ADP enablement and pipeline selection.
     pub data_plane: DataPlaneConfiguration,
+
+    /// Checks IPC source settings.
+    pub checks_ipc: ChecksIpcConfiguration,
+
+    /// Datadog logs encoder settings.
+    pub datadog_logs_encoder: DatadogLogsEncoderConfiguration,
+
+    /// Datadog events encoder settings.
+    pub datadog_events_encoder: DatadogEventsEncoderConfiguration,
+
+    /// Datadog service-checks encoder settings.
+    pub datadog_service_checks_encoder: DatadogServiceChecksEncoderConfiguration,
 }
 
 /// Native ADP data-plane runtime decisions.

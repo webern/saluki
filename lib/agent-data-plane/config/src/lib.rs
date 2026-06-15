@@ -19,7 +19,10 @@ pub use authority::{ConfigStreamAuthority, RuntimeConfigAuthority, RuntimeConfig
 pub use bootstrap::{BootstrapConfiguration, BootstrapStartupConfiguration, BootstrapTelemetryConfiguration};
 pub use private::SalukiPrivateConfiguration;
 pub use saluki::{DataPlaneConfiguration, SalukiConfiguration};
-pub use saluki_component_config::{OtlpPipelineConfiguration, OtlpProxyConfiguration, PipelineConfiguration};
+pub use saluki_component_config::{
+    ChecksIpcConfiguration, DatadogEventsEncoderConfiguration, DatadogLogsEncoderConfiguration,
+    DatadogServiceChecksEncoderConfiguration, OtlpPipelineConfiguration, OtlpProxyConfiguration, PipelineConfiguration,
+};
 
 #[cfg(test)]
 mod tests {

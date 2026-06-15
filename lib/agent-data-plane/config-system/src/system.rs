@@ -3,8 +3,9 @@
 use std::collections::HashSet;
 
 use agent_data_plane_config::{
-    BootstrapConfiguration, BootstrapStartupConfiguration, BootstrapTelemetryConfiguration, ConfigStreamAuthority,
-    DataPlaneConfiguration, OtlpPipelineConfiguration, OtlpProxyConfiguration, PipelineConfiguration,
+    BootstrapConfiguration, BootstrapStartupConfiguration, BootstrapTelemetryConfiguration, ChecksIpcConfiguration,
+    ConfigStreamAuthority, DataPlaneConfiguration, DatadogEventsEncoderConfiguration, DatadogLogsEncoderConfiguration,
+    DatadogServiceChecksEncoderConfiguration, OtlpPipelineConfiguration, OtlpProxyConfiguration, PipelineConfiguration,
     RuntimeConfigAuthority, RuntimeConfigLanguage, SalukiConfiguration,
 };
 use datadog_agent_commons::ipc::config::RemoteAgentClientConfiguration;
@@ -204,6 +205,31 @@ fn translate_datadog_snapshot(config: &GenericConfiguration) -> Result<SalukiCon
         .try_get_typed("data_plane.secure_api_listen_address")
         .error_context("Failed to read `data_plane.secure_api_listen_address`.")?
         .unwrap_or_else(|| ListenAddress::any_tcp(5101));
+    let checks_ipc = ChecksIpcConfiguration::new(
+        config
+            .try_get_typed("checks_ipc_endpoint")
+            .error_context("Failed to read `checks_ipc_endpoint`.")?
+            .unwrap_or_else(|| ListenAddress::any_tcp(5105)),
+    );
+    let datadog_logs_encoder = DatadogLogsEncoderConfiguration::new(
+        source.serializer_compressor_kind.clone(),
+        source.serializer_zstd_compressor_level as i32,
+    );
+    let datadog_events_encoder = DatadogEventsEncoderConfiguration::new(
+        source.serializer_max_payload_size as usize,
+        source.serializer_max_uncompressed_payload_size as usize,
+        source.serializer_compressor_kind.clone(),
+        source.serializer_zstd_compressor_level as i32,
+        source.log_payloads,
+    );
+    let datadog_service_checks_encoder = DatadogServiceChecksEncoderConfiguration::new(
+        source.serializer_max_payload_size as usize,
+        source.serializer_max_uncompressed_payload_size as usize,
+        source.serializer_compressor_kind,
+        source.serializer_zstd_compressor_level as i32,
+        source.log_payloads,
+    );
+
     let saluki = SalukiConfiguration {
         data_plane: DataPlaneConfiguration::new(
             config
@@ -216,6 +242,10 @@ fn translate_datadog_snapshot(config: &GenericConfiguration) -> Result<SalukiCon
             dogstatsd,
             otlp,
         ),
+        checks_ipc,
+        datadog_logs_encoder,
+        datadog_events_encoder,
+        datadog_service_checks_encoder,
     };
 
     let active_pipelines = active_pipelines(&saluki.data_plane);

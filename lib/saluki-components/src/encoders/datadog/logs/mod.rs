@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use chrono::{SecondsFormat, Utc};
+use datadog_agent_config::TotalSalukiConfiguration;
 use facet::Facet;
 use http::{uri::PathAndQuery, HeaderValue, Method, Uri};
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
@@ -62,7 +63,19 @@ pub struct DatadogLogsConfiguration {
 }
 
 impl DatadogLogsConfiguration {
-    /// Creates a new `DatadogLogsConfiguration` from the given configuration.
+    /// Creates a new `DatadogLogsConfiguration` from the translated config plus Saluki-private settings.
+    ///
+    /// The logs encoder has no Datadog-schema keys; all settings are Saluki-private serializer
+    /// knobs read from `GenericConfiguration`. The `total_config` parameter is accepted for API
+    /// consistency with other `from_native` constructors; it is not read here.
+    pub fn from_native(
+        _total_config: &TotalSalukiConfiguration, config: &GenericConfiguration,
+    ) -> Result<Self, GenericError> {
+        Ok(config.as_typed()?)
+    }
+
+    /// Registry/test-only legacy path; removed when `GenericConfiguration` is confined to the
+    /// translation layer in PR 11.
     pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
         Ok(config.as_typed()?)
     }

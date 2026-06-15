@@ -414,7 +414,7 @@ async fn create_topology(
     }
 
     if dp_config.logs_pipeline_required() {
-        add_baseline_logs_pipeline_to_blueprint(&mut blueprint, config).await?;
+        add_baseline_logs_pipeline_to_blueprint(&mut blueprint, config, total_config).await?;
     }
 
     if dp_config.events_pipeline_required() {
@@ -544,10 +544,10 @@ fn add_mrf_metrics_pipeline_to_blueprint(
 }
 
 async fn add_baseline_logs_pipeline_to_blueprint(
-    blueprint: &mut TopologyBlueprint, config: &GenericConfiguration,
+    blueprint: &mut TopologyBlueprint, config: &GenericConfiguration, total_config: &TotalSalukiConfiguration,
 ) -> Result<(), GenericError> {
     // Create the back half of the logs processing pipeline.
-    let dd_logs_config = DatadogLogsConfiguration::from_configuration(config)
+    let dd_logs_config = DatadogLogsConfiguration::from_native(total_config, config)
         .map(BufferedIncrementalConfiguration::from_encoder_builder)
         .error_context("Failed to configure Datadog Logs encoder.")?;
 

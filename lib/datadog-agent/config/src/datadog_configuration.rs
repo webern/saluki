@@ -37,6 +37,9 @@ pub struct DatadogConfiguration {
     #[serde(default, skip_serializing_if = ":: std :: collections :: HashMap::is_empty")]
     pub additional_endpoints: HashMap<String, Vec<String>>,
 
+    #[serde(default, skip_serializing_if = "::std::option::Option::is_none")]
+    pub agent_ipc: Option<DatadogConfigurationAgentIpc>,
+
     #[serde(default)]
     pub allow_arbitrary_tags: bool,
 
@@ -46,28 +49,25 @@ pub struct DatadogConfiguration {
     #[serde(default)]
     pub api_key: String,
 
-    #[serde(default, skip_serializing_if = "::std::option::Option::is_none")]
-    pub apm_config: Option<DatadogConfigurationApmConfig>,
-
     /// The host to listen on for Dogstatsd and traces. This is ignored by APM when
     /// `apm_config.apm_non_local_traffic` is enabled and ignored by DogStatsD when `dogstatsd_non_local_traffic`
     /// is enabled. The trace-agent uses this host to send metrics to.
     /// The `localhost` default value is invalid in IPv6 environments where dogstatsd listens on "::1".
     /// To solve this problem, ensure Dogstatsd is listening on IPv4 by setting this value to "127.0.0.1".
-    #[serde(default, skip_serializing_if = "::std::option::Option::is_none")]
-    pub bind_host: Option<::serde_json::Value>,
+    #[serde(default)]
+    pub bind_host: String,
 
     /// The port on which the IPC api listens.
-    #[serde(default = "defaults::datadog_configuration_cmd_port")]
-    pub cmd_port: f64,
+    #[serde(default = "defaults::default_u64::<i64, 5001>")]
+    pub cmd_port: i64,
 
     /// Configure the initial connection timeout in seconds.
-    #[serde(default = "defaults::datadog_configuration_cri_connection_timeout")]
-    pub cri_connection_timeout: f64,
+    #[serde(default = "defaults::default_u64::<i64, 1>")]
+    pub cri_connection_timeout: i64,
 
     /// Configure the timeout in seconds for querying the CRI or Containerd API.
-    #[serde(default = "defaults::datadog_configuration_cri_query_timeout")]
-    pub cri_query_timeout: f64,
+    #[serde(default = "defaults::default_u64::<i64, 5>")]
+    pub cri_query_timeout: i64,
 
     #[serde(default, skip_serializing_if = "::std::option::Option::is_none")]
     pub data_plane: Option<DatadogConfigurationDataPlane>,
@@ -77,21 +77,21 @@ pub struct DatadogConfiguration {
     /// setting defined in "site". It does not affect APM, Logs, Remote Configuration, or Live Process intake which have their
     /// own "*_dd_url" settings.
     /// If DD_DD_URL and DD_URL are both set, DD_DD_URL is used in priority.
-    #[serde(default, skip_serializing_if = "::std::option::Option::is_none")]
-    pub dd_url: Option<::serde_json::Value>,
+    #[serde(default = "defaults::datadog_configuration_dd_url")]
+    pub dd_url: String,
 
     /// The buffer size use to receive statsd packets, in bytes.
-    #[serde(default = "defaults::datadog_configuration_dogstatsd_buffer_size")]
-    pub dogstatsd_buffer_size: f64,
+    #[serde(default = "defaults::default_u64::<i64, 8192>")]
+    pub dogstatsd_buffer_size: i64,
 
-    #[serde(default = "defaults::datadog_configuration_dogstatsd_capture_depth")]
-    pub dogstatsd_capture_depth: f64,
+    #[serde(default)]
+    pub dogstatsd_capture_depth: i64,
 
     #[serde(default)]
     pub dogstatsd_capture_path: String,
 
-    #[serde(default = "defaults::datadog_configuration_dogstatsd_context_expiry_seconds")]
-    pub dogstatsd_context_expiry_seconds: f64,
+    #[serde(default = "defaults::default_u64::<i64, 20>")]
+    pub dogstatsd_context_expiry_seconds: i64,
 
     /// Disable enriching Dogstatsd metrics with tags from "origin detection" when Entity-ID is set.
     #[serde(default)]
@@ -106,8 +106,8 @@ pub struct DatadogConfiguration {
     #[serde(default)]
     pub dogstatsd_log_file: String,
 
-    #[serde(default = "defaults::datadog_configuration_dogstatsd_log_file_max_rolls")]
-    pub dogstatsd_log_file_max_rolls: f64,
+    #[serde(default = "defaults::default_u64::<i64, 3>")]
+    pub dogstatsd_log_file_max_rolls: i64,
 
     /// Maximum size of dogstatsd log file. Use either a size (for example, 10MB) or
     /// provide value in bytes (for example, 10485760.)
@@ -120,8 +120,8 @@ pub struct DatadogConfiguration {
     pub dogstatsd_logging_enabled: bool,
 
     /// Size of the cache (max number of mapping results) used by Dogstatsd mapping feature.
-    #[serde(default = "defaults::datadog_configuration_dogstatsd_mapper_cache_size")]
-    pub dogstatsd_mapper_cache_size: f64,
+    #[serde(default = "defaults::default_u64::<i64, 1000>")]
+    pub dogstatsd_mapper_cache_size: i64,
 
     /// The profiles will be used to convert parts of metrics names into tags.
     /// If a profile prefix is matched, other profiles won't be tried even if that profile matching rules doesn't match.
@@ -138,8 +138,8 @@ pub struct DatadogConfiguration {
     ///   tags (optional): list of key:value pair of tag key and tag value
     ///     The value can use $1, $2, etc, that will be replaced by the corresponding element capture by `match` pattern
     ///     This alternative syntax can also be used: ${1}, ${2}, etc
-    #[serde(default, skip_serializing_if = "::std::option::Option::is_none")]
-    pub dogstatsd_mapper_profiles: Option<::serde_json::Value>,
+    #[serde(default, skip_serializing_if = "::std::vec::Vec::is_empty")]
+    pub dogstatsd_mapper_profiles: Vec<::serde_json::Value>,
 
     /// Set this parameter to true to have DogStatsD collects basic statistics (count/last seen)
     /// about the metrics it processed. Use the Agent command "dogstatsd-stats" to visualize
@@ -172,15 +172,15 @@ pub struct DatadogConfiguration {
 
     /// Override the Agent DogStatsD port.
     /// Note: Make sure your client is sending to the same UDP port.
-    #[serde(default = "defaults::datadog_configuration_dogstatsd_port")]
-    pub dogstatsd_port: f64,
+    #[serde(default = "defaults::default_u64::<i64, 8125>")]
+    pub dogstatsd_port: i64,
 
     /// The number of bytes allocated to DogStatsD's socket receive buffer (POSIX system only).
     /// By default, the system sets this value. If you need to increase the size of this buffer
     /// but keep the OS default value the same, you can set DogStatsD's receive buffer size here.
     /// The maximum accepted value might change depending on the OS.
-    #[serde(default = "defaults::datadog_configuration_dogstatsd_so_rcvbuf")]
-    pub dogstatsd_so_rcvbuf: f64,
+    #[serde(default)]
+    pub dogstatsd_so_rcvbuf: i64,
 
     /// Listen for Dogstatsd metrics on a Unix Socket (*nix only).
     /// Set to a valid and existing filesystem path to enable.
@@ -197,8 +197,8 @@ pub struct DatadogConfiguration {
     #[serde(default)]
     pub dogstatsd_stream_socket: String,
 
-    #[serde(default = "defaults::datadog_configuration_dogstatsd_string_interner_size")]
-    pub dogstatsd_string_interner_size: f64,
+    #[serde(default = "defaults::default_u64::<i64, 4096>")]
+    pub dogstatsd_string_interner_size: i64,
 
     /// Configure the level of granularity of tags to send for DogStatsD metrics and events. Choices are:
     ///  * low: add tags about low-cardinality objects (clusters, hosts, deployments, container images, ...)
@@ -223,28 +223,31 @@ pub struct DatadogConfiguration {
     #[serde(default)]
     pub env: String,
 
+    #[serde(default = "defaults::default_u64::<i64, 60>")]
+    pub forwarder_apikey_validation_interval: i64,
+
     /// Defines the rate of exponential growth, and the first retry interval range.
     /// Do not set a lower value than the default. You may increase it if you use a proxy that benefits from a
     /// higher rate of exponential growth.
-    #[serde(default = "defaults::datadog_configuration_forwarder_backoff_base")]
-    pub forwarder_backoff_base: f64,
+    #[serde(default = "defaults::default_u64::<i64, 2>")]
+    pub forwarder_backoff_base: i64,
 
-    #[serde(default = "defaults::datadog_configuration_forwarder_backoff_factor")]
-    pub forwarder_backoff_factor: f64,
+    #[serde(default = "defaults::default_u64::<i64, 2>")]
+    pub forwarder_backoff_factor: i64,
 
     /// Defines the maximum number of seconds to wait for a retry.
     /// Do not set a lower value than the default. You may increase it if you use a proxy that benefits from a
     /// higher maximum backoff time.
-    #[serde(default = "defaults::datadog_configuration_forwarder_backoff_max")]
-    pub forwarder_backoff_max: f64,
+    #[serde(default = "defaults::default_u64::<i64, 64>")]
+    pub forwarder_backoff_max: i64,
 
-    #[serde(default = "defaults::datadog_configuration_forwarder_connection_reset_interval")]
-    pub forwarder_connection_reset_interval: f64,
+    #[serde(default)]
+    pub forwarder_connection_reset_interval: i64,
 
     /// Defines the size of the high prio buffer.
     /// Increasing the buffer size can help if payload drops occur due to high prio buffer being full.
-    #[serde(default = "defaults::datadog_configuration_forwarder_high_prio_buffer_size")]
-    pub forwarder_high_prio_buffer_size: f64,
+    #[serde(default = "defaults::default_u64::<i64, 100>")]
+    pub forwarder_high_prio_buffer_size: i64,
 
     /// The transport type to use for sending logs. Possible values are "auto" or "http1".
     #[serde(default = "defaults::datadog_configuration_forwarder_http_protocol")]
@@ -254,34 +257,37 @@ pub struct DatadogConfiguration {
     /// at any one time. If the connection is over HTTP/1 each request will be waiting
     /// for the previous request to complete before sending the next one. With HTTP/2
     /// each request can be sent before waiting for the response.
-    #[serde(default = "defaults::datadog_configuration_forwarder_max_concurrent_requests")]
-    pub forwarder_max_concurrent_requests: f64,
+    #[serde(default = "defaults::default_u64::<i64, 10>")]
+    pub forwarder_max_concurrent_requests: i64,
 
     /// The number of workers used by the forwarder.
-    #[serde(default = "defaults::datadog_configuration_forwarder_num_workers")]
-    pub forwarder_num_workers: f64,
+    #[serde(default = "defaults::default_u64::<i64, 1>")]
+    pub forwarder_num_workers: i64,
 
     /// This value specifies how many days the overflow transactions will remain valid before
     /// being discarded. During the Agent restart, if a retry file contains transactions that were
     /// created more than `forwarder_outdated_file_in_days` days ago, they are removed.
-    #[serde(default = "defaults::datadog_configuration_forwarder_outdated_file_in_days")]
-    pub forwarder_outdated_file_in_days: f64,
+    #[serde(default = "defaults::default_u64::<i64, 10>")]
+    pub forwarder_outdated_file_in_days: i64,
 
-    #[serde(default = "defaults::datadog_configuration_forwarder_recovery_interval")]
-    pub forwarder_recovery_interval: f64,
+    #[serde(default = "defaults::default_u64::<i64, 2>")]
+    pub forwarder_recovery_interval: i64,
 
     #[serde(default)]
     pub forwarder_recovery_reset: bool,
 
-    #[serde(default = "defaults::datadog_configuration_forwarder_retry_queue_max_size")]
-    pub forwarder_retry_queue_max_size: f64,
+    #[serde(default = "defaults::default_u64::<i64, 900>")]
+    pub forwarder_retry_queue_capacity_time_interval_sec: i64,
+
+    #[serde(default)]
+    pub forwarder_retry_queue_max_size: i64,
 
     /// It defines the maximum size in bytes of all the payloads in the forwarder's retry queue.
     /// The actual memory used is greater than the payloads size as there are extra fields like HTTP headers,
 
     /// but no more than 2.5 times the payload size. The default is 15MB.
-    #[serde(default = "defaults::datadog_configuration_forwarder_retry_queue_payloads_max_size")]
-    pub forwarder_retry_queue_payloads_max_size: f64,
+    #[serde(default = "defaults::default_u64::<i64, 15728640>")]
+    pub forwarder_retry_queue_payloads_max_size: i64,
 
     /// `forwarder_storage_max_disk_ratio` defines the disk capacity limit for storing transactions.
     /// `0.8` means the Agent can store transactions on disk until `forwarder_storage_max_size_in_bytes`
@@ -294,15 +300,15 @@ pub struct DatadogConfiguration {
     /// When the retry queue of the forwarder is full, `forwarder_storage_max_size_in_bytes`
     /// defines the amount of disk space the Agent can use to store transactions on the disk.
     /// When `forwarder_storage_max_size_in_bytes` is `0`, the transactions are never stored on the disk.
-    #[serde(default = "defaults::datadog_configuration_forwarder_storage_max_size_in_bytes")]
-    pub forwarder_storage_max_size_in_bytes: f64,
+    #[serde(default)]
+    pub forwarder_storage_max_size_in_bytes: i64,
 
     #[serde(default)]
     pub forwarder_storage_path: String,
 
     /// Forwarder timeout in seconds
-    #[serde(default = "defaults::datadog_configuration_forwarder_timeout")]
-    pub forwarder_timeout: f64,
+    #[serde(default = "defaults::default_u64::<i64, 20>")]
+    pub forwarder_timeout: i64,
 
     /// Configure which aggregated value to compute.
     /// Possible values are: min, max, median, avg, sum and count.
@@ -345,9 +351,6 @@ pub struct DatadogConfiguration {
     #[serde(default = "defaults::datadog_configuration_min_tls_version")]
     pub min_tls_version: String,
 
-    #[serde(default, skip_serializing_if = "::std::option::Option::is_none")]
-    pub multi_region_failover: Option<DatadogConfigurationMultiRegionFailover>,
-
     /// Enable more flexible no_proxy matching. See https://godoc.org/golang.org/x/net/http/httpproxy#Config
     /// for more information on accepted matching criteria.
     #[serde(default)]
@@ -362,8 +365,8 @@ pub struct DatadogConfiguration {
     #[serde(default, skip_serializing_if = "::std::option::Option::is_none")]
     pub otlp_config: Option<DatadogConfigurationOtlpConfig>,
 
-    #[serde(default, skip_serializing_if = "::std::option::Option::is_none")]
-    pub provider_kind: Option<::serde_json::Value>,
+    #[serde(default)]
+    pub provider_kind: String,
 
     #[serde(default, skip_serializing_if = "::std::option::Option::is_none")]
     pub proxy: Option<DatadogConfigurationProxy>,
@@ -371,23 +374,23 @@ pub struct DatadogConfiguration {
     #[serde(default = "defaults::datadog_configuration_serializer_compressor_kind")]
     pub serializer_compressor_kind: String,
 
-    #[serde(default = "defaults::datadog_configuration_serializer_max_payload_size")]
-    pub serializer_max_payload_size: f64,
+    #[serde(default = "defaults::default_u64::<i64, 2621440>")]
+    pub serializer_max_payload_size: i64,
 
-    #[serde(default = "defaults::datadog_configuration_serializer_max_series_payload_size")]
-    pub serializer_max_series_payload_size: f64,
+    #[serde(default = "defaults::default_u64::<i64, 512000>")]
+    pub serializer_max_series_payload_size: i64,
 
-    #[serde(default = "defaults::datadog_configuration_serializer_max_series_points_per_payload")]
-    pub serializer_max_series_points_per_payload: f64,
+    #[serde(default = "defaults::default_u64::<i64, 10000>")]
+    pub serializer_max_series_points_per_payload: i64,
 
-    #[serde(default = "defaults::datadog_configuration_serializer_max_series_uncompressed_payload_size")]
-    pub serializer_max_series_uncompressed_payload_size: f64,
+    #[serde(default = "defaults::default_u64::<i64, 5242880>")]
+    pub serializer_max_series_uncompressed_payload_size: i64,
 
-    #[serde(default = "defaults::datadog_configuration_serializer_max_uncompressed_payload_size")]
-    pub serializer_max_uncompressed_payload_size: f64,
+    #[serde(default = "defaults::default_u64::<i64, 4194304>")]
+    pub serializer_max_uncompressed_payload_size: i64,
 
-    #[serde(default = "defaults::datadog_configuration_serializer_zstd_compressor_level")]
-    pub serializer_zstd_compressor_level: f64,
+    #[serde(default = "defaults::default_u64::<i64, 1>")]
+    pub serializer_zstd_compressor_level: i64,
 
     /// The site of the Datadog intake to send Agent data to.
     /// The site parameter must be set to enable your agent with Remote Configuration.
@@ -396,12 +399,21 @@ pub struct DatadogConfiguration {
     /// Set to 'us5.datadoghq.com' to send data to the US5 site.
     /// Set to 'ap1.datadoghq.com' to send data to the AP1 site.
     /// Set to 'ddog-gov.com' to send data to the US1-FED site.
-    #[serde(default, skip_serializing_if = "::std::option::Option::is_none")]
-    pub site: Option<::serde_json::Value>,
+    #[serde(default = "defaults::datadog_configuration_site")]
+    pub site: String,
 
     /// Setting this option to "true" tells the Agent to skip validation of SSL/TLS certificates.
     #[serde(default)]
     pub skip_ssl_validation: bool,
+
+    /// sslkeylogfile specifies a destination for TLS master secrets
+    /// in NSS key log format to allow external programs
+    /// such as Wireshark to decrypt TLS connections.
+    /// For more details, see https://developer.mozilla.org/en-US/docs/Mozilla/Projects/NSS/Key_Log_Format.
+    /// Use of sslkeylogfile compromises security and should only be
+    /// used for debugging.
+    #[serde(default)]
+    pub sslkeylogfile: String,
 
     /// Forward every packet received by the DogStatsD server to another statsd server.
     /// WARNING: Make sure that forwarded packets are regular statsd packets and not "DogStatsD" packets,
@@ -411,8 +423,8 @@ pub struct DatadogConfiguration {
     pub statsd_forward_host: String,
 
     /// Port or the "statsd_forward_host" to forward StatsD packet to.
-    #[serde(default = "defaults::datadog_configuration_statsd_forward_port")]
-    pub statsd_forward_port: f64,
+    #[serde(default)]
+    pub statsd_forward_port: i64,
 
     #[serde(default, skip_serializing_if = "::std::vec::Vec::is_empty")]
     pub statsd_metric_blocklist: Vec<String>,
@@ -457,27 +469,27 @@ impl Default for DatadogConfiguration {
     fn default() -> Self {
         Self {
             additional_endpoints: Default::default(),
+            agent_ipc: Default::default(),
             allow_arbitrary_tags: Default::default(),
             api_key: Default::default(),
-            apm_config: Default::default(),
             bind_host: Default::default(),
-            cmd_port: defaults::datadog_configuration_cmd_port(),
-            cri_connection_timeout: defaults::datadog_configuration_cri_connection_timeout(),
-            cri_query_timeout: defaults::datadog_configuration_cri_query_timeout(),
+            cmd_port: defaults::default_u64::<i64, 5001>(),
+            cri_connection_timeout: defaults::default_u64::<i64, 1>(),
+            cri_query_timeout: defaults::default_u64::<i64, 5>(),
             data_plane: Default::default(),
-            dd_url: Default::default(),
-            dogstatsd_buffer_size: defaults::datadog_configuration_dogstatsd_buffer_size(),
-            dogstatsd_capture_depth: defaults::datadog_configuration_dogstatsd_capture_depth(),
+            dd_url: defaults::datadog_configuration_dd_url(),
+            dogstatsd_buffer_size: defaults::default_u64::<i64, 8192>(),
+            dogstatsd_capture_depth: Default::default(),
             dogstatsd_capture_path: Default::default(),
-            dogstatsd_context_expiry_seconds: defaults::datadog_configuration_dogstatsd_context_expiry_seconds(),
+            dogstatsd_context_expiry_seconds: defaults::default_u64::<i64, 20>(),
             dogstatsd_entity_id_precedence: Default::default(),
             dogstatsd_eol_required: Default::default(),
             dogstatsd_flush_incomplete_buckets: Default::default(),
             dogstatsd_log_file: Default::default(),
-            dogstatsd_log_file_max_rolls: defaults::datadog_configuration_dogstatsd_log_file_max_rolls(),
+            dogstatsd_log_file_max_rolls: defaults::default_u64::<i64, 3>(),
             dogstatsd_log_file_max_size: defaults::datadog_configuration_dogstatsd_log_file_max_size(),
             dogstatsd_logging_enabled: defaults::default_bool::<true>(),
-            dogstatsd_mapper_cache_size: defaults::datadog_configuration_dogstatsd_mapper_cache_size(),
+            dogstatsd_mapper_cache_size: defaults::default_u64::<i64, 1000>(),
             dogstatsd_mapper_profiles: Default::default(),
             dogstatsd_metrics_stats_enable: Default::default(),
             dogstatsd_no_aggregation_pipeline: defaults::default_bool::<true>(),
@@ -485,34 +497,35 @@ impl Default for DatadogConfiguration {
             dogstatsd_origin_detection: Default::default(),
             dogstatsd_origin_detection_client: Default::default(),
             dogstatsd_origin_optout_enabled: defaults::default_bool::<true>(),
-            dogstatsd_port: defaults::datadog_configuration_dogstatsd_port(),
-            dogstatsd_so_rcvbuf: defaults::datadog_configuration_dogstatsd_so_rcvbuf(),
+            dogstatsd_port: defaults::default_u64::<i64, 8125>(),
+            dogstatsd_so_rcvbuf: Default::default(),
             dogstatsd_socket: Default::default(),
             dogstatsd_stream_log_too_big: Default::default(),
             dogstatsd_stream_socket: Default::default(),
-            dogstatsd_string_interner_size: defaults::datadog_configuration_dogstatsd_string_interner_size(),
+            dogstatsd_string_interner_size: defaults::default_u64::<i64, 4096>(),
             dogstatsd_tag_cardinality: defaults::datadog_configuration_dogstatsd_tag_cardinality(),
             dogstatsd_tags: Default::default(),
             enable_payloads: Default::default(),
             env: Default::default(),
-            forwarder_backoff_base: defaults::datadog_configuration_forwarder_backoff_base(),
-            forwarder_backoff_factor: defaults::datadog_configuration_forwarder_backoff_factor(),
-            forwarder_backoff_max: defaults::datadog_configuration_forwarder_backoff_max(),
-            forwarder_connection_reset_interval: defaults::datadog_configuration_forwarder_connection_reset_interval(),
-            forwarder_high_prio_buffer_size: defaults::datadog_configuration_forwarder_high_prio_buffer_size(),
+            forwarder_apikey_validation_interval: defaults::default_u64::<i64, 60>(),
+            forwarder_backoff_base: defaults::default_u64::<i64, 2>(),
+            forwarder_backoff_factor: defaults::default_u64::<i64, 2>(),
+            forwarder_backoff_max: defaults::default_u64::<i64, 64>(),
+            forwarder_connection_reset_interval: Default::default(),
+            forwarder_high_prio_buffer_size: defaults::default_u64::<i64, 100>(),
             forwarder_http_protocol: defaults::datadog_configuration_forwarder_http_protocol(),
-            forwarder_max_concurrent_requests: defaults::datadog_configuration_forwarder_max_concurrent_requests(),
-            forwarder_num_workers: defaults::datadog_configuration_forwarder_num_workers(),
-            forwarder_outdated_file_in_days: defaults::datadog_configuration_forwarder_outdated_file_in_days(),
-            forwarder_recovery_interval: defaults::datadog_configuration_forwarder_recovery_interval(),
+            forwarder_max_concurrent_requests: defaults::default_u64::<i64, 10>(),
+            forwarder_num_workers: defaults::default_u64::<i64, 1>(),
+            forwarder_outdated_file_in_days: defaults::default_u64::<i64, 10>(),
+            forwarder_recovery_interval: defaults::default_u64::<i64, 2>(),
             forwarder_recovery_reset: Default::default(),
-            forwarder_retry_queue_max_size: defaults::datadog_configuration_forwarder_retry_queue_max_size(),
-            forwarder_retry_queue_payloads_max_size:
-                defaults::datadog_configuration_forwarder_retry_queue_payloads_max_size(),
+            forwarder_retry_queue_capacity_time_interval_sec: defaults::default_u64::<i64, 900>(),
+            forwarder_retry_queue_max_size: Default::default(),
+            forwarder_retry_queue_payloads_max_size: defaults::default_u64::<i64, 15728640>(),
             forwarder_storage_max_disk_ratio: defaults::datadog_configuration_forwarder_storage_max_disk_ratio(),
-            forwarder_storage_max_size_in_bytes: defaults::datadog_configuration_forwarder_storage_max_size_in_bytes(),
+            forwarder_storage_max_size_in_bytes: Default::default(),
             forwarder_storage_path: Default::default(),
-            forwarder_timeout: defaults::datadog_configuration_forwarder_timeout(),
+            forwarder_timeout: defaults::default_u64::<i64, 20>(),
             histogram_aggregates: defaults::datadog_configuration_histogram_aggregates(),
             histogram_copy_to_distribution: Default::default(),
             histogram_copy_to_distribution_prefix: Default::default(),
@@ -522,7 +535,6 @@ impl Default for DatadogConfiguration {
             metric_filterlist: Default::default(),
             metric_filterlist_match_prefix: Default::default(),
             min_tls_version: defaults::datadog_configuration_min_tls_version(),
-            multi_region_failover: Default::default(),
             no_proxy_nonexact_match: Default::default(),
             observability_pipelines_worker: Default::default(),
             origin_detection_unified: Default::default(),
@@ -530,19 +542,17 @@ impl Default for DatadogConfiguration {
             provider_kind: Default::default(),
             proxy: Default::default(),
             serializer_compressor_kind: defaults::datadog_configuration_serializer_compressor_kind(),
-            serializer_max_payload_size: defaults::datadog_configuration_serializer_max_payload_size(),
-            serializer_max_series_payload_size: defaults::datadog_configuration_serializer_max_series_payload_size(),
-            serializer_max_series_points_per_payload:
-                defaults::datadog_configuration_serializer_max_series_points_per_payload(),
-            serializer_max_series_uncompressed_payload_size:
-                defaults::datadog_configuration_serializer_max_series_uncompressed_payload_size(),
-            serializer_max_uncompressed_payload_size:
-                defaults::datadog_configuration_serializer_max_uncompressed_payload_size(),
-            serializer_zstd_compressor_level: defaults::datadog_configuration_serializer_zstd_compressor_level(),
-            site: Default::default(),
+            serializer_max_payload_size: defaults::default_u64::<i64, 2621440>(),
+            serializer_max_series_payload_size: defaults::default_u64::<i64, 512000>(),
+            serializer_max_series_points_per_payload: defaults::default_u64::<i64, 10000>(),
+            serializer_max_series_uncompressed_payload_size: defaults::default_u64::<i64, 5242880>(),
+            serializer_max_uncompressed_payload_size: defaults::default_u64::<i64, 4194304>(),
+            serializer_zstd_compressor_level: defaults::default_u64::<i64, 1>(),
+            site: defaults::datadog_configuration_site(),
             skip_ssl_validation: Default::default(),
+            sslkeylogfile: Default::default(),
             statsd_forward_host: Default::default(),
-            statsd_forward_port: defaults::datadog_configuration_statsd_forward_port(),
+            statsd_forward_port: Default::default(),
             statsd_metric_blocklist: Default::default(),
             statsd_metric_blocklist_match_prefix: Default::default(),
             statsd_metric_namespace: Default::default(),
@@ -557,253 +567,17 @@ impl Default for DatadogConfiguration {
     }
 }
 
-/// Enter specific configurations for your trace collection.
-/// Uncomment this parameter and the one below to enable them.
-/// See https://docs.datadoghq.com/agent/apm/
+/// `DatadogConfigurationAgentIpc`
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
-pub struct DatadogConfigurationApmConfig {
-    #[serde(default, skip_serializing_if = "::std::option::Option::is_none")]
-    pub obfuscation: Option<DatadogConfigurationApmConfigObfuscation>,
+pub struct DatadogConfigurationAgentIpc {
+    #[serde(default = "defaults::default_u64::<i64, 134217728>")]
+    pub grpc_max_message_size: i64,
 }
 
-impl Default for DatadogConfigurationApmConfig {
+impl Default for DatadogConfigurationAgentIpc {
     fn default() -> Self {
         Self {
-            obfuscation: Default::default(),
-        }
-    }
-}
-
-/// Defines obfuscation rules for sensitive data.
-/// See https://docs.datadoghq.com/tracing/setup_overview/configure_data_security/#agent-trace-obfuscation
-#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
-pub struct DatadogConfigurationApmConfigObfuscation {
-    #[serde(default, skip_serializing_if = "::std::option::Option::is_none")]
-    pub credit_cards: Option<DatadogConfigurationApmConfigObfuscationCreditCards>,
-
-    #[serde(default, skip_serializing_if = "::std::option::Option::is_none")]
-    pub elasticsearch: Option<DatadogConfigurationApmConfigObfuscationElasticsearch>,
-
-    #[serde(default, skip_serializing_if = "::std::option::Option::is_none")]
-    pub http: Option<DatadogConfigurationApmConfigObfuscationHttp>,
-
-    #[serde(default, skip_serializing_if = "::std::option::Option::is_none")]
-    pub memcached: Option<DatadogConfigurationApmConfigObfuscationMemcached>,
-
-    #[serde(default, skip_serializing_if = "::std::option::Option::is_none")]
-    pub mongodb: Option<DatadogConfigurationApmConfigObfuscationMongodb>,
-
-    #[serde(default, skip_serializing_if = "::std::option::Option::is_none")]
-    pub opensearch: Option<DatadogConfigurationApmConfigObfuscationOpensearch>,
-
-    #[serde(default, skip_serializing_if = "::std::option::Option::is_none")]
-    pub redis: Option<DatadogConfigurationApmConfigObfuscationRedis>,
-
-    #[serde(default, skip_serializing_if = "::std::option::Option::is_none")]
-    pub valkey: Option<DatadogConfigurationApmConfigObfuscationValkey>,
-}
-
-impl Default for DatadogConfigurationApmConfigObfuscation {
-    fn default() -> Self {
-        Self {
-            credit_cards: Default::default(),
-            elasticsearch: Default::default(),
-            http: Default::default(),
-            memcached: Default::default(),
-            mongodb: Default::default(),
-            opensearch: Default::default(),
-            redis: Default::default(),
-            valkey: Default::default(),
-        }
-    }
-}
-
-/// Obfuscation rules for credit card numbers found in trace span values.
-#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
-pub struct DatadogConfigurationApmConfigObfuscationCreditCards {
-    /// Enables obfuscation rules for credit cards. Enabled by default.
-    #[serde(default = "defaults::default_bool::<true>")]
-    pub enabled: bool,
-
-    /// List of keys that should not be obfuscated.
-    #[serde(default, skip_serializing_if = "::std::vec::Vec::is_empty")]
-    pub keep_values: Vec<String>,
-
-    /// Enables a Luhn checksum check in order to eliminate false negatives. Disabled by default.
-    #[serde(default)]
-    pub luhn: bool,
-}
-
-impl Default for DatadogConfigurationApmConfigObfuscationCreditCards {
-    fn default() -> Self {
-        Self {
-            enabled: defaults::default_bool::<true>(),
-            keep_values: Default::default(),
-            luhn: Default::default(),
-        }
-    }
-}
-
-/// Obfuscation rules for Elasticsearch query bodies in trace spans.
-#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
-pub struct DatadogConfigurationApmConfigObfuscationElasticsearch {
-    /// Enables obfuscation rules for spans of type "elasticsearch". Enabled by default.
-    #[serde(default = "defaults::default_bool::<true>")]
-    pub enabled: bool,
-
-    /// List of keys that should not be obfuscated.
-    #[serde(default, skip_serializing_if = "::std::vec::Vec::is_empty")]
-    pub keep_values: Vec<String>,
-
-    /// The set of keys for which their values will be passed through SQL obfuscation
-    #[serde(default, skip_serializing_if = "::std::vec::Vec::is_empty")]
-    pub obfuscate_sql_values: Vec<String>,
-}
-
-impl Default for DatadogConfigurationApmConfigObfuscationElasticsearch {
-    fn default() -> Self {
-        Self {
-            enabled: defaults::default_bool::<true>(),
-            keep_values: Default::default(),
-            obfuscate_sql_values: Default::default(),
-        }
-    }
-}
-
-/// Obfuscation rules for HTTP URLs and query strings in trace spans.
-#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
-pub struct DatadogConfigurationApmConfigObfuscationHttp {
-    /// If enabled, path segments in URLs containing digits are replaced by "?"
-    #[serde(default)]
-    pub remove_paths_with_digits: bool,
-
-    /// Enables obfuscation of query strings in URLs
-    #[serde(default)]
-    pub remove_query_string: bool,
-}
-
-impl Default for DatadogConfigurationApmConfigObfuscationHttp {
-    fn default() -> Self {
-        Self {
-            remove_paths_with_digits: Default::default(),
-            remove_query_string: Default::default(),
-        }
-    }
-}
-
-/// Obfuscation rules for Memcached command strings in trace spans.
-#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
-pub struct DatadogConfigurationApmConfigObfuscationMemcached {
-    /// Enables obfuscation rules for spans of type "memcached". Enabled by default.
-    #[serde(default = "defaults::default_bool::<true>")]
-    pub enabled: bool,
-
-    /// If enabled, the full command for the query will be kept, including any lookup
-    /// keys that could be present. The value for storage commands will still be
-    /// redacted if Memcached obfuscation is enabled.
-    #[serde(default)]
-    pub keep_command: bool,
-}
-
-impl Default for DatadogConfigurationApmConfigObfuscationMemcached {
-    fn default() -> Self {
-        Self {
-            enabled: defaults::default_bool::<true>(),
-            keep_command: Default::default(),
-        }
-    }
-}
-
-/// Obfuscation rules for MongoDB query documents in trace spans.
-#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
-pub struct DatadogConfigurationApmConfigObfuscationMongodb {
-    /// Enables obfuscation rules for spans of type "mongodb". Enabled by default.
-    #[serde(default = "defaults::default_bool::<true>")]
-    pub enabled: bool,
-
-    /// List of keys that should not be obfuscated.
-    #[serde(default, skip_serializing_if = "::std::vec::Vec::is_empty")]
-    pub keep_values: Vec<String>,
-
-    /// The set of keys for which their values will be passed through SQL obfuscation
-    #[serde(default, skip_serializing_if = "::std::vec::Vec::is_empty")]
-    pub obfuscate_sql_values: Vec<String>,
-}
-
-impl Default for DatadogConfigurationApmConfigObfuscationMongodb {
-    fn default() -> Self {
-        Self {
-            enabled: defaults::default_bool::<true>(),
-            keep_values: Default::default(),
-            obfuscate_sql_values: Default::default(),
-        }
-    }
-}
-
-/// Obfuscation rules for OpenSearch query bodies in trace spans.
-#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
-pub struct DatadogConfigurationApmConfigObfuscationOpensearch {
-    /// Enables obfuscation rules for spans of type "opensearch". Enabled by default.
-    #[serde(default = "defaults::default_bool::<true>")]
-    pub enabled: bool,
-
-    /// List of keys that should not be obfuscated.
-    #[serde(default, skip_serializing_if = "::std::vec::Vec::is_empty")]
-    pub keep_values: Vec<String>,
-
-    /// The set of keys for which their values will be passed through SQL obfuscation
-    #[serde(default, skip_serializing_if = "::std::vec::Vec::is_empty")]
-    pub obfuscate_sql_values: Vec<String>,
-}
-
-impl Default for DatadogConfigurationApmConfigObfuscationOpensearch {
-    fn default() -> Self {
-        Self {
-            enabled: defaults::default_bool::<true>(),
-            keep_values: Default::default(),
-            obfuscate_sql_values: Default::default(),
-        }
-    }
-}
-
-/// Obfuscation rules for Redis command arguments in trace spans.
-#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
-pub struct DatadogConfigurationApmConfigObfuscationRedis {
-    /// Enables obfuscation rules for spans of type "redis". Enabled by default.
-    #[serde(default = "defaults::default_bool::<true>")]
-    pub enabled: bool,
-
-    /// When true, replaces all arguments of a redis command with a single "?". Disabled by default.
-    #[serde(default)]
-    pub remove_all_args: bool,
-}
-
-impl Default for DatadogConfigurationApmConfigObfuscationRedis {
-    fn default() -> Self {
-        Self {
-            enabled: defaults::default_bool::<true>(),
-            remove_all_args: Default::default(),
-        }
-    }
-}
-
-/// Obfuscation rules for Valkey command arguments in trace spans.
-#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
-pub struct DatadogConfigurationApmConfigObfuscationValkey {
-    /// Enables obfuscation rules for spans of type "valkey". Enabled by default.
-    #[serde(default = "defaults::default_bool::<true>")]
-    pub enabled: bool,
-
-    /// When true, replaces all arguments of a valkey command with a single "?". Disabled by default.
-    #[serde(default)]
-    pub remove_all_args: bool,
-}
-
-impl Default for DatadogConfigurationApmConfigObfuscationValkey {
-    fn default() -> Self {
-        Self {
-            enabled: defaults::default_bool::<true>(),
-            remove_all_args: Default::default(),
+            grpc_max_message_size: defaults::default_u64::<i64, 134217728>(),
         }
     }
 }
@@ -811,14 +585,38 @@ impl Default for DatadogConfigurationApmConfigObfuscationValkey {
 /// `DatadogConfigurationDataPlane`
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 pub struct DatadogConfigurationDataPlane {
+    #[serde(default = "defaults::datadog_configuration_data_plane_api_listen_address")]
+    pub api_listen_address: String,
+
     #[serde(default, skip_serializing_if = "::std::option::Option::is_none")]
     pub dogstatsd: Option<DatadogConfigurationDataPlaneDogstatsd>,
+
+    #[serde(default = "defaults::datadog_configuration_data_plane_log_file")]
+    pub log_file: String,
+
+    #[serde(default, skip_serializing_if = "::std::option::Option::is_none")]
+    pub otlp: Option<DatadogConfigurationDataPlaneOtlp>,
+
+    #[serde(default = "defaults::default_bool::<true>")]
+    pub remote_agent_enabled: bool,
+
+    #[serde(default = "defaults::datadog_configuration_data_plane_secure_api_listen_address")]
+    pub secure_api_listen_address: String,
+
+    #[serde(default = "defaults::default_bool::<true>")]
+    pub use_new_config_stream_endpoint: bool,
 }
 
 impl Default for DatadogConfigurationDataPlane {
     fn default() -> Self {
         Self {
+            api_listen_address: defaults::datadog_configuration_data_plane_api_listen_address(),
             dogstatsd: Default::default(),
+            log_file: defaults::datadog_configuration_data_plane_log_file(),
+            otlp: Default::default(),
+            remote_agent_enabled: defaults::default_bool::<true>(),
+            secure_api_listen_address: defaults::datadog_configuration_data_plane_secure_api_listen_address(),
+            use_new_config_stream_endpoint: defaults::default_bool::<true>(),
         }
     }
 }
@@ -826,16 +624,97 @@ impl Default for DatadogConfigurationDataPlane {
 /// `DatadogConfigurationDataPlaneDogstatsd`
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 pub struct DatadogConfigurationDataPlaneDogstatsd {
-    /// Maximum number of entries in the per-context deduplication cache used by the ADP metric tag filterlist.
-    #[serde(default = "defaults::datadog_configuration_data_plane_dogstatsd_aggregator_tag_filter_cache_capacity")]
-    pub aggregator_tag_filter_cache_capacity: f64,
+    #[serde(default = "defaults::default_u64::<i64, 100000>")]
+    pub aggregator_tag_filter_cache_capacity: i64,
 }
 
 impl Default for DatadogConfigurationDataPlaneDogstatsd {
     fn default() -> Self {
         Self {
-            aggregator_tag_filter_cache_capacity:
-                defaults::datadog_configuration_data_plane_dogstatsd_aggregator_tag_filter_cache_capacity(),
+            aggregator_tag_filter_cache_capacity: defaults::default_u64::<i64, 100000>(),
+        }
+    }
+}
+
+/// `DatadogConfigurationDataPlaneOtlp`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+pub struct DatadogConfigurationDataPlaneOtlp {
+    #[serde(default, skip_serializing_if = "::std::option::Option::is_none")]
+    pub proxy: Option<DatadogConfigurationDataPlaneOtlpProxy>,
+}
+
+impl Default for DatadogConfigurationDataPlaneOtlp {
+    fn default() -> Self {
+        Self {
+            proxy: Default::default(),
+        }
+    }
+}
+
+/// `DatadogConfigurationDataPlaneOtlpProxy`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+pub struct DatadogConfigurationDataPlaneOtlpProxy {
+    #[serde(default, skip_serializing_if = "::std::option::Option::is_none")]
+    pub logs: Option<DatadogConfigurationDataPlaneOtlpProxyLogs>,
+
+    #[serde(default, skip_serializing_if = "::std::option::Option::is_none")]
+    pub metrics: Option<DatadogConfigurationDataPlaneOtlpProxyMetrics>,
+
+    #[serde(default, skip_serializing_if = "::std::option::Option::is_none")]
+    pub traces: Option<DatadogConfigurationDataPlaneOtlpProxyTraces>,
+}
+
+impl Default for DatadogConfigurationDataPlaneOtlpProxy {
+    fn default() -> Self {
+        Self {
+            logs: Default::default(),
+            metrics: Default::default(),
+            traces: Default::default(),
+        }
+    }
+}
+
+/// `DatadogConfigurationDataPlaneOtlpProxyLogs`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+pub struct DatadogConfigurationDataPlaneOtlpProxyLogs {
+    #[serde(default = "defaults::default_bool::<true>")]
+    pub enabled: bool,
+}
+
+impl Default for DatadogConfigurationDataPlaneOtlpProxyLogs {
+    fn default() -> Self {
+        Self {
+            enabled: defaults::default_bool::<true>(),
+        }
+    }
+}
+
+/// `DatadogConfigurationDataPlaneOtlpProxyMetrics`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+pub struct DatadogConfigurationDataPlaneOtlpProxyMetrics {
+    #[serde(default = "defaults::default_bool::<true>")]
+    pub enabled: bool,
+}
+
+impl Default for DatadogConfigurationDataPlaneOtlpProxyMetrics {
+    fn default() -> Self {
+        Self {
+            enabled: defaults::default_bool::<true>(),
+        }
+    }
+}
+
+/// `DatadogConfigurationDataPlaneOtlpProxyTraces`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+pub struct DatadogConfigurationDataPlaneOtlpProxyTraces {
+    #[serde(default = "defaults::default_bool::<true>")]
+    pub enabled: bool,
+}
+
+impl Default for DatadogConfigurationDataPlaneOtlpProxyTraces {
+    fn default() -> Self {
+        Self {
+            enabled: defaults::default_bool::<true>(),
         }
     }
 }
@@ -863,41 +742,6 @@ impl Default for DatadogConfigurationEnablePayloads {
             series: defaults::default_bool::<true>(),
             service_checks: defaults::default_bool::<true>(),
             sketches: defaults::default_bool::<true>(),
-        }
-    }
-}
-
-/// `DatadogConfigurationMultiRegionFailover`
-#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
-pub struct DatadogConfigurationMultiRegionFailover {
-    #[serde(default, skip_serializing_if = "::std::option::Option::is_none")]
-    pub api_key: Option<::serde_json::Value>,
-
-    #[serde(default, skip_serializing_if = "::std::option::Option::is_none")]
-    pub dd_url: Option<::serde_json::Value>,
-
-    #[serde(default)]
-    pub enabled: bool,
-
-    #[serde(default)]
-    pub failover_metrics: bool,
-
-    #[serde(default, skip_serializing_if = "::std::option::Option::is_none")]
-    pub metric_allowlist: Option<::serde_json::Value>,
-
-    #[serde(default, skip_serializing_if = "::std::option::Option::is_none")]
-    pub site: Option<::serde_json::Value>,
-}
-
-impl Default for DatadogConfigurationMultiRegionFailover {
-    fn default() -> Self {
-        Self {
-            api_key: Default::default(),
-            dd_url: Default::default(),
-            enabled: Default::default(),
-            failover_metrics: Default::default(),
-            metric_allowlist: Default::default(),
-            site: Default::default(),
         }
     }
 }
@@ -1048,8 +892,8 @@ pub struct DatadogConfigurationOtlpConfigReceiverProtocolsGrpc {
 
     /// The maximum size (in MiB) of messages accepted by the OTLP/gRPC endpoint.
     /// When set to 0 (the default), grpc-go applies its built-in 4 MiB limit.
-    #[serde(default = "defaults::datadog_configuration_otlp_config_receiver_protocols_grpc_max_recv_msg_size_mib")]
-    pub max_recv_msg_size_mib: f64,
+    #[serde(default)]
+    pub max_recv_msg_size_mib: i64,
 
     /// The OTLP/gRPC listener transport protocol.
     /// Known protocols are "tcp", "udp", "ip", "unix", "unixgram", and "unixpacket".
@@ -1061,8 +905,7 @@ impl Default for DatadogConfigurationOtlpConfigReceiverProtocolsGrpc {
     fn default() -> Self {
         Self {
             endpoint: defaults::datadog_configuration_otlp_config_receiver_protocols_grpc_endpoint(),
-            max_recv_msg_size_mib:
-                defaults::datadog_configuration_otlp_config_receiver_protocols_grpc_max_recv_msg_size_mib(),
+            max_recv_msg_size_mib: Default::default(),
             transport: defaults::datadog_configuration_otlp_config_receiver_protocols_grpc_transport(),
         }
     }
@@ -1093,8 +936,8 @@ pub struct DatadogConfigurationOtlpConfigTraces {
     #[serde(default = "defaults::default_bool::<true>")]
     pub enabled: bool,
 
-    #[serde(default = "defaults::datadog_configuration_otlp_config_traces_internal_port")]
-    pub internal_port: f64,
+    #[serde(default = "defaults::default_u64::<i64, 5003>")]
+    pub internal_port: i64,
 
     #[serde(default, skip_serializing_if = "::std::option::Option::is_none")]
     pub probabilistic_sampler: Option<DatadogConfigurationOtlpConfigTracesProbabilisticSampler>,
@@ -1104,7 +947,7 @@ impl Default for DatadogConfigurationOtlpConfigTraces {
     fn default() -> Self {
         Self {
             enabled: defaults::default_bool::<true>(),
-            internal_port: defaults::datadog_configuration_otlp_config_traces_internal_port(),
+            internal_port: defaults::default_u64::<i64, 5003>(),
             probabilistic_sampler: Default::default(),
         }
     }
@@ -1225,89 +1068,27 @@ pub mod defaults {
     {
         T::try_from(V).unwrap()
     }
-    pub(super) fn datadog_configuration_cmd_port() -> f64 {
-        5001_f64
+    pub(super) fn default_u64<T, const V: u64>() -> T
+    where
+        T: TryFrom<u64>,
+        <T as ::std::convert::TryFrom<u64>>::Error: ::std::fmt::Debug,
+    {
+        T::try_from(V).unwrap()
     }
-    pub(super) fn datadog_configuration_cri_connection_timeout() -> f64 {
-        1_f64
-    }
-    pub(super) fn datadog_configuration_cri_query_timeout() -> f64 {
-        5_f64
-    }
-    pub(super) fn datadog_configuration_dogstatsd_buffer_size() -> f64 {
-        8192_f64
-    }
-    pub(super) fn datadog_configuration_dogstatsd_capture_depth() -> f64 {
-        0_f64
-    }
-    pub(super) fn datadog_configuration_dogstatsd_context_expiry_seconds() -> f64 {
-        20_f64
-    }
-    pub(super) fn datadog_configuration_dogstatsd_log_file_max_rolls() -> f64 {
-        3_f64
+    pub(super) fn datadog_configuration_dd_url() -> String {
+        "https://app.datadoghq.com".to_string()
     }
     pub(super) fn datadog_configuration_dogstatsd_log_file_max_size() -> String {
         "10Mb".to_string()
     }
-    pub(super) fn datadog_configuration_dogstatsd_mapper_cache_size() -> f64 {
-        1000_f64
-    }
-    pub(super) fn datadog_configuration_dogstatsd_port() -> f64 {
-        8125_f64
-    }
-    pub(super) fn datadog_configuration_dogstatsd_so_rcvbuf() -> f64 {
-        0_f64
-    }
-    pub(super) fn datadog_configuration_dogstatsd_string_interner_size() -> f64 {
-        4096_f64
-    }
     pub(super) fn datadog_configuration_dogstatsd_tag_cardinality() -> String {
         "low".to_string()
-    }
-    pub(super) fn datadog_configuration_forwarder_backoff_base() -> f64 {
-        2_f64
-    }
-    pub(super) fn datadog_configuration_forwarder_backoff_factor() -> f64 {
-        2_f64
-    }
-    pub(super) fn datadog_configuration_forwarder_backoff_max() -> f64 {
-        64_f64
-    }
-    pub(super) fn datadog_configuration_forwarder_connection_reset_interval() -> f64 {
-        0_f64
-    }
-    pub(super) fn datadog_configuration_forwarder_high_prio_buffer_size() -> f64 {
-        100_f64
     }
     pub(super) fn datadog_configuration_forwarder_http_protocol() -> String {
         "auto".to_string()
     }
-    pub(super) fn datadog_configuration_forwarder_max_concurrent_requests() -> f64 {
-        10_f64
-    }
-    pub(super) fn datadog_configuration_forwarder_num_workers() -> f64 {
-        1_f64
-    }
-    pub(super) fn datadog_configuration_forwarder_outdated_file_in_days() -> f64 {
-        10_f64
-    }
-    pub(super) fn datadog_configuration_forwarder_recovery_interval() -> f64 {
-        2_f64
-    }
-    pub(super) fn datadog_configuration_forwarder_retry_queue_max_size() -> f64 {
-        0_f64
-    }
-    pub(super) fn datadog_configuration_forwarder_retry_queue_payloads_max_size() -> f64 {
-        15728640_f64
-    }
     pub(super) fn datadog_configuration_forwarder_storage_max_disk_ratio() -> f64 {
         0.8_f64
-    }
-    pub(super) fn datadog_configuration_forwarder_storage_max_size_in_bytes() -> f64 {
-        0_f64
-    }
-    pub(super) fn datadog_configuration_forwarder_timeout() -> f64 {
-        20_f64
     }
     pub(super) fn datadog_configuration_histogram_aggregates() -> Vec<String> {
         vec![
@@ -1326,26 +1107,8 @@ pub mod defaults {
     pub(super) fn datadog_configuration_serializer_compressor_kind() -> String {
         "zstd".to_string()
     }
-    pub(super) fn datadog_configuration_serializer_max_payload_size() -> f64 {
-        2621440_f64
-    }
-    pub(super) fn datadog_configuration_serializer_max_series_payload_size() -> f64 {
-        512000_f64
-    }
-    pub(super) fn datadog_configuration_serializer_max_series_points_per_payload() -> f64 {
-        10000_f64
-    }
-    pub(super) fn datadog_configuration_serializer_max_series_uncompressed_payload_size() -> f64 {
-        5242880_f64
-    }
-    pub(super) fn datadog_configuration_serializer_max_uncompressed_payload_size() -> f64 {
-        4194304_f64
-    }
-    pub(super) fn datadog_configuration_serializer_zstd_compressor_level() -> f64 {
-        1_f64
-    }
-    pub(super) fn datadog_configuration_statsd_forward_port() -> f64 {
-        0_f64
+    pub(super) fn datadog_configuration_site() -> String {
+        "datadoghq.com".to_string()
     }
     pub(super) fn datadog_configuration_statsd_metric_namespace_blacklist() -> Vec<String> {
         vec![
@@ -1372,23 +1135,23 @@ pub mod defaults {
             "runtime".to_string(),
         ]
     }
-    pub(super) fn datadog_configuration_data_plane_dogstatsd_aggregator_tag_filter_cache_capacity() -> f64 {
-        100000_f64
+    pub(super) fn datadog_configuration_data_plane_api_listen_address() -> String {
+        "tcp://0.0.0.0:5100".to_string()
+    }
+    pub(super) fn datadog_configuration_data_plane_log_file() -> String {
+        "/var/log/datadog/agent-data-plane.log".to_string()
+    }
+    pub(super) fn datadog_configuration_data_plane_secure_api_listen_address() -> String {
+        "tcp://0.0.0.0:5101".to_string()
     }
     pub(super) fn datadog_configuration_otlp_config_receiver_protocols_grpc_endpoint() -> String {
         "localhost:4317".to_string()
-    }
-    pub(super) fn datadog_configuration_otlp_config_receiver_protocols_grpc_max_recv_msg_size_mib() -> f64 {
-        0_f64
     }
     pub(super) fn datadog_configuration_otlp_config_receiver_protocols_grpc_transport() -> String {
         "tcp".to_string()
     }
     pub(super) fn datadog_configuration_otlp_config_receiver_protocols_http_endpoint() -> String {
         "localhost:4318".to_string()
-    }
-    pub(super) fn datadog_configuration_otlp_config_traces_internal_port() -> f64 {
-        5003_f64
     }
     pub(super) fn datadog_configuration_otlp_config_traces_probabilistic_sampler_sampling_percentage() -> f64 {
         100_f64

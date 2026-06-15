@@ -8,3 +8,12 @@ pub mod classifier;
 pub mod datadog_configuration;
 
 pub use datadog_configuration::DatadogConfiguration;
+
+/// Generated witness trait and driver over the supported Datadog configuration surface.
+///
+/// Generated at build time from `schema_overlay.yaml`. Implemented by the hand-written translator so
+/// that the compiler forces every supported key to have an explicit destination in the ADP-native
+/// model.
+pub mod witness;
+
+pub use witness::{drive, DatadogConfigConsumer};

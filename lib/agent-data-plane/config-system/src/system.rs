@@ -5,10 +5,17 @@ use agent_data_plane_config::{
     DataPlaneConfiguration, OtlpPipelineConfiguration, OtlpProxyConfiguration, PipelineConfiguration,
     RuntimeConfigAuthority, RuntimeConfigLanguage, SalukiConfiguration,
 };
+use datadog_agent_commons::ipc::config::RemoteAgentClientConfiguration;
 use saluki_config::{ConfigurationLoader, GenericConfiguration};
-use saluki_error::{ErrorContext as _, GenericError};
+use saluki_error::{generic_error, ErrorContext as _, GenericError};
+use saluki_io::net::{GrpcTargetAddress, ListenAddress};
+use tracing::info;
 
-use crate::{bootstrap::BootstrapInputs, datadog_agent::DatadogAgentConnection, stream::ConfigStreamHandle};
+use crate::{
+    bootstrap::BootstrapInputs,
+    datadog_agent::{remote_agent_service_names, DatadogAgentConnection},
+    stream::ConfigStreamHandle,
+};
 
 /// Coordinates bootstrap loading, authority resolution, and translation.
 #[derive(Clone, Debug)]
@@ -21,7 +28,7 @@ impl ConfigurationSystem {
     /// Starts the configuration system from the configured local sources.
     pub async fn start(self) -> Result<StartedConfigurationSystem, GenericError> {
         let local = load_local_datadog_sources(&self.inputs).await?;
-        start_from_local_datadog_snapshot(local).await
+        start_from_local_datadog_sources(local, &self.inputs).await
     }
 }
 
@@ -34,6 +41,68 @@ async fn load_local_datadog_sources(inputs: &BootstrapInputs) -> Result<GenericC
         .bootstrap_generic())
 }
 
+async fn start_from_local_datadog_sources(
+    config: GenericConfiguration, inputs: &BootstrapInputs,
+) -> Result<StartedConfigurationSystem, GenericError> {
+    let bootstrap = translate_bootstrap_configuration(&config)?;
+
+    match bootstrap.startup.runtime_config_authority {
+        RuntimeConfigAuthority::LocalSnapshot(RuntimeConfigLanguage::DatadogAgent) => {
+            let saluki = translate_datadog_snapshot(&config)?;
+            Ok(StartedConfigurationSystem {
+                bootstrap,
+                saluki,
+                attachments: StartedAttachments::None,
+            })
+        }
+        RuntimeConfigAuthority::LocalSnapshot(language) => Err(generic_error!(
+            "runtime configuration language {:?} is not supported yet",
+            language
+        )),
+        RuntimeConfigAuthority::ConfigStream(ConfigStreamAuthority::DatadogAgent) => {
+            let client_config = RemoteAgentClientConfiguration::from_configuration(&config)?;
+            let secure_api_listen_address = config
+                .try_get_typed("data_plane.secure_api_listen_address")
+                .error_context("Failed to read `data_plane.secure_api_listen_address`.")?
+                .unwrap_or_else(|| ListenAddress::any_tcp(5101));
+            let api_listen_addr =
+                GrpcTargetAddress::try_from_listen_addr(&secure_api_listen_address).ok_or_else(|| {
+                    generic_error!("Failed to get valid gRPC target address from secure API listen address.")
+                })?;
+
+            let connection = DatadogAgentConnection::connect_and_register(
+                client_config,
+                api_listen_addr,
+                remote_agent_service_names(),
+            )
+            .await?;
+            let stream = ConfigStreamHandle::new(ConfigStreamAuthority::DatadogAgent, false);
+            let dynamic_config = ConfigurationLoader::default()
+                .from_environment(inputs.env_var_prefix)
+                .error_context("Environment variable prefix should not be empty.")?
+                .with_dynamic_configuration(connection.create_config_stream())
+                .into_generic()
+                .await?;
+
+            info!("Waiting for initial configuration from Datadog Agent...");
+            dynamic_config.ready().await;
+            info!("Initial configuration received.");
+
+            let saluki = translate_datadog_snapshot(&dynamic_config)?;
+
+            Ok(StartedConfigurationSystem {
+                bootstrap,
+                saluki,
+                attachments: StartedAttachments::DatadogAgentConfigStream {
+                    connection,
+                    stream: stream.with_initial_snapshot_received(true),
+                },
+            })
+        }
+    }
+}
+
+#[cfg(test)]
 async fn start_from_local_datadog_snapshot(
     config: GenericConfiguration,
 ) -> Result<StartedConfigurationSystem, GenericError> {

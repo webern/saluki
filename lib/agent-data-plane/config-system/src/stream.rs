@@ -8,9 +8,32 @@ use agent_data_plane_config::ConfigStreamAuthority;
 /// provider is the Datadog Agent config stream.
 #[derive(Clone, Debug)]
 pub struct ConfigStreamHandle {
-    /// TODO: figure out the actual struct fields needed.
-    pub authority: ConfigStreamAuthority,
+    authority: ConfigStreamAuthority,
+    initial_snapshot_received: bool,
+}
 
-    /// TODO: figure out the actual struct fields needed.
-    pub initial_snapshot_received: bool,
+impl ConfigStreamHandle {
+    /// Creates a config stream handle.
+    pub const fn new(authority: ConfigStreamAuthority, initial_snapshot_received: bool) -> Self {
+        Self {
+            authority,
+            initial_snapshot_received,
+        }
+    }
+
+    /// Returns the backing stream authority.
+    pub fn authority(&self) -> ConfigStreamAuthority {
+        self.authority.clone()
+    }
+
+    /// Returns whether the initial authoritative snapshot has been received.
+    pub const fn initial_snapshot_received(&self) -> bool {
+        self.initial_snapshot_received
+    }
+
+    /// Returns this handle with updated initial-snapshot status.
+    pub const fn with_initial_snapshot_received(mut self, initial_snapshot_received: bool) -> Self {
+        self.initial_snapshot_received = initial_snapshot_received;
+        self
+    }
 }

@@ -84,10 +84,18 @@ dependencies = [
  "agent-data-plane-config",
  "datadog-agent-commons",
  "datadog-agent-config",
+ "datadog-protos",
+ "futures",
+ "prost-types",
+ "saluki-common",
  "saluki-config",
  "saluki-error",
+ "saluki-io",
+ "saluki-metadata",
  "serde_json",
  "tokio",
+ "tonic",
+ "tracing",
 ]
 
 [[package]]

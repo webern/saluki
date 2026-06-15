@@ -8,7 +8,10 @@ use agent_data_plane_config::{
     RuntimeConfigAuthority, RuntimeConfigLanguage, SalukiConfiguration,
 };
 use datadog_agent_commons::ipc::config::RemoteAgentClientConfiguration;
-use datadog_agent_config::classifier::{ConfigClassifier, Pipeline, PipelineAffinity, Severity, SupportLevel};
+use datadog_agent_config::{
+    classifier::{ConfigClassifier, Pipeline, PipelineAffinity, Severity, SupportLevel},
+    DatadogRemapper, KEY_ALIASES,
+};
 use saluki_config::{ConfigurationLoader, GenericConfiguration};
 use saluki_error::{generic_error, ErrorContext as _, GenericError};
 use saluki_io::net::{GrpcTargetAddress, ListenAddress};
@@ -37,8 +40,10 @@ impl ConfigurationSystem {
 
 async fn load_local_datadog_sources(inputs: &BootstrapInputs) -> Result<GenericConfiguration, GenericError> {
     Ok(ConfigurationLoader::default()
+        .with_key_aliases(KEY_ALIASES)
         .from_yaml(&inputs.config_file_path)
         .error_context("Failed to load Datadog Agent configuration file during configuration-system bootstrap.")?
+        .add_providers([DatadogRemapper::new()])
         .from_environment(inputs.env_var_prefix)
         .error_context("Environment variable prefix should not be empty.")?
         .bootstrap_generic())
@@ -81,6 +86,8 @@ async fn start_from_local_datadog_sources(
             .await?;
             let stream = ConfigStreamHandle::new(ConfigStreamAuthority::DatadogAgent, false);
             let dynamic_config = ConfigurationLoader::default()
+                .with_key_aliases(KEY_ALIASES)
+                .add_providers([DatadogRemapper::new()])
                 .from_environment(inputs.env_var_prefix)
                 .error_context("Environment variable prefix should not be empty.")?
                 .with_dynamic_configuration(connection.create_config_stream())

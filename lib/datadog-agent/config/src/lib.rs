@@ -9,6 +9,7 @@
 //! separate prevents Datadog schema concepts from becoming component APIs.
 
 pub mod classifier;
+pub mod remapper;
 
 /// Generated typed deserializer for the supported Datadog Agent configuration surface.
 ///
@@ -18,3 +19,4 @@ pub mod classifier;
 pub mod datadog_configuration;
 
 pub use datadog_configuration::DatadogConfiguration;
+pub use remapper::{DatadogRemapper, KEY_ALIASES};

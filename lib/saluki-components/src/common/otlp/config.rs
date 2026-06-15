@@ -347,8 +347,8 @@ impl TracesConfig {
     /// The schema keys (`enabled`, `internal_port`, and the probabilistic sampler percentage) come
     /// from `native`; the sampling percentage there already reflects any
     /// `DD_OTLP_CONFIG_TRACES_PROBABILISTIC_SAMPLER_SAMPLING_PERCENTAGE` env override applied at the
-    /// translation boundary (see `bin/agent-data-plane` run path), so no separate
-    /// [`apply_env_overrides`][Self::apply_env_overrides] step is needed on the migrated path. The
+    /// translation boundary (see `bin/agent-data-plane` run path), so no separate env-override step
+    /// is needed on the migrated path. The
     /// non-schema knobs come from `private`.
     pub fn from_native(native: &NativeOtlpConfig, private: NativeTracesPrivateConfig) -> Self {
         Self {

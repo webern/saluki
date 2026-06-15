@@ -46,6 +46,8 @@ impl OtlpRelayConfiguration {
     /// This is the legacy `GenericConfiguration` path. Production construction now goes through
     /// [`from_native`][Self::from_native]; this constructor is retained for the config-registry smoke
     /// tests.
+    ///
+    /// Registry/test-only legacy path; removed when `GenericConfiguration` is confined to the translation layer in PR 11.
     pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
         config.as_typed().map_err(Into::into)
     }

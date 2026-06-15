@@ -1,17 +1,18 @@
-//! OTLP native-config assembly: the first runtime consumer of the typed translation boundary.
+//! OTLP native-config assembly over the typed translation boundary.
 //!
-//! This is the translation boundary for OTLP construction. It deserializes the typed
-//! [`DatadogConfiguration`] from the resolved `GenericConfiguration`, applies the one OTLP env
-//! override that the typed deserialize cannot capture on its own, runs the pure translator, and
-//! bundles the resulting native OTLP slice together with the Saluki-private OTLP knobs (which are not
-//! Datadog-schema keys and so have no place in `TotalSalukiConfiguration` yet).
+//! Translation itself does not live here. The resolved `GenericConfiguration` is deserialized into
+//! the typed [`DatadogConfiguration`], the few env overrides the typed deserialize cannot capture are
+//! folded onto it, and the pure translator is run -- all once, unconditionally, in the run path (see
+//! [`build_total_config`]). This module then bundles the translated native OTLP slice together with
+//! the Saluki-private OTLP knobs (which are not Datadog-schema keys and so have no place in
+//! `TotalSalukiConfiguration` yet) via [`build_otlp_native_config`].
 //!
 //! The bundle ([`OtlpNativeConfig`]) is the only OTLP input the topology builder needs. The OTLP
 //! component constructors (`OtlpConfiguration::from_native`, relay/decoder/forwarder `from_native`)
 //! consume it without ever touching `GenericConfiguration`.
 
 use bytesize::ByteSize;
-use datadog_agent_config::{translate, DatadogConfiguration};
+use datadog_agent_config::{translate, DatadogConfiguration, TotalSalukiConfiguration};
 use saluki_components::config::NativeTracesPrivateConfig;
 use saluki_config::GenericConfiguration;
 use saluki_error::{ErrorContext as _, GenericError};
@@ -64,20 +65,35 @@ const DEFAULT_ENABLE_OTLP_COMPUTE_TOP_LEVEL_BY_SPAN_KIND: bool = true;
 /// cannot observe the env var on its own; see [`apply_sampling_percentage_env_override`].
 const OTLP_SAMPLING_PERCENTAGE_FLAT_KEY: &str = "otlp_config_traces_probabilistic_sampler_sampling_percentage";
 
-/// Builds the native OTLP boot config from the resolved `GenericConfiguration`.
+/// Builds the complete native [`TotalSalukiConfiguration`] from the resolved `GenericConfiguration`.
 ///
-/// Deserializes [`DatadogConfiguration`], applies the OTLP sampling-percentage env override that the
-/// typed deserialize cannot capture, translates to native config, and reads the Saluki-private OTLP
-/// knobs.
-pub fn build_otlp_native_config(config: &GenericConfiguration) -> Result<OtlpNativeConfig, GenericError> {
+/// This is the single translation boundary for the run path: it deserializes the typed
+/// [`DatadogConfiguration`], folds the OTLP boundary overrides that the typed deserialize cannot
+/// capture on its own (the sampling-percentage env var and the legacy logs-enabled default), and runs
+/// the pure translator -- exactly once, unconditionally, regardless of which pipelines are enabled.
+/// Each migrated subsystem (OTLP today; traces/logs/metrics/... in later PRs) then consumes its slice
+/// of the returned `TotalSalukiConfiguration`.
+pub fn build_total_config(config: &GenericConfiguration) -> Result<TotalSalukiConfiguration, GenericError> {
     let mut dd_config: DatadogConfiguration = config
         .as_typed()
-        .error_context("Failed to deserialize typed Datadog configuration for OTLP translation.")?;
+        .error_context("Failed to deserialize typed Datadog configuration for translation.")?;
 
     apply_sampling_percentage_env_override(&mut dd_config, config)?;
+    apply_legacy_logs_enabled_default(&mut dd_config, config)?;
 
-    let total_config = translate(&dd_config);
+    Ok(translate(&dd_config))
+}
 
+/// Builds the native OTLP boot config from the translated config plus the Saluki-private OTLP knobs.
+///
+/// The OTLP slice comes from the already-translated `total_config`; this function does NOT translate.
+/// The Saluki-private knobs (the four interner/cache knobs and the `otlp_config.traces.*` private
+/// knobs) are not Datadog-schema keys, so they have no place in `TotalSalukiConfiguration` and are
+/// read here from `GenericConfiguration` as a temporary compatibility path until they move to
+/// `SalukiPrivateConfiguration` in a later migration PR.
+pub fn build_otlp_native_config(
+    total_config: &TotalSalukiConfiguration, config: &GenericConfiguration,
+) -> Result<OtlpNativeConfig, GenericError> {
     let traces_private = NativeTracesPrivateConfig {
         string_interner_bytes: config
             .try_get_typed::<ByteSize>("otlp_config.traces.string_interner_size")?
@@ -91,7 +107,7 @@ pub fn build_otlp_native_config(config: &GenericConfiguration) -> Result<OtlpNat
     };
 
     Ok(OtlpNativeConfig {
-        otlp: total_config.otlp,
+        otlp: total_config.otlp.clone(),
         context_interner_bytes: config
             .try_get_typed::<ByteSize>("otlp_string_interner_size")?
             .unwrap_or_else(default_context_interner_bytes),
@@ -130,6 +146,36 @@ fn apply_sampling_percentage_env_override(
     Ok(())
 }
 
+/// Folds the legacy ADP "OTLP logs on by default" behavior onto the typed config before translation.
+///
+/// Legacy ADP defaulted `otlp_config.logs.enabled` to `true` (the `default_logs_enabled` serde
+/// default in `saluki-components`), whereas the vendored Datadog Agent schema defaults it to `false`.
+/// This is a behavior-preserving migration PR, so we reproduce the legacy default here: if the
+/// operator did not set the key at all, we fold `true` onto the typed config so the native
+/// `logs_enabled` resolves to true; if the operator set it explicitly, we honor their value.
+///
+/// We read the RAW key from `GenericConfiguration` to distinguish "absent" from "explicit default":
+/// the typed `DatadogConfiguration` already collapses both onto `false` (its schema default), so it
+/// cannot tell them apart on its own.
+///
+/// Adopting the Agent schema default (logs off when unset) is a deliberate future decision, NOT this
+/// PR's: changing it is a behavior change that belongs in its own change with its own justification.
+fn apply_legacy_logs_enabled_default(
+    dd_config: &mut DatadogConfiguration, config: &GenericConfiguration,
+) -> Result<(), GenericError> {
+    match config.try_get_typed::<bool>("otlp_config.logs.enabled")? {
+        // Operator set it explicitly: honor their value (the typed deserialize already captured it).
+        Some(_) => {}
+        // Operator did not set it: preserve the legacy ADP logs-on-by-default behavior.
+        None => {
+            let otlp_config = dd_config.otlp_config.get_or_insert_with(Default::default);
+            let logs = otlp_config.logs.get_or_insert_with(Default::default);
+            logs.enabled = true;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use saluki_components::config::{DatadogRemapper, KEY_ALIASES};
@@ -150,6 +196,12 @@ mod tests {
         cfg
     }
 
+    /// Translate then bundle, mirroring the run-path order (single `translate()` then bundle assembly).
+    fn build_native(cfg: &GenericConfiguration) -> OtlpNativeConfig {
+        let total_config = build_total_config(cfg).expect("should build total config");
+        build_otlp_native_config(&total_config, cfg).expect("should build native OTLP config")
+    }
+
     // The flat sampling-percentage env var must flow through translate() to the native value. This is
     // the override that DatadogConfiguration::deserialize cannot capture on its own (Figment splits
     // env keys on `__`, so the single-underscore var lands as a flat key, not the nested path).
@@ -161,7 +213,7 @@ mod tests {
         )];
         let cfg = config_with_env(json!({ "otlp_config": {} }), &env).await;
 
-        let native = build_otlp_native_config(&cfg).expect("should build native OTLP config");
+        let native = build_native(&cfg);
         assert_eq!(native.otlp.traces_sampling_percentage, 12.5);
     }
 
@@ -177,18 +229,21 @@ mod tests {
         )
         .await;
 
-        let native = build_otlp_native_config(&cfg).expect("should build native OTLP config");
+        let native = build_native(&cfg);
         assert_eq!(native.otlp.traces_sampling_percentage, 12.5);
     }
 
     // With nothing set, the native value is the schema default and the Saluki-private knobs fall back
-    // to their component defaults.
+    // to their component defaults. The grpc/http endpoint defaults are asserted here so the boot-bundle
+    // test is self-contained.
     #[tokio::test]
     async fn defaults_when_unset() {
         let cfg = config_with_env(json!({ "otlp_config": {} }), &[]).await;
 
-        let native = build_otlp_native_config(&cfg).expect("should build native OTLP config");
+        let native = build_native(&cfg);
         assert_eq!(native.otlp.traces_sampling_percentage, 100.0);
+        assert_eq!(native.otlp.grpc.endpoint, "localhost:4317");
+        assert_eq!(native.otlp.http.endpoint, "localhost:4318");
         assert_eq!(native.context_interner_bytes, ByteSize::mib(2));
         assert_eq!(native.cached_contexts_limit, 500_000);
         assert_eq!(native.cached_tagsets_limit, 500_000);
@@ -196,6 +251,39 @@ mod tests {
         assert_eq!(native.traces_private.string_interner_bytes, ByteSize::kib(512));
         assert!(!native.traces_private.ignore_missing_datadog_fields);
         assert!(native.traces_private.enable_otlp_compute_top_level_by_span_kind);
+    }
+
+    // Legacy behavior preservation: ADP defaulted OTLP logs ON. When the operator does not set
+    // `otlp_config.logs.enabled`, the boundary folds `true` onto the typed config so the native
+    // `logs_enabled` stays on, matching pre-migration ADP. Adopting the Agent schema default (off) is a
+    // deliberate future decision, not this PR's.
+    #[tokio::test]
+    async fn logs_enabled_absent_preserves_legacy_on() {
+        let cfg = config_with_env(json!({ "otlp_config": {} }), &[]).await;
+
+        let total_config = build_total_config(&cfg).expect("should build total config");
+        assert!(
+            total_config.otlp.logs_enabled,
+            "absent otlp_config.logs.enabled must preserve legacy ADP logs-on default"
+        );
+    }
+
+    // An explicit `false` is honored: the operator opted out of OTLP logs.
+    #[tokio::test]
+    async fn logs_enabled_explicit_false_is_off() {
+        let cfg = config_with_env(json!({ "otlp_config": { "logs": { "enabled": false } } }), &[]).await;
+
+        let total_config = build_total_config(&cfg).expect("should build total config");
+        assert!(!total_config.otlp.logs_enabled, "explicit false must disable OTLP logs");
+    }
+
+    // An explicit `true` is honored.
+    #[tokio::test]
+    async fn logs_enabled_explicit_true_is_on() {
+        let cfg = config_with_env(json!({ "otlp_config": { "logs": { "enabled": true } } }), &[]).await;
+
+        let total_config = build_total_config(&cfg).expect("should build total config");
+        assert!(total_config.otlp.logs_enabled, "explicit true must enable OTLP logs");
     }
 
     // The Saluki-private knobs are read from GenericConfiguration and reach the bundle.
@@ -219,7 +307,7 @@ mod tests {
         )
         .await;
 
-        let native = build_otlp_native_config(&cfg).expect("should build native OTLP config");
+        let native = build_native(&cfg);
         assert_eq!(native.context_interner_bytes, ByteSize::mib(4));
         assert_eq!(native.cached_contexts_limit, 123);
         assert_eq!(native.cached_tagsets_limit, 456);

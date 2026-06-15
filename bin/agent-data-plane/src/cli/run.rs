@@ -7,6 +7,7 @@ use std::{
 use argh::FromArgs;
 use datadog_agent_commons::platform::PlatformSettings;
 use datadog_agent_config::classifier::{ConfigClassifier, Pipeline, PipelineAffinity, Severity, SupportLevel};
+use datadog_agent_config::TotalSalukiConfiguration;
 use resource_accounting::{ComponentBounds, ComponentRegistry};
 use saluki_app::{
     accounting::{initialize_memory_bounds, MemoryBoundsConfiguration},
@@ -40,7 +41,7 @@ use saluki_error::{generic_error, ErrorContext as _, GenericError};
 use tracing::{debug, error, info, trace, warn};
 
 use crate::{
-    cli::otlp_native::{build_otlp_native_config, OtlpNativeConfig},
+    cli::otlp_native::{build_otlp_native_config, build_total_config, OtlpNativeConfig},
     config::{BootstrapConfiguration, DataPlaneConfiguration},
     internal::env::ADPEnvironmentProvider,
 };
@@ -167,17 +168,13 @@ pub async fn handle_run_command(
     let active_pipelines = active_pipelines(&dp_config);
     check_and_warn_config(&config, &active_pipelines).error_context("Incompatible configuration detected.")?;
 
-    // Translate the typed Datadog configuration into native Saluki config for the components that have
-    // been migrated off `GenericConfiguration`. OTLP is the first such consumer (config-translation PR
-    // 4). We build the native OTLP boot config exactly once here, at the translation boundary, and
-    // thread the resulting slice into topology construction; every other component still resolves its
-    // config from `GenericConfiguration` as before. This is built only when OTLP is enabled so that
-    // non-OTLP startup is entirely unaffected by the translation path.
-    let otlp_native_config = if dp_config.otlp().enabled() {
-        Some(build_otlp_native_config(&config).error_context("Failed to build native OTLP configuration.")?)
-    } else {
-        None
-    };
+    // Translate the resolved Datadog configuration into native Saluki config, once, here at the
+    // translation boundary. This runs unconditionally regardless of which pipelines are enabled: the
+    // translator is pure and cheap, and threading the whole `TotalSalukiConfiguration` (rather than a
+    // single per-pipeline slice) is the template the later migration PRs follow as each component
+    // moves off `GenericConfiguration`. OTLP is the first such consumer (config-translation PR 4); it
+    // reads `total_config.otlp`. Every other component still resolves from `GenericConfiguration`.
+    let total_config = build_total_config(&config).error_context("Failed to translate Datadog configuration.")?;
 
     // Set up all of the building blocks for building our topologies and launching internal processes.
     let component_registry = ComponentRegistry::default();
@@ -186,14 +183,8 @@ pub async fn handle_run_command(
         ADPEnvironmentProvider::from_configuration(&config, &dp_config, &component_registry, &health_registry).await?;
 
     // Create the blueprint for our primary topology.
-    let (mut blueprint, control_surfaces) = create_topology(
-        &config,
-        &dp_config,
-        &env_provider,
-        &component_registry,
-        otlp_native_config.as_ref(),
-    )
-    .await?;
+    let (mut blueprint, control_surfaces) =
+        create_topology(&config, &dp_config, &env_provider, &component_registry, &total_config).await?;
 
     // Create the internal supervisor which drives our control plane and internal observability.
     let mut internal_supervisor = create_internal_supervisor(
@@ -387,7 +378,7 @@ fn is_a_pipeline_affected(active_pipelines: &HashSet<Pipeline>, pipeline_affinit
 
 async fn create_topology(
     config: &GenericConfiguration, dp_config: &DataPlaneConfiguration, env_provider: &ADPEnvironmentProvider,
-    component_registry: &ComponentRegistry, otlp_native_config: Option<&OtlpNativeConfig>,
+    component_registry: &ComponentRegistry, total_config: &TotalSalukiConfiguration,
 ) -> Result<(TopologyBlueprint, TopologyControlSurfaces), GenericError> {
     let mut blueprint = TopologyBlueprint::new("primary", component_registry);
     let mut control_surfaces = TopologyControlSurfaces::default();
@@ -448,10 +439,13 @@ async fn create_topology(
     }
 
     if dp_config.otlp().enabled() {
-        // OTLP is enabled, so the native OTLP config was built at the translation boundary above.
-        let otlp_native_config = otlp_native_config
-            .ok_or_else(|| generic_error!("OTLP is enabled but native OTLP configuration was not built."))?;
-        add_otlp_pipeline_to_blueprint(&mut blueprint, dp_config, env_provider, otlp_native_config)?;
+        // OTLP being enabled gates whether the pipeline is BUILT, not whether translation ran:
+        // `total_config` was translated unconditionally at the run-path boundary. We assemble the OTLP
+        // boot bundle (the translated `total_config.otlp` slice plus the Saluki-private OTLP knobs) only
+        // here, where it is actually consumed.
+        let otlp_native_config = build_otlp_native_config(total_config, config)
+            .error_context("Failed to build native OTLP configuration.")?;
+        add_otlp_pipeline_to_blueprint(&mut blueprint, dp_config, env_provider, &otlp_native_config)?;
     }
 
     Ok((blueprint, control_surfaces))

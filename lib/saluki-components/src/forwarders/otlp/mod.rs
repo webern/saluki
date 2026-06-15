@@ -41,6 +41,8 @@ impl OtlpForwarderConfiguration {
     /// This is the legacy `GenericConfiguration` path; production construction now goes through
     /// [`from_native`][Self::from_native]. It is retained only for callers/tests that still hold a
     /// `GenericConfiguration`.
+    ///
+    /// Registry/test-only legacy path; removed when `GenericConfiguration` is confined to the translation layer in PR 11.
     pub fn from_configuration(
         config: &GenericConfiguration, core_agent_otlp_grpc_endpoint: String,
     ) -> Result<Self, GenericError> {

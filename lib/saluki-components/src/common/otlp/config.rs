@@ -176,10 +176,10 @@ impl OtlpConfig {
     /// The receiver HTTP transport is not a Datadog-schema key, so it is fixed to `tcp` here, matching
     /// the component default and the only transport the OTLP servers support.
     ///
-    /// Behavior change on cutover: `metrics`/`logs`/`traces` `enabled` now follow the Datadog Agent
-    /// schema defaults carried in `native` (metrics on, logs OFF, traces on when unset). The legacy
-    /// `LogsConfig` serde default wrongly defaulted logs to on; sourcing from the authoritative schema
-    /// disables OTLP logs by default when `otlp_config.logs.enabled` is unset, matching the Core Agent.
+    /// The `metrics`/`logs`/`traces` `enabled` flags are carried verbatim from `native`. The resolved
+    /// default for OTLP logs (on, matching legacy ADP) is preserved at the translation boundary in the
+    /// run path (`cli::otlp_native::build_total_config` folds `otlp_config.logs.enabled = true` when the
+    /// operator leaves it unset), NOT here: this constructor simply reflects whatever `native` carries.
     pub fn from_native(native: &NativeOtlpConfig, traces_private: NativeTracesPrivateConfig) -> Self {
         Self {
             receiver: Receiver {

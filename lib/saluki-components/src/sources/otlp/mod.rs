@@ -130,6 +130,8 @@ impl OtlpConfiguration {
     /// This is the legacy `GenericConfiguration` path. Production OTLP construction now goes through
     /// [`from_native`][Self::from_native]; this constructor is retained for the config-registry smoke
     /// tests, which exercise that every supported Datadog key reaches this struct via YAML and `DD_*`.
+    ///
+    /// Registry/test-only legacy path; removed when `GenericConfiguration` is confined to the translation layer in PR 11.
     pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
         let mut cfg: Self = config.as_typed()?;
         cfg.otlp_config.traces.apply_env_overrides(config)?;
@@ -590,14 +592,15 @@ mod native_config {
         assert_eq!(cfg.traces.probabilistic_sampler.sampling_percentage, 33.0);
     }
 
-    // Behavior change made explicit: on the native path the OTLP logs/metrics enable flags follow the
-    // Datadog Agent schema defaults (metrics on, logs OFF when unset), NOT the legacy saluki-components
-    // serde default for `otlp_config.logs.enabled`, which incorrectly defaulted logs to on. Migrating
-    // OTLP to translated config sources these from the authoritative schema, so an operator who never
-    // set `otlp_config.logs.enabled` now gets logs disabled, matching the Core Agent. Captured here so
-    // a future change to either default trips this test.
+    // The native constructor carries the enable flags from `native` verbatim. This test feeds it a
+    // translated config that did NOT go through the run-path legacy-logs fold, so the flags here are the
+    // raw Datadog Agent schema defaults (metrics on, logs OFF, traces on). This pins the constructor's
+    // faithfulness, NOT ADP's resolved default: the run path folds the legacy ADP "logs on by default"
+    // behavior onto the typed config before translation (see `cli::otlp_native::build_total_config`), so
+    // an operator who never sets `otlp_config.logs.enabled` still gets logs on in practice. Adopting the
+    // Agent schema default (off) is a deliberate future decision, not part of this migration.
     #[tokio::test]
-    async fn from_native_enable_flags_follow_schema_defaults_when_unset() {
+    async fn from_native_carries_schema_enable_flags_verbatim() {
         let dd_config: DatadogConfiguration = serde_json::from_value(json!({
             "otlp_config": { "receiver": {"protocols": {"grpc": {"endpoint": "0.0.0.0:4317"}}} }
         }))
@@ -615,11 +618,12 @@ mod native_config {
         .expect("native config should build");
 
         let cfg = &native.otlp_config;
-        assert!(cfg.metrics.enabled, "schema default: metrics on");
+        assert!(cfg.metrics.enabled, "schema default carried verbatim: metrics on");
         assert!(
             !cfg.logs.enabled,
-            "schema default: logs off (legacy serde wrongly defaulted on)"
+            "schema default carried verbatim: logs off (the run path's legacy fold, not the \
+             constructor, restores logs-on when the key is unset)"
         );
-        assert!(cfg.traces.enabled, "schema default: traces on");
+        assert!(cfg.traces.enabled, "schema default carried verbatim: traces on");
     }
 }

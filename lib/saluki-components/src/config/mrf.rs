@@ -1,5 +1,6 @@
 //! Multi-region failover configuration.
 
+use datadog_agent_config::TotalSalukiConfiguration;
 use saluki_config::GenericConfiguration;
 use saluki_error::GenericError;
 
@@ -17,7 +18,7 @@ pub struct MrfConfiguration {
 }
 
 impl MrfConfiguration {
-    /// Creates a new `MrfConfiguration` from the given configuration.
+    /// Registry/test-only legacy path; removed when `GenericConfiguration` is confined to the translation layer in PR 11.
     pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
         Ok(Self {
             enabled: config.try_get_typed("multi_region_failover.enabled")?.unwrap_or(false),
@@ -31,6 +32,18 @@ impl MrfConfiguration {
             site: get_non_empty_string(config, "multi_region_failover.site")?,
             dd_url: get_non_empty_string(config, "multi_region_failover.dd_url")?,
         })
+    }
+
+    /// Creates a new `MrfConfiguration` from the translated config plus Saluki-private settings.
+    ///
+    /// MRF configuration reads from `multi_region_failover.*` keys. The `total_config` parameter is
+    /// accepted for API consistency; the actual reads still use `GenericConfiguration` because
+    /// `TotalSalukiConfiguration.metrics.multi_region_failover` uses `Option<Value>` for API-key and
+    /// dd_url fields and requires type conversion deferred to a later PR.
+    pub fn from_native(
+        _total_config: &TotalSalukiConfiguration, config: &GenericConfiguration,
+    ) -> Result<Self, GenericError> {
+        Self::from_configuration(config)
     }
 
     /// Returns whether multi-region failover is enabled for this process.

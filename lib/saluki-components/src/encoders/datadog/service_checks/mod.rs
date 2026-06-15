@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use datadog_agent_config::TotalSalukiConfiguration;
 use facet::Facet;
 use http::{uri::PathAndQuery, HeaderValue, Method, Uri};
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
@@ -110,8 +111,18 @@ pub struct DatadogServiceChecksConfiguration {
 }
 
 impl DatadogServiceChecksConfiguration {
-    /// Creates a new `DatadogServiceChecksConfiguration` from the given configuration.
+    /// Registry/test-only legacy path; removed when `GenericConfiguration` is confined to the translation layer in PR 11.
     pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
+        Ok(config.as_typed()?)
+    }
+
+    /// Creates a new `DatadogServiceChecksConfiguration` from the translated config plus Saluki-private settings.
+    ///
+    /// All fields are Saluki-private serializer knobs read from `GenericConfiguration`. `total_config` is
+    /// accepted for API consistency with other `from_native` constructors.
+    pub fn from_native(
+        _total_config: &TotalSalukiConfiguration, config: &GenericConfiguration,
+    ) -> Result<Self, GenericError> {
         Ok(config.as_typed()?)
     }
 }

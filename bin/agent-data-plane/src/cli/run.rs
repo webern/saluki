@@ -410,7 +410,8 @@ async fn create_topology(
     }
 
     if dp_config.metrics_pipeline_required() {
-        add_baseline_metrics_pipeline_to_blueprint(&mut blueprint, config, dp_config, env_provider).await?;
+        add_baseline_metrics_pipeline_to_blueprint(&mut blueprint, config, dp_config, env_provider, total_config)
+            .await?;
     }
 
     if dp_config.logs_pipeline_required() {
@@ -418,11 +419,11 @@ async fn create_topology(
     }
 
     if dp_config.events_pipeline_required() {
-        add_baseline_events_pipeline_to_blueprint(&mut blueprint, config).await?;
+        add_baseline_events_pipeline_to_blueprint(&mut blueprint, config, total_config).await?;
     }
 
     if dp_config.service_checks_pipeline_required() {
-        add_baseline_service_checks_pipeline_to_blueprint(&mut blueprint, config).await?;
+        add_baseline_service_checks_pipeline_to_blueprint(&mut blueprint, config, total_config).await?;
     }
 
     if dp_config.traces_pipeline_required() {
@@ -469,7 +470,7 @@ async fn add_checks_pipeline_to_blueprint(
 
 async fn add_baseline_metrics_pipeline_to_blueprint(
     blueprint: &mut TopologyBlueprint, config: &GenericConfiguration, dp_config: &DataPlaneConfiguration,
-    env_provider: &ADPEnvironmentProvider,
+    env_provider: &ADPEnvironmentProvider, total_config: &TotalSalukiConfiguration,
 ) -> Result<(), GenericError> {
     // Create the back half of the metrics processing pipeline.
     let host_enrichment_config = HostEnrichmentConfiguration::from_environment_provider(env_provider.clone());
@@ -481,7 +482,7 @@ async fn add_baseline_metrics_pipeline_to_blueprint(
         metrics_enrich_config = metrics_enrich_config.with_transform_builder("host_tags", host_tags_config);
     }
 
-    let dd_metrics_config = DatadogMetricsConfiguration::from_configuration(config)
+    let dd_metrics_config = DatadogMetricsConfiguration::from_native(total_config, config)
         .error_context("Failed to configure Datadog Metrics encoder.")?;
 
     blueprint
@@ -491,15 +492,15 @@ async fn add_baseline_metrics_pipeline_to_blueprint(
         // Metrics, then forwarding.
         .connect_components_in_order(["metrics_enrich", "dd_metrics_encode", "dd_out"])?;
 
-    add_mrf_metrics_pipeline_to_blueprint(blueprint, config)?;
+    add_mrf_metrics_pipeline_to_blueprint(blueprint, config, total_config)?;
 
     Ok(())
 }
 
 fn add_mrf_metrics_pipeline_to_blueprint(
-    blueprint: &mut TopologyBlueprint, config: &GenericConfiguration,
+    blueprint: &mut TopologyBlueprint, config: &GenericConfiguration, total_config: &TotalSalukiConfiguration,
 ) -> Result<(), GenericError> {
-    let mrf_config = MrfConfiguration::from_configuration(config)
+    let mrf_config = MrfConfiguration::from_native(total_config, config)
         .error_context("Failed to configure Multi-Region Failover metrics pipeline.")?;
 
     let Some((mrf_dd_url, mrf_api_key)) = mrf_config.metrics_endpoint_override() else {
@@ -516,7 +517,7 @@ fn add_mrf_metrics_pipeline_to_blueprint(
     };
 
     let mrf_gateway_config = MrfMetricsGatewayConfiguration::new(mrf_config.clone(), config.clone());
-    let mrf_metrics_config = DatadogMetricsConfiguration::from_configuration(config)
+    let mrf_metrics_config = DatadogMetricsConfiguration::from_native(total_config, config)
         .error_context("Failed to configure Multi-Region Failover Datadog Metrics encoder.")?;
 
     let mrf_forwarder_config = DatadogForwarderConfiguration::from_configuration(config)
@@ -561,9 +562,9 @@ async fn add_baseline_logs_pipeline_to_blueprint(
 }
 
 async fn add_baseline_events_pipeline_to_blueprint(
-    blueprint: &mut TopologyBlueprint, config: &GenericConfiguration,
+    blueprint: &mut TopologyBlueprint, config: &GenericConfiguration, total_config: &TotalSalukiConfiguration,
 ) -> Result<(), GenericError> {
-    let dd_events_config = DatadogEventsConfiguration::from_configuration(config)
+    let dd_events_config = DatadogEventsConfiguration::from_native(total_config, config)
         .map(BufferedIncrementalConfiguration::from_encoder_builder)
         .error_context("Failed to configure Datadog Events encoder.")?;
 
@@ -575,9 +576,9 @@ async fn add_baseline_events_pipeline_to_blueprint(
 }
 
 async fn add_baseline_service_checks_pipeline_to_blueprint(
-    blueprint: &mut TopologyBlueprint, config: &GenericConfiguration,
+    blueprint: &mut TopologyBlueprint, config: &GenericConfiguration, total_config: &TotalSalukiConfiguration,
 ) -> Result<(), GenericError> {
-    let dd_service_checks_config = DatadogServiceChecksConfiguration::from_configuration(config)
+    let dd_service_checks_config = DatadogServiceChecksConfiguration::from_native(total_config, config)
         .map(BufferedIncrementalConfiguration::from_encoder_builder)
         .error_context("Failed to configure Datadog Service Checks encoder.")?;
 

@@ -1,6 +1,7 @@
 use std::{fmt, num::NonZeroU64, time::Duration};
 
 use async_trait::async_trait;
+use datadog_agent_config::TotalSalukiConfiguration;
 use datadog_protos::metrics as proto;
 use ddsketch::DDSketch;
 use facet::Facet;
@@ -284,8 +285,18 @@ pub struct DatadogMetricsConfiguration {
 }
 
 impl DatadogMetricsConfiguration {
-    /// Creates a new `DatadogMetricsConfiguration` from the given configuration.
+    /// Registry/test-only legacy path; removed when `GenericConfiguration` is confined to the translation layer in PR 11.
     pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
+        Ok(config.as_typed()?)
+    }
+
+    /// Creates a new `DatadogMetricsConfiguration` from the translated config plus Saluki-private settings.
+    ///
+    /// All fields are Saluki-private serializer knobs read from `GenericConfiguration`. `total_config` is
+    /// accepted for API consistency with other `from_native` constructors.
+    pub fn from_native(
+        _total_config: &TotalSalukiConfiguration, config: &GenericConfiguration,
+    ) -> Result<Self, GenericError> {
         Ok(config.as_typed()?)
     }
 

@@ -49,26 +49,50 @@ Tests: `cargo test -p agent-data-plane-config-system` (3 tests) pass.
 - No `from_native(total, generic)` hybrid signatures.
 - Every supported Datadog key has a compile-enforced destination via the witness.
 
-## Remaining migration (steps 8 and 10 proper)
+## Steps 8 and 10: cutover wired into the binary (data path), with transitional remainders
 
-These rewrite the existing binary and `saluki-components` in lockstep and are a multi-PR migration,
-not completed in this spike session:
+The binary now builds the bulk of its data topology from a translated `SalukiConfiguration` and the
+whole workspace compiles. `run.rs` calls
+`agent_data_plane_config_system::translate_from_generic(&config, …)` to obtain `SalukiConfiguration`
+and constructs these components via native `from_native(&slice)` (no `GenericConfiguration`):
 
-- **Step 8 — component cutover.** For each of the ~32 component config structs (inventory: DogStatsD
-  source/aggregate/mapper/prefix-filter/tag-filterlist/debug-log, OTLP source/relay/forwarder/decoder,
-  Datadog forwarder, metrics/logs/events/service-checks/traces/stats encoders, traces
-  enrich/sample/obfuscate, checks IPC): split the plain-data config from the builder, move the data
-  type to `saluki-component-config` (or construct from the existing native slice), and replace
-  `from_configuration(&GenericConfiguration)` with a pure `from_native(&NativeSlice)` constructor.
-  The retained-`GenericConfiguration` capabilities (forwarder API-key refresh, MRF, dsd debug-log,
-  prefix/tag watchers) are replaced by the typed `ScopedConfigHandle`s from `dynamic.rs`.
-- **Step 10 — `run.rs` collapse.** Replace the current `run.rs` body with the
-  `examples/startup_collapse.rs` shape: `ConfigurationSystem::start()` → typed outputs → topology +
-  internal supervisor. Add `ADPEnvironmentProvider::from_saluki_configuration` and
-  `create_internal_supervisor_from_saluki` consuming `SalukiConfiguration` + `StartedAttachments`,
-  and move the Remote Agent service implementations (status/flare/telemetry) to consume the typed
-  `DatadogAgentConnection`. Delete the `remote_agent_enabled` / `use_new_config_stream_endpoint`
-  gates.
+- Datadog forwarder; metrics/logs/events/service-checks encoders; checks IPC source.
+- Full DogStatsD pipeline: source, prefix filter, mapper, tag filterlist, aggregate, post-aggregate
+  filter.
+- Native OTLP source.
+
+Each migrated component grew a `from_native` constructor in `saluki-components` (or the bin); the
+old `from_configuration` is retained behind `#[allow(dead_code)]` during the transition.
+
+### Transitional remainders (still consume the raw configuration)
+
+These are the honest gaps to a *no-concessions* GenericConfiguration-free binary:
+
+- **Environment provider, internal supervisor, memory bounds, overlay classifier** still take
+  `&GenericConfiguration`. The env/host/workload providers each construct their own IPC client from
+  the raw map; routing them through the shared `DatadogAgentConnection` is an explicit open design
+  question, so `run.rs` still resolves a `GenericConfiguration` and threads it to these subsystems.
+- **Host tags** stays on `from_configuration` (it queries the Agent; the native path is a disabled
+  stub pending the shared-connection question).
+- **Trace transforms** (sampler, obfuscation, APM stats) and the **traces encoder** wrap heavy
+  Datadog types (`ApmConfig`, `ObfuscationConfig`) that don't cleanly rebuild from the summarized
+  native types; they remain on `from_configuration`.
+- **MRF** and the **OTLP proxy branch** remain on `from_configuration` (MRF retains a map for
+  runtime watching; the OTLP proxy gRPC endpoint isn't a witnessed key).
+
+### To finish (no-concessions end state)
+
+- Give the trace transforms / encoder full native config types and `from_native`; widen the
+  obfuscation/mapper/tag-filterlist native shapes to full fidelity.
+- Resolve the shared `DatadogAgentConnection` question, then add
+  `ADPEnvironmentProvider::from_saluki_configuration` and `create_internal_supervisor_from_saluki`
+  consuming `SalukiConfiguration` + `StartedAttachments`; move the status/flare/telemetry service
+  impls onto the typed `DatadogAgentConnection`.
+- Move MRF + OTLP-proxy onto native config; wire the `ScopedConfigHandle`s from `dynamic.rs` into the
+  forwarder/prefix-filter/tag-filterlist components to replace their retained-map watchers.
+- Collapse `run.rs` to the `examples/startup_collapse.rs` shape (`ConfigurationSystem::start()` →
+  typed outputs only), delete the `remote_agent_enabled` / `use_new_config_stream_endpoint` gates,
+  and remove the `#[allow(dead_code)]` `from_configuration` constructors.
 
 ### Known spike simplifications
 

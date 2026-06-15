@@ -11,7 +11,6 @@ use otlp_protos::opentelemetry::proto::collector::trace::v1::{
 use prost::Message;
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
 use saluki_common::buf::FrozenChunkedBytesBuffer;
-use saluki_config::GenericConfiguration;
 use saluki_core::data_model::payload::Payload;
 use saluki_core::{
     components::{forwarders::*, ComponentContext},
@@ -36,25 +35,6 @@ pub struct OtlpForwarderConfiguration {
 }
 
 impl OtlpForwarderConfiguration {
-    /// Creates a new `OtlpForwarderConfiguration` from the given configuration.
-    ///
-    /// This is the legacy `GenericConfiguration` path; production construction now goes through
-    /// [`from_native`][Self::from_native]. It is retained only for callers/tests that still hold a
-    /// `GenericConfiguration`.
-    ///
-    /// Registry/test-only legacy path; removed when `GenericConfiguration` is confined to the translation layer in PR 11.
-    pub fn from_configuration(
-        config: &GenericConfiguration, core_agent_otlp_grpc_endpoint: String,
-    ) -> Result<Self, GenericError> {
-        let core_agent_traces_internal_port = config
-            .try_get_typed("otlp_config.traces.internal_port")?
-            .unwrap_or(5003);
-        Ok(Self {
-            core_agent_otlp_grpc_endpoint,
-            core_agent_traces_internal_port,
-        })
-    }
-
     /// Creates a new `OtlpForwarderConfiguration` from native translated config.
     ///
     /// The trace-forwarding port (`otlp_config.traces.internal_port`) is a Datadog-schema key carried

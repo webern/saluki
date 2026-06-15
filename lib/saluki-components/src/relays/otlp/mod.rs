@@ -5,7 +5,6 @@ use axum::body::Bytes;
 use facet::Facet;
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
 use saluki_common::buf::FrozenChunkedBytesBuffer;
-use saluki_config::GenericConfiguration;
 use saluki_core::components::relays::{Relay, RelayBuilder, RelayContext};
 use saluki_core::components::ComponentContext;
 use saluki_core::data_model::payload::{GrpcPayload, Payload, PayloadMetadata, PayloadType};
@@ -41,17 +40,6 @@ pub struct OtlpRelayConfig {
 }
 
 impl OtlpRelayConfiguration {
-    /// Creates a new `OtlpRelayConfiguration` from the given generic configuration.
-    ///
-    /// This is the legacy `GenericConfiguration` path. Production construction now goes through
-    /// [`from_native`][Self::from_native]; this constructor is retained for the config-registry smoke
-    /// tests.
-    ///
-    /// Registry/test-only legacy path; removed when `GenericConfiguration` is confined to the translation layer in PR 11.
-    pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
-        config.as_typed().map_err(Into::into)
-    }
-
     /// Creates a new `OtlpRelayConfiguration` from native translated config.
     ///
     /// The relay only needs the receiver endpoints. All of them (the gRPC endpoint/transport/message

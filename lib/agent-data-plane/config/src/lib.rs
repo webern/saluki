@@ -20,3 +20,14 @@ pub use bootstrap::{BootstrapConfiguration, BootstrapStartupConfiguration, Boots
 pub use private::SalukiPrivateConfiguration;
 pub use saluki::{DataPlaneConfiguration, SalukiConfiguration};
 pub use saluki_component_config::{OtlpPipelineConfiguration, OtlpProxyConfiguration, PipelineConfiguration};
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn cargo_toml_does_not_take_source_model_dependencies() {
+        let manifest = include_str!("../Cargo.toml");
+
+        assert!(!manifest.contains("datadog-agent-config"));
+        assert!(!manifest.contains("saluki-config"));
+    }
+}

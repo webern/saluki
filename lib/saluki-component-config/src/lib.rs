@@ -91,3 +91,15 @@ impl OtlpProxyConfiguration {
         self.proxy_traces
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn cargo_toml_stays_leaf_like() {
+        let manifest = include_str!("../Cargo.toml");
+
+        assert!(!manifest.contains("datadog-agent-config"));
+        assert!(!manifest.contains("saluki-config"));
+        assert!(!manifest.contains("agent-data-plane-config"));
+    }
+}

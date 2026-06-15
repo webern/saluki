@@ -23,6 +23,7 @@ members = [
   "lib/saluki-api",
   "lib/saluki-app",
   "lib/saluki-common",
+  "lib/saluki-component-config",
   "lib/saluki-components",
   "lib/saluki-config",
   "lib/saluki-context",
@@ -59,6 +60,7 @@ prometheus-exposition = { path = "lib/prometheus-exposition" }
 saluki-api = { path = "lib/saluki-api" }
 saluki-app = { path = "lib/saluki-app" }
 saluki-common = { path = "lib/saluki-common" }
+saluki-component-config = { path = "lib/saluki-component-config" }
 saluki-components = { path = "lib/saluki-components" }
 saluki-config = { path = "lib/saluki-config" }
 saluki-context = { path = "lib/saluki-context" }

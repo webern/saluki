@@ -1,12 +1,9 @@
 [package]
-name = "agent-data-plane-config"
+name = "saluki-component-config"
 version = "0.1.0"
 edition = { workspace = true }
 license = { workspace = true }
 repository = { workspace = true }
-
-[dependencies]
-saluki-component-config = { workspace = true }
 
 [lints]
 workspace = true

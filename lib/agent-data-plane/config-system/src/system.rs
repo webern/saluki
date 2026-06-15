@@ -194,12 +194,22 @@ fn translate_datadog_snapshot(config: &GenericConfiguration) -> Result<SalukiCon
         otlp_proxy,
     );
 
+    let api_listen_address = config
+        .try_get_typed("data_plane.api_listen_address")
+        .error_context("Failed to read `data_plane.api_listen_address`.")?
+        .unwrap_or_else(|| ListenAddress::any_tcp(5100));
+    let secure_api_listen_address = config
+        .try_get_typed("data_plane.secure_api_listen_address")
+        .error_context("Failed to read `data_plane.secure_api_listen_address`.")?
+        .unwrap_or_else(|| ListenAddress::any_tcp(5101));
     let saluki = SalukiConfiguration {
         data_plane: DataPlaneConfiguration::new(
             config
                 .try_get_typed("data_plane.enabled")
                 .error_context("Failed to read `data_plane.enabled`.")?
                 .unwrap_or(false),
+            api_listen_address,
+            secure_api_listen_address,
             checks,
             dogstatsd,
             otlp,

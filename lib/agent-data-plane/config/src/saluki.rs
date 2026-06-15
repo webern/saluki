@@ -1,18 +1,21 @@
 //! ADP-native runtime configuration.
 
 use saluki_component_config::{OtlpPipelineConfiguration, PipelineConfiguration};
+use saluki_io::net::ListenAddress;
 
 /// Complete ADP-native runtime configuration.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct SalukiConfiguration {
     /// Top-level ADP enablement and pipeline selection.
     pub data_plane: DataPlaneConfiguration,
 }
 
 /// Native ADP data-plane runtime decisions.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct DataPlaneConfiguration {
     enabled: bool,
+    api_listen_address: ListenAddress,
+    secure_api_listen_address: ListenAddress,
     checks: PipelineConfiguration,
     dogstatsd: PipelineConfiguration,
     otlp: OtlpPipelineConfiguration,
@@ -21,10 +24,13 @@ pub struct DataPlaneConfiguration {
 impl DataPlaneConfiguration {
     /// Creates native data-plane runtime decisions.
     pub const fn new(
-        enabled: bool, checks: PipelineConfiguration, dogstatsd: PipelineConfiguration, otlp: OtlpPipelineConfiguration,
+        enabled: bool, api_listen_address: ListenAddress, secure_api_listen_address: ListenAddress,
+        checks: PipelineConfiguration, dogstatsd: PipelineConfiguration, otlp: OtlpPipelineConfiguration,
     ) -> Self {
         Self {
             enabled,
+            api_listen_address,
+            secure_api_listen_address,
             checks,
             dogstatsd,
             otlp,
@@ -34,6 +40,16 @@ impl DataPlaneConfiguration {
     /// Returns whether ADP should run.
     pub const fn enabled(&self) -> bool {
         self.enabled
+    }
+
+    /// Returns the unprivileged API listen address.
+    pub const fn api_listen_address(&self) -> &ListenAddress {
+        &self.api_listen_address
+    }
+
+    /// Returns the privileged API listen address.
+    pub const fn secure_api_listen_address(&self) -> &ListenAddress {
+        &self.secure_api_listen_address
     }
 
     /// Returns the checks pipeline settings.

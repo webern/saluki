@@ -953,6 +953,89 @@ impl DogStatsDMetricMappingConfiguration {
     }
 }
 
+const MRF_METRICS_ENDPOINT_PREFIX: &str = "https://app.mrf.";
+
+/// Native multi-region failover settings.
+#[derive(Clone, Debug)]
+pub struct MultiRegionFailoverConfiguration {
+    enabled: bool,
+    failover_metrics: DynamicValue<bool>,
+    metric_allowlist: DynamicValue<Vec<String>>,
+    api_key: Option<String>,
+    site: Option<String>,
+    dd_url: Option<String>,
+}
+
+impl MultiRegionFailoverConfiguration {
+    /// Creates native multi-region failover settings.
+    pub fn new(
+        enabled: bool, failover_metrics: DynamicValue<bool>, metric_allowlist: DynamicValue<Vec<String>>,
+        api_key: Option<String>, site: Option<String>, dd_url: Option<String>,
+    ) -> Self {
+        Self {
+            enabled,
+            failover_metrics,
+            metric_allowlist,
+            api_key,
+            site,
+            dd_url,
+        }
+    }
+
+    /// Returns whether multi-region failover is enabled.
+    pub const fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// Returns the dynamic failover-metrics setting.
+    pub fn failover_metrics(&self) -> DynamicValue<bool> {
+        self.failover_metrics.clone()
+    }
+
+    /// Returns the dynamic metric allowlist setting.
+    pub fn metric_allowlist(&self) -> DynamicValue<Vec<String>> {
+        self.metric_allowlist.clone()
+    }
+
+    /// Returns the failover-region API key.
+    pub fn api_key(&self) -> Option<&str> {
+        self.api_key.as_deref()
+    }
+
+    /// Returns the configured failover site.
+    pub fn site(&self) -> Option<&str> {
+        self.site.as_deref()
+    }
+
+    /// Returns the explicit failover Datadog URL.
+    pub fn dd_url(&self) -> Option<&str> {
+        self.dd_url.as_deref()
+    }
+
+    /// Returns whether metrics forwarding to the failover region is requested by configuration.
+    pub fn is_metrics_forwarding_requested(&self) -> bool {
+        self.enabled && self.failover_metrics.current()
+    }
+
+    /// Returns the failover-region metrics endpoint URL.
+    pub fn metrics_endpoint_url(&self) -> Option<String> {
+        self.dd_url.clone().or_else(|| {
+            self.site
+                .as_deref()
+                .map(|site| format!("{MRF_METRICS_ENDPOINT_PREFIX}{site}"))
+        })
+    }
+
+    /// Returns the endpoint and API key override for the failover-region metrics forwarder.
+    pub fn metrics_endpoint_override(&self) -> Option<(String, String)> {
+        if !self.enabled {
+            return None;
+        }
+
+        Some((self.metrics_endpoint_url()?, self.api_key.clone()?))
+    }
+}
+
 /// Native Datadog APM stats encoder settings.
 #[derive(Clone, Debug)]
 pub struct DatadogApmStatsEncoderConfiguration {

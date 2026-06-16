@@ -27,8 +27,8 @@ pub use saluki_component_config::{
     DatadogServiceChecksEncoderConfiguration, DogStatsDDebugLogConfiguration, DogStatsDMapperConfiguration,
     DogStatsDMapperProfileConfiguration, DogStatsDMetricMappingConfiguration,
     DogStatsDPostAggregateFilterConfiguration, DogStatsDPrefixFilterConfiguration, DynamicValue, MetricTagFilterAction,
-    MetricTagFilterEntry, OtlpForwarderConfiguration, OtlpPipelineConfiguration, OtlpProxyConfiguration,
-    OtlpReceiverConfiguration, OtlpSourceConfiguration, OtlpTracesConfiguration, OttlErrorMode,
+    MetricTagFilterEntry, MultiRegionFailoverConfiguration, OtlpForwarderConfiguration, OtlpPipelineConfiguration,
+    OtlpProxyConfiguration, OtlpReceiverConfiguration, OtlpSourceConfiguration, OtlpTracesConfiguration, OttlErrorMode,
     OttlFilterConfiguration, OttlTransformConfiguration, PipelineConfiguration, TagFilterlistConfiguration,
 };
 

@@ -1,14 +1,10 @@
 //! Temporary runtime component configuration adapters.
 
 use saluki_components::{
-    config::MrfConfiguration,
     encoders::DatadogTraceConfiguration,
     forwarders::DatadogForwarderConfiguration,
     sources::DogStatsDConfiguration,
-    transforms::{
-        ApmStatsTransformConfiguration, MrfMetricsGatewayConfiguration, TraceObfuscationConfiguration,
-        TraceSamplerConfiguration,
-    },
+    transforms::{ApmStatsTransformConfiguration, TraceObfuscationConfiguration, TraceSamplerConfiguration},
 };
 use saluki_config::GenericConfiguration;
 use saluki_error::{ErrorContext as _, GenericError};
@@ -28,17 +24,6 @@ impl RuntimeComponentConfiguration {
     pub fn datadog_forwarder_configuration(&self) -> Result<DatadogForwarderConfiguration, GenericError> {
         DatadogForwarderConfiguration::from_configuration(&self.config)
             .error_context("Failed to configure Datadog forwarder.")
-    }
-
-    /// Builds MRF configuration.
-    pub fn mrf_configuration(&self) -> Result<MrfConfiguration, GenericError> {
-        MrfConfiguration::from_configuration(&self.config)
-            .error_context("Failed to configure Multi-Region Failover metrics pipeline.")
-    }
-
-    /// Builds MRF metrics gateway configuration.
-    pub fn mrf_metrics_gateway_configuration(&self, mrf_config: MrfConfiguration) -> MrfMetricsGatewayConfiguration {
-        MrfMetricsGatewayConfiguration::new(mrf_config, self.config.clone())
     }
 
     /// Builds MRF Datadog forwarder configuration.

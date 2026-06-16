@@ -11,6 +11,7 @@ use argh::FromArgs;
 use resource_accounting::{ComponentBounds, ComponentRegistry};
 use saluki_app::{accounting::initialize_memory_bounds, bootstrap::BootstrapGuard, metrics::emit_startup_metrics};
 use saluki_components::{
+    config::MrfConfiguration,
     decoders::otlp::OtlpDecoderConfiguration,
     destinations::{DogStatsDDebugLogConfiguration, DogStatsDStatisticsConfiguration},
     encoders::{
@@ -22,6 +23,7 @@ use saluki_components::{
     sources::{ChecksIPCConfiguration, OtlpConfiguration},
     transforms::{
         AggregateConfiguration, ChainedConfiguration, DogStatsDMapperConfiguration, HostEnrichmentConfiguration,
+        MrfMetricsGatewayConfiguration,
     },
 };
 use saluki_core::health::HealthRegistry;
@@ -325,7 +327,7 @@ fn add_mrf_metrics_pipeline_to_blueprint(
     blueprint: &mut TopologyBlueprint, runtime_config: &RuntimeComponentConfiguration,
     saluki_config: &SalukiConfiguration,
 ) -> Result<(), GenericError> {
-    let mrf_config = runtime_config.mrf_configuration()?;
+    let mrf_config = MrfConfiguration::from_native(&saluki_config.multi_region_failover);
 
     let Some((mrf_dd_url, mrf_api_key)) = mrf_config.metrics_endpoint_override() else {
         if mrf_config.is_enabled() {
@@ -340,7 +342,7 @@ fn add_mrf_metrics_pipeline_to_blueprint(
         return Ok(());
     };
 
-    let mrf_gateway_config = runtime_config.mrf_metrics_gateway_configuration(mrf_config.clone());
+    let mrf_gateway_config = MrfMetricsGatewayConfiguration::from_native(&saluki_config.multi_region_failover);
     let mrf_metrics_config = DatadogMetricsConfiguration::from_native(&saluki_config.datadog_metrics_encoder);
     let mrf_forwarder_config =
         runtime_config.mrf_datadog_forwarder_configuration(mrf_dd_url, mrf_api_key, "multi_region_failover.api_key")?;

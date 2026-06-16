@@ -15,10 +15,11 @@ use agent_data_plane_config::{
     DatadogMetricsEncoderConfiguration, DatadogServiceChecksEncoderConfiguration, DogStatsDCliConfiguration,
     DogStatsDDebugLogConfiguration, DogStatsDMapperConfiguration, DogStatsDMapperProfileConfiguration,
     DogStatsDMetricMappingConfiguration, DogStatsDPostAggregateFilterConfiguration, DogStatsDPrefixFilterConfiguration,
-    DynamicValue, EnvironmentConfiguration, MetricTagFilterAction, MetricTagFilterEntry, OtlpForwarderConfiguration,
-    OtlpPipelineConfiguration, OtlpProxyConfiguration, OtlpReceiverConfiguration, OtlpSourceConfiguration,
-    OtlpTracesConfiguration, OttlErrorMode, OttlFilterConfiguration, OttlTransformConfiguration, PipelineConfiguration,
-    RuntimeConfigAuthority, RuntimeConfigLanguage, SalukiConfiguration, TagFilterlistConfiguration,
+    DynamicValue, EnvironmentConfiguration, MetricTagFilterAction, MetricTagFilterEntry,
+    MultiRegionFailoverConfiguration, OtlpForwarderConfiguration, OtlpPipelineConfiguration, OtlpProxyConfiguration,
+    OtlpReceiverConfiguration, OtlpSourceConfiguration, OtlpTracesConfiguration, OttlErrorMode,
+    OttlFilterConfiguration, OttlTransformConfiguration, PipelineConfiguration, RuntimeConfigAuthority,
+    RuntimeConfigLanguage, SalukiConfiguration, TagFilterlistConfiguration,
 };
 use bytesize::ByteSize;
 use datadog_agent_commons::{
@@ -857,6 +858,39 @@ fn translate_dogstatsd_mapper_configuration(
     ))
 }
 
+fn get_non_empty_string(config: &GenericConfiguration, key: &'static str) -> Result<Option<String>, GenericError> {
+    Ok(config
+        .try_get_typed::<String>(key)
+        .error_context(format!("Failed to read `{}`.", key))?
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty()))
+}
+
+fn translate_multi_region_failover_configuration(
+    config: &GenericConfiguration,
+) -> Result<MultiRegionFailoverConfiguration, GenericError> {
+    let failover_metrics = config
+        .try_get_typed("multi_region_failover.failover_metrics")
+        .error_context("Failed to read `multi_region_failover.failover_metrics`.")?
+        .unwrap_or(false);
+    let metric_allowlist = config
+        .try_get_typed("multi_region_failover.metric_allowlist")
+        .error_context("Failed to read `multi_region_failover.metric_allowlist`.")?
+        .unwrap_or_default();
+
+    Ok(MultiRegionFailoverConfiguration::new(
+        config
+            .try_get_typed("multi_region_failover.enabled")
+            .error_context("Failed to read `multi_region_failover.enabled`.")?
+            .unwrap_or(false),
+        dynamic_value_from_key(config, "multi_region_failover.failover_metrics", failover_metrics),
+        dynamic_value_from_key(config, "multi_region_failover.metric_allowlist", metric_allowlist),
+        get_non_empty_string(config, "multi_region_failover.api_key")?,
+        get_non_empty_string(config, "multi_region_failover.site")?,
+        get_non_empty_string(config, "multi_region_failover.dd_url")?,
+    ))
+}
+
 fn translate_datadog_apm_stats_encoder_configuration(
     config: &GenericConfiguration,
 ) -> Result<DatadogApmStatsEncoderConfiguration, GenericError> {
@@ -1042,6 +1076,7 @@ fn translate_datadog_snapshot(config: &GenericConfiguration) -> Result<SalukiCon
         source.log_payloads,
     );
     let datadog_apm_stats_encoder = translate_datadog_apm_stats_encoder_configuration(config)?;
+    let multi_region_failover = translate_multi_region_failover_configuration(config)?;
     let dogstatsd_prefix_filter = translate_dogstatsd_prefix_filter_configuration(config)?;
     let dogstatsd_mapper = translate_dogstatsd_mapper_configuration(config)?;
     let aggregate = translate_aggregate_configuration(config)?;
@@ -1078,6 +1113,7 @@ fn translate_datadog_snapshot(config: &GenericConfiguration) -> Result<SalukiCon
         datadog_events_encoder,
         datadog_service_checks_encoder,
         datadog_apm_stats_encoder,
+        multi_region_failover,
         dogstatsd_prefix_filter,
         dogstatsd_mapper,
         aggregate,

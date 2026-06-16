@@ -6,9 +6,10 @@ use saluki_component_config::{
     AggregateConfiguration, ChecksIpcConfiguration, DatadogApmStatsEncoderConfiguration,
     DatadogEventsEncoderConfiguration, DatadogLogsEncoderConfiguration, DatadogMetricsEncoderConfiguration,
     DatadogServiceChecksEncoderConfiguration, DogStatsDDebugLogConfiguration, DogStatsDMapperConfiguration,
-    DogStatsDPostAggregateFilterConfiguration, DogStatsDPrefixFilterConfiguration, OtlpForwarderConfiguration,
-    OtlpPipelineConfiguration, OtlpReceiverConfiguration, OtlpSourceConfiguration, OtlpTracesConfiguration,
-    OttlFilterConfiguration, OttlTransformConfiguration, PipelineConfiguration, TagFilterlistConfiguration,
+    DogStatsDPostAggregateFilterConfiguration, DogStatsDPrefixFilterConfiguration, MultiRegionFailoverConfiguration,
+    OtlpForwarderConfiguration, OtlpPipelineConfiguration, OtlpReceiverConfiguration, OtlpSourceConfiguration,
+    OtlpTracesConfiguration, OttlFilterConfiguration, OttlTransformConfiguration, PipelineConfiguration,
+    TagFilterlistConfiguration,
 };
 use saluki_io::net::ListenAddress;
 
@@ -44,6 +45,9 @@ pub struct SalukiConfiguration {
 
     /// Datadog APM stats encoder settings.
     pub datadog_apm_stats_encoder: DatadogApmStatsEncoderConfiguration,
+
+    /// Multi-region failover settings.
+    pub multi_region_failover: MultiRegionFailoverConfiguration,
 
     /// DogStatsD listener prefix/filter settings.
     pub dogstatsd_prefix_filter: DogStatsDPrefixFilterConfiguration,

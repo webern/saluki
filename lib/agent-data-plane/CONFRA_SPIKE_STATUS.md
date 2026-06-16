@@ -49,7 +49,33 @@ Tests: `cargo test -p agent-data-plane-config-system` (3 tests) pass.
 - No `from_native(total, generic)` hybrid signatures.
 - Every supported Datadog key has a compile-enforced destination via the witness.
 
-## Steps 8 and 10: cutover wired into the binary (data path), with transitional remainders
+## Steps 8 and 10: COMPLETE (2026-06-16)
+
+Steps 8 (component cutover) and 10 (`run.rs` collapse) are done:
+
+- **Step 8 — no component sees `GenericConfiguration`.** Every `from_configuration(&GenericConfiguration)`
+  constructor was deleted from `saluki-components`; the binary builds all components via
+  `from_native(&slice)`. The dead `ApmConfiguration` deserialize wrapper and the
+  `ForwarderConfiguration`/`ApmConfig`/`MrfConfiguration` Datadog-key parsing were removed. Datadog-key
+  translation now lives solely in the config-system witness translator. Tests that only exercised
+  Datadog-key/env-var translation were deleted (that logic moved to config-system); behavioral tests were
+  converted to `from_native`. `saluki-components`: 570 tests pass.
+  - **Residual (step 9, not step 8):** ~43 `GenericConfiguration` references remain in
+    `saluki-components`, all in the string-key dynamic-update watcher plumbing (`live_config:
+    Option<GenericConfiguration>`, `subscribe_for_updates`, `secrets_in_use`, additional-endpoint API-key
+    lookup) in the forwarder/MRF/dsd-debug/validation/retry/endpoints/io files. Rewiring these onto the
+    typed `ScopedConfigHandle`s is the typed-dynamic-update workstream (step 9), tracked separately.
+- **Step 10 — `run.rs` collapse.** `run.rs`/`runtime.rs`/`runtime_setup.rs` are `GenericConfiguration`-free
+  and built from `ConfigurationSystem::start()` typed outputs (done earlier). The transitional gates
+  `remote_agent_enabled` / `use_new_config_stream_endpoint` were deleted from the bin-side
+  `DataPlaneConfiguration` (the live authority selection in config-system never modeled them).
+
+The invariant "`GenericConfiguration` appears only inside `config-system`" is therefore true for the
+data-plane RUNTIME FLOW and for component construction; it is not yet literally true for
+`saluki-components` because of the retained step-9 watcher plumbing, and (by design, see D18) the bin
+bootstrap phase + diagnostic CLI legitimately read local config.
+
+## (Historical) Steps 8 and 10: cutover wired into the binary (data path), with transitional remainders
 
 The binary now builds the bulk of its data topology from a translated `SalukiConfiguration` and the
 whole workspace compiles. `run.rs` calls

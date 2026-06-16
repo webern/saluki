@@ -203,8 +203,10 @@ pub(crate) fn read_memory_config(config: &GenericConfiguration) -> agent_data_pl
 }
 
 fn parse_bootstrap_logging(config: &GenericConfiguration) -> Result<RuntimeLoggingConfig, GenericError> {
-    let mut logging = RuntimeLoggingConfig::default();
-    logging.log_level = try_string(config, "log_level")?;
+    let mut logging = RuntimeLoggingConfig {
+        log_level: try_string(config, "log_level")?,
+        ..Default::default()
+    };
     if let Some(v) = try_bool(config, "log_format_json")? {
         logging.log_format_json = v;
     }

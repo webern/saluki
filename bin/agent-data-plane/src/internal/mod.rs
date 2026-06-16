@@ -33,6 +33,9 @@ mod telemetry;
 /// # Errors
 ///
 /// If the supervisor can't be created, an error is returned.
+// Internal wiring function: it forwards the control plane's many independent inputs to
+// `create_control_plane_supervisor`; bundling them into a struct would only move the arity one level down.
+#[allow(clippy::too_many_arguments)]
 pub async fn create_internal_supervisor(
     config_snapshot: serde_json::Value, ipc_cert_path: std::path::PathBuf, data_plane: &DataPlaneConfig,
     component_registry: &ComponentRegistry, health_registry: HealthRegistry, control_surfaces: TopologyControlSurfaces,

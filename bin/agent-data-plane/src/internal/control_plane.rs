@@ -30,6 +30,9 @@ use crate::internal::{
 /// # Errors
 ///
 /// If the supervisor can't be created, an error is returned.
+// Internal wiring function: it threads the control plane's many independent inputs (snapshot, IPC cert,
+// data-plane config, registries, control surfaces, services, logging controls) into one supervisor.
+#[allow(clippy::too_many_arguments)]
 pub async fn create_control_plane_supervisor(
     config_snapshot: serde_json::Value, ipc_cert_path: PathBuf, data_plane: &DataPlaneConfig,
     component_registry: &ComponentRegistry, health_registry: HealthRegistry, control_surfaces: TopologyControlSurfaces,

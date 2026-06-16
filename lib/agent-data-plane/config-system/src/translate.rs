@@ -110,15 +110,19 @@ impl Translator {
     /// Creates a translator seeded with defaults plus the given Saluki-private supplemental config.
     pub fn new(private: &SalukiPrivateConfiguration, gates: PipelineGates) -> Self {
         // Fold the private knobs the Datadog language cannot express into the native defaults.
-        let mut otlp = OtlpConfig::default();
-        otlp.context_string_interner_bytes = private.otlp.context_string_interner_bytes;
-        otlp.cached_contexts_limit = private.otlp.cached_contexts_limit;
-        otlp.cached_tagsets_limit = private.otlp.cached_tagsets_limit;
-        otlp.allow_context_heap_allocations = private.otlp.allow_context_heap_allocations;
+        let otlp = OtlpConfig {
+            context_string_interner_bytes: private.otlp.context_string_interner_bytes,
+            cached_contexts_limit: private.otlp.cached_contexts_limit,
+            cached_tagsets_limit: private.otlp.cached_tagsets_limit,
+            allow_context_heap_allocations: private.otlp.allow_context_heap_allocations,
+            ..Default::default()
+        };
 
-        let mut dsd_mapper = DogStatsDMapperConfig::default();
-        dsd_mapper.context_string_interner_bytes = private.dogstatsd.mapper_string_interner_bytes;
-        dsd_mapper.cache_size = private.dogstatsd.mapper_cache_size;
+        let dsd_mapper = DogStatsDMapperConfig {
+            context_string_interner_bytes: private.dogstatsd.mapper_string_interner_bytes,
+            cache_size: private.dogstatsd.mapper_cache_size,
+            ..Default::default()
+        };
 
         Self {
             gates,
@@ -718,12 +722,14 @@ mod tests {
     #[test]
     fn translates_supported_keys_into_native_config() {
         // A Datadog source configuration with a representative set of supported keys set.
-        let mut dd = DatadogConfiguration::default();
-        dd.dogstatsd_port = 8200;
-        dd.api_key = "test-api-key".to_string();
-        dd.forwarder_timeout = 30;
-        dd.serializer_compressor_kind = "zstd".to_string();
-        dd.skip_ssl_validation = true;
+        let dd = DatadogConfiguration {
+            dogstatsd_port: 8200,
+            api_key: "test-api-key".to_string(),
+            forwarder_timeout: 30,
+            serializer_compressor_kind: "zstd".to_string(),
+            skip_ssl_validation: true,
+            ..Default::default()
+        };
 
         let private = SalukiPrivateConfiguration::for_language(RuntimeConfigLanguage::DatadogAgent);
         let gates = PipelineGates {

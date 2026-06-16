@@ -2478,8 +2478,10 @@ mod tests {
         ];
 
         for (configured_depth, expected_depth) in cases {
-            let mut dogstatsd_config = DogStatsDConfiguration::default();
-            dogstatsd_config.capture_depth = configured_depth;
+            let mut dogstatsd_config = DogStatsDConfiguration {
+                capture_depth: configured_depth,
+                ..Default::default()
+            };
             dogstatsd_config.fix_capture_depth();
 
             assert_eq!(expected_depth, dogstatsd_config.capture_depth);

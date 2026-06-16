@@ -208,6 +208,10 @@ pub struct StartedParts {
 }
 
 /// Provider attachments created by the selected runtime authority.
+// This value is constructed once at startup and moved once into the runtime shell; it is never stored
+// in bulk or on a hot path, so boxing the larger variant to equalize sizes would add indirection for no
+// real benefit.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum StartedAttachments {
     /// No long-lived provider attachment was created (local snapshot authority).

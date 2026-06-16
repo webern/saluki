@@ -4,30 +4,25 @@ use std::{
 };
 
 use agent_data_plane_config::SalukiConfiguration;
-use agent_data_plane_config_system::{BootstrapInputs, ConfigurationSystem, LocalDatadogSources, StartedAttachments};
+use agent_data_plane_config_system::{
+    BootstrapInputs, ConfigurationSystem, LocalDatadogSources, RuntimeComponentConfiguration, StartedAttachments,
+};
 use argh::FromArgs;
 use datadog_agent_commons::platform::PlatformSettings;
 use resource_accounting::{ComponentBounds, ComponentRegistry};
 use saluki_app::{accounting::initialize_memory_bounds, bootstrap::BootstrapGuard, metrics::emit_startup_metrics};
 use saluki_components::{
-    config::MrfConfiguration,
     decoders::otlp::OtlpDecoderConfiguration,
-    destinations::{DogStatsDDebugLogConfiguration, DogStatsDStatisticsConfiguration},
+    destinations::DogStatsDStatisticsConfiguration,
     encoders::{
-        BufferedIncrementalConfiguration, DatadogApmStatsEncoderConfiguration, DatadogEventsConfiguration,
-        DatadogLogsConfiguration, DatadogMetricsConfiguration, DatadogServiceChecksConfiguration,
-        DatadogTraceConfiguration,
+        BufferedIncrementalConfiguration, DatadogEventsConfiguration, DatadogLogsConfiguration,
+        DatadogServiceChecksConfiguration,
     },
-    forwarders::{DatadogForwarderConfiguration, OtlpForwarderConfiguration},
+    forwarders::OtlpForwarderConfiguration,
     relays::otlp::OtlpRelayConfiguration,
-    sources::{ChecksIPCConfiguration, DogStatsDConfiguration, OtlpConfiguration},
-    transforms::{
-        AggregateConfiguration, ApmStatsTransformConfiguration, ChainedConfiguration, DogStatsDMapperConfiguration,
-        HostEnrichmentConfiguration, MrfMetricsGatewayConfiguration, TraceObfuscationConfiguration,
-        TraceSamplerConfiguration,
-    },
+    sources::{ChecksIPCConfiguration, OtlpConfiguration},
+    transforms::{ChainedConfiguration, HostEnrichmentConfiguration},
 };
-use saluki_config::GenericConfiguration;
 use saluki_core::health::HealthRegistry;
 use saluki_core::runtime::{RestartMode, RestartStrategy, Supervisor};
 use saluki_core::topology::TopologyBlueprint;
@@ -80,7 +75,7 @@ pub async fn handle_run_command(
     .start_from_loaded_sources(bootstrap_sources)
     .await
     .error_context("Failed to start configuration system.")?;
-    let config = started_config.compat_datadog_source();
+    let runtime_config = started_config.runtime_component_configuration();
     let saluki_config = started_config.saluki();
     let dp_config = &saluki_config.data_plane;
 
@@ -117,7 +112,7 @@ pub async fn handle_run_command(
 
     // Create the blueprint for our primary topology.
     let (mut blueprint, control_surfaces) =
-        create_topology(config, saluki_config, &env_provider, &component_registry).await?;
+        create_topology(&runtime_config, saluki_config, &env_provider, &component_registry).await?;
 
     // Create the internal supervisor which drives our control plane and internal observability.
     let mut internal_supervisor = create_internal_supervisor(
@@ -212,8 +207,8 @@ async fn remote_agent_bootstrap_from_attachments(attachments: &StartedAttachment
 }
 
 async fn create_topology(
-    config: &GenericConfiguration, saluki_config: &SalukiConfiguration, env_provider: &ADPEnvironmentProvider,
-    component_registry: &ComponentRegistry,
+    runtime_config: &RuntimeComponentConfiguration, saluki_config: &SalukiConfiguration,
+    env_provider: &ADPEnvironmentProvider, component_registry: &ComponentRegistry,
 ) -> Result<(TopologyBlueprint, TopologyControlSurfaces), GenericError> {
     let dp_config = &saluki_config.data_plane;
     let mut blueprint = TopologyBlueprint::new("primary", component_registry);
@@ -239,13 +234,12 @@ async fn create_topology(
         || dp_config.service_checks_pipeline_required()
         || dp_config.traces_pipeline_required()
     {
-        let dd_forwarder_config = DatadogForwarderConfiguration::from_configuration(config)
-            .error_context("Failed to configure Datadog forwarder.")?;
+        let dd_forwarder_config = runtime_config.datadog_forwarder_configuration()?;
         blueprint.add_forwarder("dd_out", dd_forwarder_config)?;
     }
 
     if dp_config.metrics_pipeline_required() {
-        add_baseline_metrics_pipeline_to_blueprint(&mut blueprint, config, saluki_config, env_provider).await?;
+        add_baseline_metrics_pipeline_to_blueprint(&mut blueprint, runtime_config, saluki_config, env_provider).await?;
     }
 
     if dp_config.logs_pipeline_required() {
@@ -261,7 +255,7 @@ async fn create_topology(
     }
 
     if dp_config.traces_pipeline_required() {
-        add_baseline_traces_pipeline_to_blueprint(&mut blueprint, config, saluki_config, env_provider).await?;
+        add_baseline_traces_pipeline_to_blueprint(&mut blueprint, runtime_config, saluki_config, env_provider).await?;
     }
 
     // Now we move on to our actual data pipelines.
@@ -271,7 +265,7 @@ async fn create_topology(
 
     if dp_config.dogstatsd().enabled() {
         let dsd_control_surface =
-            add_dsd_pipeline_to_blueprint(&mut blueprint, config, saluki_config, env_provider).await?;
+            add_dsd_pipeline_to_blueprint(&mut blueprint, runtime_config, saluki_config, env_provider).await?;
         control_surfaces.attach_dogstatsd(dsd_control_surface);
     }
 
@@ -298,8 +292,8 @@ async fn add_checks_pipeline_to_blueprint(
 }
 
 async fn add_baseline_metrics_pipeline_to_blueprint(
-    blueprint: &mut TopologyBlueprint, config: &GenericConfiguration, saluki_config: &SalukiConfiguration,
-    env_provider: &ADPEnvironmentProvider,
+    blueprint: &mut TopologyBlueprint, runtime_config: &RuntimeComponentConfiguration,
+    saluki_config: &SalukiConfiguration, env_provider: &ADPEnvironmentProvider,
 ) -> Result<(), GenericError> {
     // Create the back half of the metrics processing pipeline.
     let host_enrichment_config = HostEnrichmentConfiguration::from_environment_provider(env_provider.clone());
@@ -312,8 +306,7 @@ async fn add_baseline_metrics_pipeline_to_blueprint(
         metrics_enrich_config = metrics_enrich_config.with_transform_builder("host_tags", host_tags_config);
     }
 
-    let dd_metrics_config = DatadogMetricsConfiguration::from_configuration(config)
-        .error_context("Failed to configure Datadog Metrics encoder.")?;
+    let dd_metrics_config = runtime_config.datadog_metrics_configuration()?;
 
     blueprint
         // Components.
@@ -322,16 +315,15 @@ async fn add_baseline_metrics_pipeline_to_blueprint(
         // Metrics, then forwarding.
         .connect_components_in_order(["metrics_enrich", "dd_metrics_encode", "dd_out"])?;
 
-    add_mrf_metrics_pipeline_to_blueprint(blueprint, config)?;
+    add_mrf_metrics_pipeline_to_blueprint(blueprint, runtime_config)?;
 
     Ok(())
 }
 
 fn add_mrf_metrics_pipeline_to_blueprint(
-    blueprint: &mut TopologyBlueprint, config: &GenericConfiguration,
+    blueprint: &mut TopologyBlueprint, runtime_config: &RuntimeComponentConfiguration,
 ) -> Result<(), GenericError> {
-    let mrf_config = MrfConfiguration::from_configuration(config)
-        .error_context("Failed to configure Multi-Region Failover metrics pipeline.")?;
+    let mrf_config = runtime_config.mrf_configuration()?;
 
     let Some((mrf_dd_url, mrf_api_key)) = mrf_config.metrics_endpoint_override() else {
         if mrf_config.is_enabled() {
@@ -346,19 +338,10 @@ fn add_mrf_metrics_pipeline_to_blueprint(
         return Ok(());
     };
 
-    let mrf_gateway_config = MrfMetricsGatewayConfiguration::new(mrf_config.clone(), config.clone());
-    let mrf_metrics_config = DatadogMetricsConfiguration::from_configuration(config)
-        .error_context("Failed to configure Multi-Region Failover Datadog Metrics encoder.")?;
-
-    let mrf_forwarder_config = DatadogForwarderConfiguration::from_configuration(config)
-        .map(|config| {
-            config.with_endpoint_override_and_api_key_refresh_config_path(
-                mrf_dd_url,
-                mrf_api_key,
-                "multi_region_failover.api_key",
-            )
-        })
-        .error_context("Failed to configure Multi-Region Failover Datadog forwarder.")?;
+    let mrf_gateway_config = runtime_config.mrf_metrics_gateway_configuration(mrf_config.clone());
+    let mrf_metrics_config = runtime_config.mrf_datadog_metrics_configuration()?;
+    let mrf_forwarder_config =
+        runtime_config.mrf_datadog_forwarder_configuration(mrf_dd_url, mrf_api_key, "multi_region_failover.api_key")?;
 
     blueprint
         .add_transform("mrf_metrics_gateway", mrf_gateway_config)?
@@ -420,16 +403,15 @@ async fn add_baseline_service_checks_pipeline_to_blueprint(
 }
 
 async fn add_baseline_traces_pipeline_to_blueprint(
-    blueprint: &mut TopologyBlueprint, config: &GenericConfiguration, saluki_config: &SalukiConfiguration,
-    env_provider: &ADPEnvironmentProvider,
+    blueprint: &mut TopologyBlueprint, runtime_config: &RuntimeComponentConfiguration,
+    saluki_config: &SalukiConfiguration, env_provider: &ADPEnvironmentProvider,
 ) -> Result<(), GenericError> {
-    let dd_traces_config = DatadogTraceConfiguration::from_configuration(config)
-        .error_context("Failed to configure Datadog Traces encoder.")?
+    let dd_traces_config = runtime_config
+        .datadog_trace_configuration()?
         .with_environment_provider(env_provider.clone())
         .await?;
-    let trace_obfuscation_config = TraceObfuscationConfiguration::from_apm_configuration(config)?;
-    let trace_sampler_config = TraceSamplerConfiguration::from_configuration(config)
-        .error_context("Failed to configure Trace Sampler transform.")?;
+    let trace_obfuscation_config = runtime_config.trace_obfuscation_configuration()?;
+    let trace_sampler_config = runtime_config.trace_sampler_configuration()?;
     let ottl_filter_config = OttlFilterConfiguration::from_native(&saluki_config.ottl_filter);
     let ottl_transform_config = OttlTransformConfiguration::from_native(&saluki_config.ottl_transform);
     let dd_traces_enrich_config = ChainedConfiguration::default()
@@ -438,12 +420,12 @@ async fn add_baseline_traces_pipeline_to_blueprint(
         .with_transform_builder("apm_onboarding", ApmOnboardingConfiguration)
         .with_transform_builder("trace_obfuscation", trace_obfuscation_config)
         .with_transform_builder("trace_sampler", trace_sampler_config);
-    let apm_stats_transform_config = ApmStatsTransformConfiguration::from_configuration(config)
-        .error_context("Failed to configure APM Stats transform.")?
+    let apm_stats_transform_config = runtime_config
+        .apm_stats_transform_configuration()?
         .with_environment_provider(env_provider.clone())
         .await?;
-    let dd_apm_stats_encoder = DatadogApmStatsEncoderConfiguration::from_configuration(config)
-        .error_context("Failed to configure Datadog APM Stats encoder.")?
+    let dd_apm_stats_encoder = runtime_config
+        .datadog_apm_stats_encoder_configuration()?
         .with_environment_provider(env_provider.clone())
         .await?;
 
@@ -460,8 +442,8 @@ async fn add_baseline_traces_pipeline_to_blueprint(
 }
 
 async fn add_dsd_pipeline_to_blueprint(
-    blueprint: &mut TopologyBlueprint, config: &GenericConfiguration, saluki_config: &SalukiConfiguration,
-    env_provider: &ADPEnvironmentProvider,
+    blueprint: &mut TopologyBlueprint, runtime_config: &RuntimeComponentConfiguration,
+    saluki_config: &SalukiConfiguration, env_provider: &ADPEnvironmentProvider,
 ) -> Result<DogStatsDControlSurface, GenericError> {
     // We're creating the "front half" of the DogStatsD pipeline, which deals solely with accepting DogStatsD payloads,
     // and enriching/processing them in DSD-specific ways, relevant to how the Datadog Agent is expected to behave.
@@ -498,18 +480,17 @@ async fn add_dsd_pipeline_to_blueprint(
     //    │    (destination)    │    │                       (Datadog Platform)                        │
     //    └─────────────────────┘    └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘
 
-    let dsd_config = DogStatsDConfiguration::from_configuration(config)
-        .error_context("Failed to configure DogStatsD source.")?
+    let dsd_config = runtime_config
+        .dogstatsd_configuration()?
         .with_workload_provider(env_provider.workload().clone())
         .with_capture_entity_resolver(env_provider.workload().clone());
     let dsd_prefix_filter_configuration =
         DogStatsDPrefixFilterConfiguration::from_native(&saluki_config.dogstatsd_prefix_filter);
-    let dsd_mapper_config = DogStatsDMapperConfiguration::from_configuration(config)?;
+    let dsd_mapper_config = runtime_config.dogstatsd_mapper_configuration()?;
     let dsd_enrich_config =
         ChainedConfiguration::default().with_transform_builder("dogstatsd_mapper", dsd_mapper_config);
     let dsd_tag_filterlist_config = TagFilterlistConfiguration::from_native(&saluki_config.tag_filterlist);
-    let dsd_agg_config =
-        AggregateConfiguration::from_configuration(config).error_context("Failed to configure aggregate transform.")?;
+    let dsd_agg_config = runtime_config.aggregate_configuration()?;
     let dsd_post_agg_filter_config =
         DogStatsDPostAggregateFilterConfiguration::from_native(&saluki_config.dogstatsd_post_aggregate_filter);
     let events_enrich_config = ChainedConfiguration::default().with_transform_builder(
@@ -520,11 +501,8 @@ async fn add_dsd_pipeline_to_blueprint(
         "host_enrichment",
         HostEnrichmentConfiguration::from_environment_provider(env_provider.clone()),
     );
-    let dsd_debug_log_config = DogStatsDDebugLogConfiguration::from_configuration(
-        config,
-        PlatformSettings::get_default_dogstatsd_log_file_path(),
-    )
-    .error_context("Failed to configure DogStatsD debug log destination.")?;
+    let dsd_debug_log_config =
+        runtime_config.dogstatsd_debug_log_configuration(PlatformSettings::get_default_dogstatsd_log_file_path())?;
     let dsd_stats_config = DogStatsDStatisticsConfiguration::new();
 
     let stats_api_handler = dsd_stats_config.api_handler();

@@ -1,9 +1,47 @@
 use std::{fs, path::Path};
 
 #[test]
+fn cargo_toml_does_not_depend_on_source_config_crate() {
+    let manifest = include_str!("../Cargo.toml");
+
+    assert!(
+        !manifest.contains(concat!("saluki", "-config")),
+        "agent-data-plane production dependencies must not include saluki-config"
+    );
+}
+
+#[test]
+fn adp_bin_does_not_depend_on_source_config() {
+    let src_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let banned = [
+        concat!("Generic", "Configuration"),
+        concat!("try_get", "_typed("),
+        concat!("compat", "_datadog_source"),
+        concat!("Configuration", "Loader"),
+        concat!("Config", "Update"),
+        concat!("Datadog", "Remapper"),
+        concat!("KEY", "_ALIASES"),
+        concat!("saluki", "_config::"),
+    ];
+    let mut offenders = Vec::new();
+
+    collect_source_config_offenders(&src_dir, &banned, &mut offenders);
+
+    assert!(
+        offenders.is_empty(),
+        "ADP bin sources must not depend on source config:\n{}",
+        offenders.join("\n")
+    );
+}
+
+#[test]
 fn internal_runtime_boundary_does_not_depend_on_source_config() {
     let src_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let banned = ["GenericConfiguration", "try_get_typed(", "compat_datadog_source"];
+    let banned = [
+        concat!("Generic", "Configuration"),
+        concat!("try_get", "_typed("),
+        concat!("compat", "_datadog_source"),
+    ];
     let mut offenders = Vec::new();
 
     collect_source_config_offenders(&src_dir.join("internal"), &banned, &mut offenders);
@@ -19,12 +57,12 @@ fn internal_runtime_boundary_does_not_depend_on_source_config() {
 fn component_builders_do_not_depend_on_source_config() {
     let src_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let banned = [
-        "GenericConfiguration",
-        "try_get_typed(",
-        "compat_datadog_source",
-        "ConfigurationLoader",
-        "ConfigUpdate",
-        "saluki_config::",
+        concat!("Generic", "Configuration"),
+        concat!("try_get", "_typed("),
+        concat!("compat", "_datadog_source"),
+        concat!("Configuration", "Loader"),
+        concat!("Config", "Update"),
+        concat!("saluki", "_config::"),
     ];
     let mut offenders = Vec::new();
 
@@ -41,12 +79,12 @@ fn component_builders_do_not_depend_on_source_config() {
 fn bootstrap_and_non_run_cli_do_not_depend_on_source_config() {
     let src_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let banned = [
-        "GenericConfiguration",
-        "try_get_typed(",
-        "compat_datadog_source",
-        "ConfigurationLoader",
-        "DatadogRemapper",
-        "KEY_ALIASES",
+        concat!("Generic", "Configuration"),
+        concat!("try_get", "_typed("),
+        concat!("compat", "_datadog_source"),
+        concat!("Configuration", "Loader"),
+        concat!("Datadog", "Remapper"),
+        concat!("KEY", "_ALIASES"),
     ];
     let mut offenders = Vec::new();
 

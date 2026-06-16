@@ -37,6 +37,7 @@ use crate::{
     datadog_agent::{remote_agent_service_names, DatadogAgentConnection},
     logging::{DynamicLogLevelWorker, LoggingConfigurationTranslator},
     stream::ConfigStreamHandle,
+    topology::RuntimeComponentConfiguration,
 };
 
 /// Coordinates bootstrap loading, authority resolution, and translation.
@@ -157,7 +158,7 @@ async fn start_from_local_datadog_sources(
                 saluki,
                 config_view,
                 attachments: StartedAttachments::None,
-                compat_datadog_source: config,
+                resolved_datadog_source: config,
             })
         }
         RuntimeConfigAuthority::LocalSnapshot(language) => Err(generic_error!(
@@ -206,7 +207,7 @@ async fn start_from_local_datadog_sources(
                     connection,
                     stream: stream.with_initial_snapshot_received(true),
                 },
-                compat_datadog_source: dynamic_config,
+                resolved_datadog_source: dynamic_config,
             })
         }
     }
@@ -225,7 +226,7 @@ async fn start_from_local_datadog_snapshot(
         saluki,
         config_view,
         attachments: StartedAttachments::None,
-        compat_datadog_source: config,
+        resolved_datadog_source: config,
     })
 }
 
@@ -919,7 +920,7 @@ pub struct StartedConfigurationSystem {
     saluki: SalukiConfiguration,
     config_view: ConfigView,
     attachments: StartedAttachments,
-    compat_datadog_source: GenericConfiguration,
+    resolved_datadog_source: GenericConfiguration,
 }
 
 impl StartedConfigurationSystem {
@@ -940,17 +941,17 @@ impl StartedConfigurationSystem {
 
     /// Returns the resolved ADP logging configuration.
     pub fn logging_configuration(&self) -> Result<LoggingConfiguration, GenericError> {
-        LoggingConfigurationTranslator::translate(&self.compat_datadog_source)
+        LoggingConfigurationTranslator::translate(&self.resolved_datadog_source)
     }
 
     /// Creates the dynamic log-level worker for the resolved configuration source.
     pub fn dynamic_log_level_worker(&self, controller: LoggingOverrideController) -> DynamicLogLevelWorker {
-        DynamicLogLevelWorker::new(&self.compat_datadog_source, controller)
+        DynamicLogLevelWorker::new(&self.resolved_datadog_source, controller)
     }
 
     /// Returns the resolved memory bounds configuration.
     pub fn memory_bounds_configuration(&self) -> Result<MemoryBoundsConfiguration, GenericError> {
-        MemoryBoundsConfiguration::try_from_config(&self.compat_datadog_source)
+        MemoryBoundsConfiguration::try_from_config(&self.resolved_datadog_source)
     }
 
     /// Returns the provider attachments created during startup.
@@ -958,9 +959,9 @@ impl StartedConfigurationSystem {
         &self.attachments
     }
 
-    /// Returns the Datadog-shaped source snapshot for runtime paths that have not yet been cut over.
-    pub const fn compat_datadog_source(&self) -> &GenericConfiguration {
-        &self.compat_datadog_source
+    /// Returns runtime component configuration adapters for topology pieces not yet translated natively.
+    pub fn runtime_component_configuration(&self) -> RuntimeComponentConfiguration {
+        RuntimeComponentConfiguration::new(self.resolved_datadog_source.clone())
     }
 }
 

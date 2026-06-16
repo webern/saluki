@@ -1,8 +1,10 @@
+use std::borrow::Cow;
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 #[cfg(target_os = "linux")]
 use std::path::Path;
 use std::path::PathBuf;
+#[cfg(any(target_os = "linux", test))]
 use std::time::Duration;
 #[cfg(target_os = "linux")]
 use std::time::Instant;
@@ -17,7 +19,6 @@ use saluki_components::sources::TrafficCaptureReader;
 use saluki_components::sources::DEFAULT_REPLAY_LOOPS;
 #[cfg(target_os = "linux")]
 use saluki_components::sources::REPLAY_CREDENTIALS_GID;
-use saluki_config::DurationString;
 #[cfg(any(target_os = "linux", test))]
 use saluki_error::generic_error;
 use saluki_error::{ErrorContext as _, GenericError};
@@ -76,8 +77,37 @@ struct StatsCommand {
     limit: Option<usize>,
 }
 
-const fn default_capture_duration() -> DurationString {
-    DurationString::new(Duration::from_secs(60))
+#[derive(Clone, Debug)]
+struct DurationArgument(Cow<'static, str>);
+
+impl DurationArgument {
+    const fn from_static(value: &'static str) -> Self {
+        Self(Cow::Borrowed(value))
+    }
+
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for DurationArgument {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromArgValue for DurationArgument {
+    fn from_arg_value(value: &str) -> Result<Self, String> {
+        if value.trim().is_empty() {
+            return Err("duration must not be empty".to_string());
+        }
+
+        Ok(Self(Cow::Owned(value.to_string())))
+    }
+}
+
+const fn default_capture_duration() -> DurationArgument {
+    DurationArgument::from_static("60s")
 }
 
 /// Starts a DogStatsD traffic capture.
@@ -86,7 +116,7 @@ const fn default_capture_duration() -> DurationString {
 struct CaptureCommand {
     /// how long the traffic capture should run for, using Go-style duration syntax such as `10s` or `1m0s`
     #[argh(option, short = 'd', long = "duration", default = "default_capture_duration()")]
-    capture_duration: DurationString,
+    capture_duration: DurationArgument,
 
     /// directory path to write the capture into
     #[argh(option, short = 'p', long = "path")]
@@ -557,7 +587,7 @@ mod tests {
 
     #[test]
     fn dogstatsd_capture_default_duration_matches_go() {
-        assert_eq!(default_capture_duration().as_duration(), Duration::from_secs(60));
+        assert_eq!(default_capture_duration().as_str(), "60s");
     }
 
     #[test]

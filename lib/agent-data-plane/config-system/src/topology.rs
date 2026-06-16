@@ -9,8 +9,8 @@ use saluki_components::{
     forwarders::DatadogForwarderConfiguration,
     sources::DogStatsDConfiguration,
     transforms::{
-        AggregateConfiguration, ApmStatsTransformConfiguration, DogStatsDMapperConfiguration,
-        MrfMetricsGatewayConfiguration, TraceObfuscationConfiguration, TraceSamplerConfiguration,
+        ApmStatsTransformConfiguration, MrfMetricsGatewayConfiguration, TraceObfuscationConfiguration,
+        TraceSamplerConfiguration,
     },
 };
 use saluki_config::GenericConfiguration;
@@ -103,17 +103,6 @@ impl RuntimeComponentConfiguration {
     /// Builds DogStatsD source configuration.
     pub fn dogstatsd_configuration(&self) -> Result<DogStatsDConfiguration, GenericError> {
         DogStatsDConfiguration::from_configuration(&self.config).error_context("Failed to configure DogStatsD source.")
-    }
-
-    /// Builds DogStatsD mapper transform configuration.
-    pub fn dogstatsd_mapper_configuration(&self) -> Result<DogStatsDMapperConfiguration, GenericError> {
-        DogStatsDMapperConfiguration::from_configuration(&self.config)
-    }
-
-    /// Builds DogStatsD aggregate transform configuration.
-    pub fn aggregate_configuration(&self) -> Result<AggregateConfiguration, GenericError> {
-        AggregateConfiguration::from_configuration(&self.config)
-            .error_context("Failed to configure aggregate transform.")
     }
 
     /// Builds DogStatsD debug log destination configuration.

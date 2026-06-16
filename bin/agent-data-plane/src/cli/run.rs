@@ -21,7 +21,9 @@ use saluki_components::{
     forwarders::OtlpForwarderConfiguration,
     relays::otlp::OtlpRelayConfiguration,
     sources::{ChecksIPCConfiguration, OtlpConfiguration},
-    transforms::{ChainedConfiguration, HostEnrichmentConfiguration},
+    transforms::{
+        AggregateConfiguration, ChainedConfiguration, DogStatsDMapperConfiguration, HostEnrichmentConfiguration,
+    },
 };
 use saluki_core::health::HealthRegistry;
 use saluki_core::runtime::{RestartMode, RestartStrategy, Supervisor};
@@ -486,11 +488,12 @@ async fn add_dsd_pipeline_to_blueprint(
         .with_capture_entity_resolver(env_provider.workload().clone());
     let dsd_prefix_filter_configuration =
         DogStatsDPrefixFilterConfiguration::from_native(&saluki_config.dogstatsd_prefix_filter);
-    let dsd_mapper_config = runtime_config.dogstatsd_mapper_configuration()?;
+    let dsd_mapper_config = DogStatsDMapperConfiguration::from_native(&saluki_config.dogstatsd_mapper);
     let dsd_enrich_config =
         ChainedConfiguration::default().with_transform_builder("dogstatsd_mapper", dsd_mapper_config);
     let dsd_tag_filterlist_config = TagFilterlistConfiguration::from_native(&saluki_config.tag_filterlist);
-    let dsd_agg_config = runtime_config.aggregate_configuration()?;
+    let dsd_agg_config = AggregateConfiguration::from_native(&saluki_config.aggregate)
+        .error_context("Failed to configure aggregate transform.")?;
     let dsd_post_agg_filter_config =
         DogStatsDPostAggregateFilterConfiguration::from_native(&saluki_config.dogstatsd_post_aggregate_filter);
     let events_enrich_config = ChainedConfiguration::default().with_transform_builder(

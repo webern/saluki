@@ -1,6 +1,6 @@
 //! Component-native configuration structs shared by ADP translators and components.
 
-use std::future::pending;
+use std::{collections::HashMap, future::pending, num::NonZeroU64, time::Duration};
 
 use saluki_io::net::ListenAddress;
 use tokio::sync::watch;
@@ -746,6 +746,210 @@ impl TagFilterlistConfiguration {
     /// Returns context cache capacity.
     pub const fn context_cache_capacity(&self) -> usize {
         self.context_cache_capacity
+    }
+}
+
+/// Native DogStatsD aggregation transform settings.
+#[derive(Clone, Debug)]
+pub struct AggregateConfiguration {
+    window_duration_seconds: NonZeroU64,
+    primary_flush_interval: Duration,
+    context_limit: usize,
+    flush_open_windows: bool,
+    counter_expiry_seconds: Option<u64>,
+    passthrough_timestamped_metrics: bool,
+    passthrough_idle_flush_timeout: Duration,
+    histogram_aggregates: Vec<String>,
+    histogram_percentiles: Vec<String>,
+    histogram_copy_to_distribution: bool,
+    histogram_copy_to_distribution_prefix: String,
+}
+
+impl AggregateConfiguration {
+    /// Creates native DogStatsD aggregation transform settings.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        window_duration_seconds: NonZeroU64, primary_flush_interval: Duration, context_limit: usize,
+        flush_open_windows: bool, counter_expiry_seconds: Option<u64>, passthrough_timestamped_metrics: bool,
+        passthrough_idle_flush_timeout: Duration, histogram_aggregates: Vec<String>,
+        histogram_percentiles: Vec<String>, histogram_copy_to_distribution: bool,
+        histogram_copy_to_distribution_prefix: String,
+    ) -> Self {
+        Self {
+            window_duration_seconds,
+            primary_flush_interval,
+            context_limit,
+            flush_open_windows,
+            counter_expiry_seconds,
+            passthrough_timestamped_metrics,
+            passthrough_idle_flush_timeout,
+            histogram_aggregates,
+            histogram_percentiles,
+            histogram_copy_to_distribution,
+            histogram_copy_to_distribution_prefix,
+        }
+    }
+
+    /// Returns the aggregation window size in seconds.
+    pub const fn window_duration_seconds(&self) -> NonZeroU64 {
+        self.window_duration_seconds
+    }
+
+    /// Returns the primary flush interval.
+    pub const fn primary_flush_interval(&self) -> Duration {
+        self.primary_flush_interval
+    }
+
+    /// Returns the maximum number of contexts per window.
+    pub const fn context_limit(&self) -> usize {
+        self.context_limit
+    }
+
+    /// Returns whether open windows should be flushed on shutdown.
+    pub const fn flush_open_windows(&self) -> bool {
+        self.flush_open_windows
+    }
+
+    /// Returns idle counter expiration in seconds.
+    pub const fn counter_expiry_seconds(&self) -> Option<u64> {
+        self.counter_expiry_seconds
+    }
+
+    /// Returns whether timestamped metrics bypass aggregation.
+    pub const fn passthrough_timestamped_metrics(&self) -> bool {
+        self.passthrough_timestamped_metrics
+    }
+
+    /// Returns how long passthrough metrics may sit idle before flushing.
+    pub const fn passthrough_idle_flush_timeout(&self) -> Duration {
+        self.passthrough_idle_flush_timeout
+    }
+
+    /// Returns histogram aggregate names.
+    pub fn histogram_aggregates(&self) -> &[String] {
+        &self.histogram_aggregates
+    }
+
+    /// Returns histogram percentile quantiles.
+    pub fn histogram_percentiles(&self) -> &[String] {
+        &self.histogram_percentiles
+    }
+
+    /// Returns whether histograms should be copied to distributions.
+    pub const fn histogram_copy_to_distribution(&self) -> bool {
+        self.histogram_copy_to_distribution
+    }
+
+    /// Returns the prefix used for distributions copied from histograms.
+    pub fn histogram_copy_to_distribution_prefix(&self) -> &str {
+        &self.histogram_copy_to_distribution_prefix
+    }
+}
+
+/// Native DogStatsD mapper transform settings.
+#[derive(Clone, Debug)]
+pub struct DogStatsDMapperConfiguration {
+    context_string_interner_bytes: usize,
+    cache_size: usize,
+    profiles: Vec<DogStatsDMapperProfileConfiguration>,
+}
+
+impl DogStatsDMapperConfiguration {
+    /// Creates native DogStatsD mapper transform settings.
+    pub fn new(
+        context_string_interner_bytes: usize, cache_size: usize, profiles: Vec<DogStatsDMapperProfileConfiguration>,
+    ) -> Self {
+        Self {
+            context_string_interner_bytes,
+            cache_size,
+            profiles,
+        }
+    }
+
+    /// Returns the string interner capacity in bytes.
+    pub const fn context_string_interner_bytes(&self) -> usize {
+        self.context_string_interner_bytes
+    }
+
+    /// Returns the maximum number of mapper results to cache.
+    pub const fn cache_size(&self) -> usize {
+        self.cache_size
+    }
+
+    /// Returns configured mapper profiles.
+    pub fn profiles(&self) -> &[DogStatsDMapperProfileConfiguration] {
+        &self.profiles
+    }
+}
+
+/// Native DogStatsD mapper profile settings.
+#[derive(Clone, Debug)]
+pub struct DogStatsDMapperProfileConfiguration {
+    name: String,
+    prefix: String,
+    mappings: Vec<DogStatsDMetricMappingConfiguration>,
+}
+
+impl DogStatsDMapperProfileConfiguration {
+    /// Creates native DogStatsD mapper profile settings.
+    pub fn new(name: String, prefix: String, mappings: Vec<DogStatsDMetricMappingConfiguration>) -> Self {
+        Self { name, prefix, mappings }
+    }
+
+    /// Returns the profile name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns the metric-name prefix matched by this profile.
+    pub fn prefix(&self) -> &str {
+        &self.prefix
+    }
+
+    /// Returns profile mappings.
+    pub fn mappings(&self) -> &[DogStatsDMetricMappingConfiguration] {
+        &self.mappings
+    }
+}
+
+/// Native DogStatsD metric mapping settings.
+#[derive(Clone, Debug)]
+pub struct DogStatsDMetricMappingConfiguration {
+    metric_match: String,
+    match_type: String,
+    name: String,
+    tags: HashMap<String, String>,
+}
+
+impl DogStatsDMetricMappingConfiguration {
+    /// Creates native DogStatsD metric mapping settings.
+    pub fn new(metric_match: String, match_type: String, name: String, tags: HashMap<String, String>) -> Self {
+        Self {
+            metric_match,
+            match_type,
+            name,
+            tags,
+        }
+    }
+
+    /// Returns the wildcard or regex match expression.
+    pub fn metric_match(&self) -> &str {
+        &self.metric_match
+    }
+
+    /// Returns the match type.
+    pub fn match_type(&self) -> &str {
+        &self.match_type
+    }
+
+    /// Returns the mapped metric name expression.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns mapped tags.
+    pub fn tags(&self) -> &HashMap<String, String> {
+        &self.tags
     }
 }
 

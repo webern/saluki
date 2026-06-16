@@ -8,6 +8,7 @@ use ddsketch::DDSketch;
 use hashbrown::{hash_map::Entry, HashMap};
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder, UsageExpr};
 use saluki_common::time::get_unix_timestamp;
+use saluki_component_config::AggregateConfiguration as NativeAggregateConfiguration;
 use saluki_config::GenericConfiguration;
 use saluki_context::Context;
 use saluki_core::{
@@ -17,7 +18,7 @@ use saluki_core::{
     topology::{interconnect::BufferedDispatcher, OutputDefinition},
     topology::{EventsBuffer, EventsDispatcher},
 };
-use saluki_error::GenericError;
+use saluki_error::{generic_error, GenericError};
 use saluki_metrics::MetricsBuilder;
 use serde::Deserialize;
 use smallvec::SmallVec;
@@ -191,6 +192,26 @@ impl AggregateConfiguration {
     /// Creates a new `AggregateConfiguration` from the given configuration.
     pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
         Ok(config.as_typed()?)
+    }
+
+    /// Creates a new `AggregateConfiguration` from native settings.
+    pub fn from_native(config: &NativeAggregateConfiguration) -> Result<Self, GenericError> {
+        Ok(Self {
+            window_duration_seconds: config.window_duration_seconds(),
+            primary_flush_interval: config.primary_flush_interval(),
+            context_limit: config.context_limit(),
+            flush_open_windows: config.flush_open_windows(),
+            counter_expiry_seconds: config.counter_expiry_seconds(),
+            passthrough_timestamped_metrics: config.passthrough_timestamped_metrics(),
+            passthrough_idle_flush_timeout: config.passthrough_idle_flush_timeout(),
+            hist_config: HistogramConfiguration::from_native_parts(
+                config.histogram_aggregates(),
+                config.histogram_percentiles(),
+                config.histogram_copy_to_distribution(),
+                config.histogram_copy_to_distribution_prefix().to_string(),
+            )
+            .map_err(|e| generic_error!("Invalid histogram aggregate configuration: {}", e))?,
+        })
     }
 
     /// Creates a new `AggregateConfiguration` with default values.

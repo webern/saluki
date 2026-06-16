@@ -1,13 +1,20 @@
 //! Configuration system lifecycle types.
 
-use std::{collections::HashSet, path::PathBuf};
+use std::{
+    collections::{HashMap, HashSet},
+    num::NonZeroU64,
+    path::PathBuf,
+    str::FromStr,
+    time::Duration,
+};
 
 use agent_data_plane_config::{
-    BootstrapConfiguration, BootstrapStartupConfiguration, BootstrapTelemetryConfiguration, ChecksIpcConfiguration,
-    ConfigStreamAuthority, ControlPlaneConfiguration, DataPlaneConfiguration, DatadogEventsEncoderConfiguration,
-    DatadogLogsEncoderConfiguration, DatadogServiceChecksEncoderConfiguration, DogStatsDCliConfiguration,
-    DogStatsDPostAggregateFilterConfiguration, DogStatsDPrefixFilterConfiguration, DynamicValue,
-    EnvironmentConfiguration, MetricTagFilterAction, MetricTagFilterEntry, OtlpForwarderConfiguration,
+    AggregateConfiguration, BootstrapConfiguration, BootstrapStartupConfiguration, BootstrapTelemetryConfiguration,
+    ChecksIpcConfiguration, ConfigStreamAuthority, ControlPlaneConfiguration, DataPlaneConfiguration,
+    DatadogEventsEncoderConfiguration, DatadogLogsEncoderConfiguration, DatadogServiceChecksEncoderConfiguration,
+    DogStatsDCliConfiguration, DogStatsDMapperConfiguration, DogStatsDMapperProfileConfiguration,
+    DogStatsDMetricMappingConfiguration, DogStatsDPostAggregateFilterConfiguration, DogStatsDPrefixFilterConfiguration,
+    DynamicValue, EnvironmentConfiguration, MetricTagFilterAction, MetricTagFilterEntry, OtlpForwarderConfiguration,
     OtlpPipelineConfiguration, OtlpProxyConfiguration, OtlpReceiverConfiguration, OtlpSourceConfiguration,
     OtlpTracesConfiguration, OttlErrorMode, OttlFilterConfiguration, OttlTransformConfiguration, PipelineConfiguration,
     RuntimeConfigAuthority, RuntimeConfigLanguage, SalukiConfiguration, TagFilterlistConfiguration,
@@ -29,6 +36,7 @@ use saluki_error::{generic_error, ErrorContext as _, GenericError};
 use saluki_io::net::{GrpcTargetAddress, ListenAddress};
 use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::Value;
+use serde_with::{serde_as, DisplayFromStr, PickFirst};
 use tokio::sync::watch;
 use tracing::{debug, error, info, trace, warn};
 
@@ -477,6 +485,142 @@ struct SourceTagFilterlistConfiguration {
     entries: Vec<SourceMetricTagFilterEntry>,
 }
 
+const fn default_window_duration_seconds() -> NonZeroU64 {
+    NonZeroU64::new(10).expect("not zero")
+}
+
+const fn default_primary_flush_interval() -> Duration {
+    Duration::from_secs(15)
+}
+
+const fn default_context_limit() -> usize {
+    1_000_000
+}
+
+const fn default_counter_expiry_seconds() -> Option<u64> {
+    Some(300)
+}
+
+const fn default_passthrough_timestamped_metrics() -> bool {
+    true
+}
+
+const fn default_passthrough_idle_flush_timeout() -> Duration {
+    Duration::from_secs(1)
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct SourceAggregateConfiguration {
+    #[serde(
+        rename = "aggregate_window_duration_seconds",
+        default = "default_window_duration_seconds"
+    )]
+    window_duration_seconds: NonZeroU64,
+    #[serde(rename = "aggregate_flush_interval", default = "default_primary_flush_interval")]
+    primary_flush_interval: Duration,
+    #[serde(rename = "aggregate_context_limit", default = "default_context_limit")]
+    context_limit: usize,
+    #[serde(
+        rename = "aggregate_flush_open_windows",
+        alias = "dogstatsd_flush_incomplete_buckets",
+        default
+    )]
+    flush_open_windows: bool,
+    #[serde(alias = "dogstatsd_expiry_seconds", default = "default_counter_expiry_seconds")]
+    counter_expiry_seconds: Option<u64>,
+    #[serde(
+        rename = "dogstatsd_no_aggregation_pipeline",
+        default = "default_passthrough_timestamped_metrics"
+    )]
+    passthrough_timestamped_metrics: bool,
+    #[serde(
+        rename = "aggregate_passthrough_idle_flush_timeout",
+        default = "default_passthrough_idle_flush_timeout"
+    )]
+    passthrough_idle_flush_timeout: Duration,
+    #[serde(default = "default_histogram_aggregates")]
+    histogram_aggregates: Vec<String>,
+    #[serde(default = "default_histogram_percentiles")]
+    histogram_percentiles: Vec<String>,
+    #[serde(default)]
+    histogram_copy_to_distribution: bool,
+    #[serde(default)]
+    histogram_copy_to_distribution_prefix: String,
+}
+
+impl Default for SourceAggregateConfiguration {
+    fn default() -> Self {
+        Self {
+            window_duration_seconds: default_window_duration_seconds(),
+            primary_flush_interval: default_primary_flush_interval(),
+            context_limit: default_context_limit(),
+            flush_open_windows: false,
+            counter_expiry_seconds: default_counter_expiry_seconds(),
+            passthrough_timestamped_metrics: default_passthrough_timestamped_metrics(),
+            passthrough_idle_flush_timeout: default_passthrough_idle_flush_timeout(),
+            histogram_aggregates: default_histogram_aggregates(),
+            histogram_percentiles: default_histogram_percentiles(),
+            histogram_copy_to_distribution: false,
+            histogram_copy_to_distribution_prefix: String::new(),
+        }
+    }
+}
+
+const fn default_context_string_interner_size() -> ByteSize {
+    ByteSize::kib(64)
+}
+
+const fn default_dogstatsd_mapper_cache_size() -> usize {
+    1000
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+struct SourceDogStatsDMetricMappingConfiguration {
+    #[serde(rename = "match")]
+    metric_match: String,
+    #[serde(default)]
+    match_type: String,
+    name: String,
+    #[serde(default)]
+    tags: HashMap<String, String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+struct SourceDogStatsDMapperProfileConfiguration {
+    name: String,
+    prefix: String,
+    mappings: Vec<SourceDogStatsDMetricMappingConfiguration>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+struct SourceDogStatsDMapperProfiles(Vec<SourceDogStatsDMapperProfileConfiguration>);
+
+impl FromStr for SourceDogStatsDMapperProfiles {
+    type Err = serde_json::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        serde_json::from_str::<Vec<SourceDogStatsDMapperProfileConfiguration>>(s).map(Self)
+    }
+}
+
+#[serde_as]
+#[derive(Clone, Debug, Deserialize)]
+struct SourceDogStatsDMapperConfiguration {
+    #[serde(
+        rename = "dogstatsd_mapper_string_interner_size",
+        default = "default_context_string_interner_size"
+    )]
+    context_string_interner_bytes: ByteSize,
+    #[serde(
+        rename = "dogstatsd_mapper_cache_size",
+        default = "default_dogstatsd_mapper_cache_size"
+    )]
+    cache_size: usize,
+    #[serde_as(as = "PickFirst<(DisplayFromStr, _)>")]
+    #[serde(default)]
+    dogstatsd_mapper_profiles: SourceDogStatsDMapperProfiles,
+}
+
 fn translate_data_plane_configuration(config: &GenericConfiguration) -> Result<DataPlaneConfiguration, GenericError> {
     let source = config
         .as_typed::<DatadogConfiguration>()
@@ -620,6 +764,63 @@ fn translate_tag_filterlist_configuration(
     ))
 }
 
+fn translate_aggregate_configuration(config: &GenericConfiguration) -> Result<AggregateConfiguration, GenericError> {
+    let source = config
+        .as_typed::<SourceAggregateConfiguration>()
+        .error_context("Failed to parse DogStatsD aggregate configuration.")?;
+
+    Ok(AggregateConfiguration::new(
+        source.window_duration_seconds,
+        source.primary_flush_interval,
+        source.context_limit,
+        source.flush_open_windows,
+        source.counter_expiry_seconds,
+        source.passthrough_timestamped_metrics,
+        source.passthrough_idle_flush_timeout,
+        source.histogram_aggregates,
+        source.histogram_percentiles,
+        source.histogram_copy_to_distribution,
+        source.histogram_copy_to_distribution_prefix,
+    ))
+}
+
+fn translate_dogstatsd_mapper_configuration(
+    config: &GenericConfiguration,
+) -> Result<DogStatsDMapperConfiguration, GenericError> {
+    let source = config
+        .as_typed::<SourceDogStatsDMapperConfiguration>()
+        .error_context("Failed to parse DogStatsD mapper configuration.")?;
+    let profiles = source
+        .dogstatsd_mapper_profiles
+        .0
+        .into_iter()
+        .map(|profile| {
+            DogStatsDMapperProfileConfiguration::new(
+                profile.name,
+                profile.prefix,
+                profile
+                    .mappings
+                    .into_iter()
+                    .map(|mapping| {
+                        DogStatsDMetricMappingConfiguration::new(
+                            mapping.metric_match,
+                            mapping.match_type,
+                            mapping.name,
+                            mapping.tags,
+                        )
+                    })
+                    .collect(),
+            )
+        })
+        .collect();
+
+    Ok(DogStatsDMapperConfiguration::new(
+        source.context_string_interner_bytes.as_u64() as usize,
+        source.cache_size,
+        profiles,
+    ))
+}
+
 fn translate_datadog_snapshot(config: &GenericConfiguration) -> Result<SalukiConfiguration, GenericError> {
     let source = config
         .as_typed::<DatadogConfiguration>()
@@ -737,6 +938,8 @@ fn translate_datadog_snapshot(config: &GenericConfiguration) -> Result<SalukiCon
         source.log_payloads,
     );
     let dogstatsd_prefix_filter = translate_dogstatsd_prefix_filter_configuration(config)?;
+    let dogstatsd_mapper = translate_dogstatsd_mapper_configuration(config)?;
+    let aggregate = translate_aggregate_configuration(config)?;
     let dogstatsd_post_aggregate_filter = translate_dogstatsd_post_aggregate_filter_configuration(config)?;
     let tag_filterlist = translate_tag_filterlist_configuration(config)?;
     let otlp_forwarder = OtlpForwarderConfiguration::new(
@@ -768,6 +971,8 @@ fn translate_datadog_snapshot(config: &GenericConfiguration) -> Result<SalukiCon
         datadog_events_encoder,
         datadog_service_checks_encoder,
         dogstatsd_prefix_filter,
+        dogstatsd_mapper,
+        aggregate,
         dogstatsd_post_aggregate_filter,
         tag_filterlist,
         otlp_receiver,

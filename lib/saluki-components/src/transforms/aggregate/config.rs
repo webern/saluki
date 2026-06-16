@@ -138,6 +138,19 @@ impl HistogramConfiguration {
         }
     }
 
+    /// Creates histogram settings from native values.
+    pub fn from_native_parts(
+        histogram_aggregates: &[String], histogram_percentiles: &[String], copy_to_distribution: bool,
+        copy_to_distribution_prefix: String,
+    ) -> Result<Self, String> {
+        Self::try_from(RawHistogramConfiguration {
+            histogram_aggregates: histogram_aggregates.to_vec(),
+            histogram_percentiles: histogram_percentiles.to_vec(),
+            histogram_copy_to_distribution: copy_to_distribution,
+            histogram_copy_to_distribution_prefix: copy_to_distribution_prefix,
+        })
+    }
+
     /// Returns the configured aggregate statistics to calculate.
     pub fn statistics(&self) -> &[HistogramStatistic] {
         &self.statistics

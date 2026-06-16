@@ -50,6 +50,13 @@ impl ConfigurationSystem {
         translate_bootstrap_configuration(config)
     }
 
+    /// Translates data-plane API settings from an already loaded local Datadog-shaped snapshot.
+    pub fn translate_local_datadog_data_plane(
+        config: &GenericConfiguration,
+    ) -> Result<DataPlaneConfiguration, GenericError> {
+        translate_data_plane_configuration(config)
+    }
+
     /// Starts the configuration system from an already loaded local Datadog-shaped bootstrap snapshot.
     pub async fn start_from_local_datadog_sources(
         self, local: GenericConfiguration,
@@ -223,10 +230,10 @@ struct SourceOttlTransformConfiguration {
     trace_statements: Vec<String>,
 }
 
-fn translate_datadog_snapshot(config: &GenericConfiguration) -> Result<SalukiConfiguration, GenericError> {
+fn translate_data_plane_configuration(config: &GenericConfiguration) -> Result<DataPlaneConfiguration, GenericError> {
     let source = config
         .as_typed::<DatadogConfiguration>()
-        .error_context("Failed to parse Datadog Agent runtime configuration.")?;
+        .error_context("Failed to parse Datadog Agent data-plane configuration.")?;
     let data_plane_source = source.data_plane.unwrap_or_default();
     let otlp_proxy_source = data_plane_source.otlp.and_then(|otlp| otlp.proxy).unwrap_or_default();
 
@@ -271,6 +278,29 @@ fn translate_datadog_snapshot(config: &GenericConfiguration) -> Result<SalukiCon
         .try_get_typed("data_plane.secure_api_listen_address")
         .error_context("Failed to read `data_plane.secure_api_listen_address`.")?
         .unwrap_or_else(|| ListenAddress::any_tcp(5101));
+
+    Ok(DataPlaneConfiguration::new(
+        config
+            .try_get_typed("data_plane.enabled")
+            .error_context("Failed to read `data_plane.enabled`.")?
+            .unwrap_or(false),
+        config
+            .try_get_typed("data_plane.standalone_mode")
+            .error_context("Failed to read `data_plane.standalone_mode`.")?
+            .unwrap_or(false),
+        api_listen_address,
+        secure_api_listen_address,
+        checks,
+        dogstatsd,
+        otlp,
+    ))
+}
+
+fn translate_datadog_snapshot(config: &GenericConfiguration) -> Result<SalukiConfiguration, GenericError> {
+    let source = config
+        .as_typed::<DatadogConfiguration>()
+        .error_context("Failed to parse Datadog Agent runtime configuration.")?;
+    let data_plane = translate_data_plane_configuration(config)?;
     let control_plane =
         ControlPlaneConfiguration::new(IpcAuthConfiguration::from_configuration(config)?.ipc_cert_file_path());
     let checks_ipc = ChecksIpcConfiguration::new(
@@ -383,7 +413,7 @@ fn translate_datadog_snapshot(config: &GenericConfiguration) -> Result<SalukiCon
         source.log_payloads,
     );
     let otlp_forwarder = OtlpForwarderConfiguration::new(
-        otlp.proxy().core_agent_otlp_grpc_endpoint().to_string(),
+        data_plane.otlp().proxy().core_agent_otlp_grpc_endpoint().to_string(),
         config
             .try_get_typed("otlp_config.traces.internal_port")
             .error_context("Failed to read `otlp_config.traces.internal_port`.")?
@@ -402,21 +432,7 @@ fn translate_datadog_snapshot(config: &GenericConfiguration) -> Result<SalukiCon
     );
 
     let saluki = SalukiConfiguration {
-        data_plane: DataPlaneConfiguration::new(
-            config
-                .try_get_typed("data_plane.enabled")
-                .error_context("Failed to read `data_plane.enabled`.")?
-                .unwrap_or(false),
-            config
-                .try_get_typed("data_plane.standalone_mode")
-                .error_context("Failed to read `data_plane.standalone_mode`.")?
-                .unwrap_or(false),
-            api_listen_address,
-            secure_api_listen_address,
-            checks,
-            dogstatsd,
-            otlp,
-        ),
+        data_plane,
         control_plane,
         checks_ipc,
         ottl_filter,

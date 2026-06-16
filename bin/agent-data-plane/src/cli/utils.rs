@@ -1,3 +1,5 @@
+use agent_data_plane_config::DataPlaneConfiguration;
+use agent_data_plane_config_system::ConfigurationSystem;
 use futures::TryFutureExt as _;
 use http::{header::CONTENT_TYPE, uri::PathAndQuery, Request, Response, StatusCode, Uri};
 use http_body_util::BodyExt as _;
@@ -46,9 +48,17 @@ impl DataPlaneAPIClient {
     /// If the data plane configuration can't be deserialized, or the data plane API endpoints can't be
     /// determined, an error will be returned.
     pub fn from_config(config: &GenericConfiguration) -> Result<Self, GenericError> {
-        let listen_address = config
-            .try_get_typed::<ListenAddress>("data_plane.secure_api_listen_address")?
-            .unwrap_or_else(|| ListenAddress::any_tcp(5101));
+        let data_plane_config = ConfigurationSystem::translate_local_datadog_data_plane(config)?;
+        Self::from_data_plane_config(&data_plane_config)
+    }
+
+    /// Creates a new `DataPlaneAPIClient` from native data-plane configuration.
+    ///
+    /// # Errors
+    ///
+    /// If the privileged API endpoint can't be used for local client connections, an error is returned.
+    pub fn from_data_plane_config(config: &DataPlaneConfiguration) -> Result<Self, GenericError> {
+        let listen_address = config.secure_api_listen_address().clone();
 
         let builder = HttpClient::builder().with_tls_config(|b| b.danger_accept_invalid_certs());
 

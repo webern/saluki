@@ -4306,6 +4306,7 @@ name = "saluki-component-config"
 version = "0.1.0"
 dependencies = [
  "saluki-io",
+ "tokio",
 ]
 
 [[package]]

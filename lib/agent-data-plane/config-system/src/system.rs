@@ -6,10 +6,11 @@ use agent_data_plane_config::{
     BootstrapConfiguration, BootstrapStartupConfiguration, BootstrapTelemetryConfiguration, ChecksIpcConfiguration,
     ConfigStreamAuthority, ControlPlaneConfiguration, DataPlaneConfiguration, DatadogEventsEncoderConfiguration,
     DatadogLogsEncoderConfiguration, DatadogServiceChecksEncoderConfiguration, DogStatsDCliConfiguration,
-    EnvironmentConfiguration, OtlpForwarderConfiguration, OtlpPipelineConfiguration, OtlpProxyConfiguration,
-    OtlpReceiverConfiguration, OtlpSourceConfiguration, OtlpTracesConfiguration, OttlErrorMode,
-    OttlFilterConfiguration, OttlTransformConfiguration, PipelineConfiguration, RuntimeConfigAuthority,
-    RuntimeConfigLanguage, SalukiConfiguration,
+    DogStatsDPostAggregateFilterConfiguration, DogStatsDPrefixFilterConfiguration, DynamicValue,
+    EnvironmentConfiguration, MetricTagFilterAction, MetricTagFilterEntry, OtlpForwarderConfiguration,
+    OtlpPipelineConfiguration, OtlpProxyConfiguration, OtlpReceiverConfiguration, OtlpSourceConfiguration,
+    OtlpTracesConfiguration, OttlErrorMode, OttlFilterConfiguration, OttlTransformConfiguration, PipelineConfiguration,
+    RuntimeConfigAuthority, RuntimeConfigLanguage, SalukiConfiguration, TagFilterlistConfiguration,
 };
 use bytesize::ByteSize;
 use datadog_agent_commons::ipc::config::{IpcAuthConfiguration, RemoteAgentClientConfiguration};
@@ -26,7 +27,7 @@ use saluki_common::task::spawn_traced_named;
 use saluki_config::{ConfigurationLoader, DurationString, GenericConfiguration};
 use saluki_error::{generic_error, ErrorContext as _, GenericError};
 use saluki_io::net::{GrpcTargetAddress, ListenAddress};
-use serde::Deserialize;
+use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::Value;
 use tokio::sync::watch;
 use tracing::{debug, error, info, trace, warn};
@@ -91,11 +92,11 @@ impl ConfigurationSystem {
         translate_data_plane_configuration(config)
     }
 
-    /// Starts the configuration system from an already loaded local Datadog-shaped bootstrap snapshot.
-    pub async fn start_from_local_datadog_sources(
-        self, local: GenericConfiguration,
+    /// Starts the configuration system from already loaded local Datadog-shaped bootstrap sources.
+    pub async fn start_from_loaded_sources(
+        self, local: LocalDatadogSources,
     ) -> Result<StartedConfigurationSystem, GenericError> {
-        start_from_local_datadog_sources(local, &self.inputs).await
+        start_from_local_datadog_sources(local.config, &self.inputs).await
     }
 }
 
@@ -128,11 +129,6 @@ impl LocalDatadogSources {
     /// Translates DogStatsD CLI/debug settings from this local source snapshot.
     pub fn dogstatsd_cli_configuration(&self) -> Result<DogStatsDCliConfiguration, GenericError> {
         ConfigurationSystem::translate_local_datadog_dogstatsd_cli(&self.config)
-    }
-
-    /// Consumes this wrapper and returns the underlying source snapshot.
-    pub fn into_source(self) -> GenericConfiguration {
-        self.config
     }
 }
 
@@ -231,6 +227,38 @@ async fn start_from_local_datadog_snapshot(
         attachments: StartedAttachments::None,
         compat_datadog_source: config,
     })
+}
+
+fn dynamic_value_from_key<T>(config: &GenericConfiguration, key: &'static str, initial: T) -> DynamicValue<T>
+where
+    T: Clone + DeserializeOwned + Send + Sync + 'static,
+{
+    dynamic_value_from_key_mapped::<T, T, _>(config, key, initial, |value| value)
+}
+
+fn dynamic_value_from_key_mapped<S, T, F>(
+    config: &GenericConfiguration, key: &'static str, initial: T, map: F,
+) -> DynamicValue<T>
+where
+    S: DeserializeOwned + Send + 'static,
+    T: Clone + Send + Sync + 'static,
+    F: Fn(S) -> T + Send + Sync + 'static,
+{
+    let mut watcher = config.watch_for_updates(key);
+    let (tx, rx) = watch::channel(initial.clone());
+
+    spawn_traced_named(format!("adp-dynamic-config-{key}"), async move {
+        loop {
+            let (_, maybe_value) = watcher.changed::<S>().await;
+            if let Some(value) = maybe_value {
+                if tx.send(map(value)).is_err() {
+                    return;
+                }
+            }
+        }
+    });
+
+    DynamicValue::new(initial, rx)
 }
 
 fn build_config_view(config: &GenericConfiguration) -> Result<ConfigView, GenericError> {
@@ -336,6 +364,118 @@ struct SourceOttlTransformConfiguration {
     trace_statements: Vec<String>,
 }
 
+fn default_metric_prefix_blocklist() -> Vec<String> {
+    vec![
+        "datadog.agent".to_string(),
+        "datadog.dogstatsd".to_string(),
+        "datadog.process".to_string(),
+        "datadog.trace_agent".to_string(),
+        "datadog.tracer".to_string(),
+        "activemq".to_string(),
+        "activemq_58".to_string(),
+        "airflow".to_string(),
+        "cassandra".to_string(),
+        "confluent".to_string(),
+        "hazelcast".to_string(),
+        "hive".to_string(),
+        "ignite".to_string(),
+        "jboss".to_string(),
+        "jvm".to_string(),
+        "kafka".to_string(),
+        "presto".to_string(),
+        "sidekiq".to_string(),
+        "solr".to_string(),
+        "tomcat".to_string(),
+        "runtime".to_string(),
+    ]
+}
+
+fn default_histogram_aggregates() -> Vec<String> {
+    vec![
+        "max".to_string(),
+        "median".to_string(),
+        "avg".to_string(),
+        "count".to_string(),
+    ]
+}
+
+fn default_histogram_percentiles() -> Vec<String> {
+    vec!["0.95".to_string()]
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+struct SourceDogStatsDPrefixFilterConfiguration {
+    #[serde(default, rename = "statsd_metric_namespace")]
+    metric_prefix: String,
+    #[serde(
+        default = "default_metric_prefix_blocklist",
+        rename = "statsd_metric_namespace_blocklist",
+        alias = "statsd_metric_namespace_blacklist"
+    )]
+    metric_prefix_blocklist: Vec<String>,
+    #[serde(default)]
+    metric_filterlist: Vec<String>,
+    #[serde(default)]
+    metric_filterlist_match_prefix: bool,
+    #[serde(default, rename = "statsd_metric_blocklist")]
+    metric_blocklist: Vec<String>,
+    #[serde(default, rename = "statsd_metric_blocklist_match_prefix")]
+    metric_blocklist_match_prefix: bool,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+struct SourceDogStatsDPostAggregateFilterConfiguration {
+    #[serde(default)]
+    metric_filterlist: Vec<String>,
+    #[serde(default)]
+    metric_filterlist_match_prefix: bool,
+    #[serde(default, rename = "statsd_metric_blocklist")]
+    metric_blocklist: Vec<String>,
+    #[serde(default, rename = "statsd_metric_blocklist_match_prefix")]
+    metric_blocklist_match_prefix: bool,
+    #[serde(default = "default_histogram_aggregates")]
+    histogram_aggregates: Vec<String>,
+    #[serde(default = "default_histogram_percentiles")]
+    histogram_percentiles: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum SourceMetricTagFilterAction {
+    Include,
+    #[default]
+    Exclude,
+}
+
+impl From<SourceMetricTagFilterAction> for MetricTagFilterAction {
+    fn from(value: SourceMetricTagFilterAction) -> Self {
+        match value {
+            SourceMetricTagFilterAction::Include => Self::Include,
+            SourceMetricTagFilterAction::Exclude => Self::Exclude,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct SourceMetricTagFilterEntry {
+    metric_name: String,
+    #[serde(default)]
+    action: SourceMetricTagFilterAction,
+    tags: Vec<String>,
+}
+
+impl From<SourceMetricTagFilterEntry> for MetricTagFilterEntry {
+    fn from(value: SourceMetricTagFilterEntry) -> Self {
+        MetricTagFilterEntry::new(value.metric_name, value.action.into(), value.tags)
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+struct SourceTagFilterlistConfiguration {
+    #[serde(default, rename = "metric_tag_filterlist")]
+    entries: Vec<SourceMetricTagFilterEntry>,
+}
+
 fn translate_data_plane_configuration(config: &GenericConfiguration) -> Result<DataPlaneConfiguration, GenericError> {
     let source = config
         .as_typed::<DatadogConfiguration>()
@@ -399,6 +539,83 @@ fn translate_data_plane_configuration(config: &GenericConfiguration) -> Result<D
         checks,
         dogstatsd,
         otlp,
+    ))
+}
+
+fn translate_dogstatsd_prefix_filter_configuration(
+    config: &GenericConfiguration,
+) -> Result<DogStatsDPrefixFilterConfiguration, GenericError> {
+    let source = config
+        .as_typed::<SourceDogStatsDPrefixFilterConfiguration>()
+        .error_context("Failed to parse DogStatsD prefix/filter configuration.")?;
+
+    Ok(DogStatsDPrefixFilterConfiguration::new(
+        source.metric_prefix,
+        source.metric_prefix_blocklist,
+        dynamic_value_from_key(config, "metric_filterlist", source.metric_filterlist),
+        dynamic_value_from_key(
+            config,
+            "metric_filterlist_match_prefix",
+            source.metric_filterlist_match_prefix,
+        ),
+        dynamic_value_from_key(config, "statsd_metric_blocklist", source.metric_blocklist),
+        dynamic_value_from_key(
+            config,
+            "statsd_metric_blocklist_match_prefix",
+            source.metric_blocklist_match_prefix,
+        ),
+    ))
+}
+
+fn translate_dogstatsd_post_aggregate_filter_configuration(
+    config: &GenericConfiguration,
+) -> Result<DogStatsDPostAggregateFilterConfiguration, GenericError> {
+    let source = config
+        .as_typed::<SourceDogStatsDPostAggregateFilterConfiguration>()
+        .error_context("Failed to parse DogStatsD post-aggregate filter configuration.")?;
+
+    Ok(DogStatsDPostAggregateFilterConfiguration::new(
+        dynamic_value_from_key(config, "metric_filterlist", source.metric_filterlist),
+        dynamic_value_from_key(
+            config,
+            "metric_filterlist_match_prefix",
+            source.metric_filterlist_match_prefix,
+        ),
+        dynamic_value_from_key(config, "statsd_metric_blocklist", source.metric_blocklist),
+        dynamic_value_from_key(
+            config,
+            "statsd_metric_blocklist_match_prefix",
+            source.metric_blocklist_match_prefix,
+        ),
+        source.histogram_aggregates,
+        source.histogram_percentiles,
+    ))
+}
+
+fn translate_tag_filterlist_configuration(
+    config: &GenericConfiguration,
+) -> Result<TagFilterlistConfiguration, GenericError> {
+    let source = config
+        .as_typed::<SourceTagFilterlistConfiguration>()
+        .error_context("Failed to parse metric tag filterlist configuration.")?;
+    let entries = source
+        .entries
+        .into_iter()
+        .map(MetricTagFilterEntry::from)
+        .collect::<Vec<_>>();
+    let context_cache_capacity = config
+        .try_get_typed("data_plane.dogstatsd.aggregator_tag_filter_cache_capacity")
+        .error_context("Failed to read `data_plane.dogstatsd.aggregator_tag_filter_cache_capacity`.")?
+        .unwrap_or(100_000);
+
+    Ok(TagFilterlistConfiguration::new(
+        dynamic_value_from_key_mapped::<Vec<SourceMetricTagFilterEntry>, _, _>(
+            config,
+            "metric_tag_filterlist",
+            entries,
+            |entries| entries.into_iter().map(MetricTagFilterEntry::from).collect::<Vec<_>>(),
+        ),
+        context_cache_capacity,
     ))
 }
 
@@ -518,6 +735,9 @@ fn translate_datadog_snapshot(config: &GenericConfiguration) -> Result<SalukiCon
         source.serializer_zstd_compressor_level as i32,
         source.log_payloads,
     );
+    let dogstatsd_prefix_filter = translate_dogstatsd_prefix_filter_configuration(config)?;
+    let dogstatsd_post_aggregate_filter = translate_dogstatsd_post_aggregate_filter_configuration(config)?;
+    let tag_filterlist = translate_tag_filterlist_configuration(config)?;
     let otlp_forwarder = OtlpForwarderConfiguration::new(
         data_plane.otlp().proxy().core_agent_otlp_grpc_endpoint().to_string(),
         config
@@ -546,6 +766,9 @@ fn translate_datadog_snapshot(config: &GenericConfiguration) -> Result<SalukiCon
         datadog_logs_encoder,
         datadog_events_encoder,
         datadog_service_checks_encoder,
+        dogstatsd_prefix_filter,
+        dogstatsd_post_aggregate_filter,
+        tag_filterlist,
         otlp_receiver,
         otlp_source,
         otlp_traces,

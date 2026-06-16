@@ -16,6 +16,28 @@ fn internal_runtime_boundary_does_not_depend_on_source_config() {
 }
 
 #[test]
+fn component_builders_do_not_depend_on_source_config() {
+    let src_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let banned = [
+        "GenericConfiguration",
+        "try_get_typed(",
+        "compat_datadog_source",
+        "ConfigurationLoader",
+        "ConfigUpdate",
+        "saluki_config::",
+    ];
+    let mut offenders = Vec::new();
+
+    collect_source_config_offenders(&src_dir.join("components"), &banned, &mut offenders);
+
+    assert!(
+        offenders.is_empty(),
+        "ADP-local component builders must not depend on source config:\n{}",
+        offenders.join("\n")
+    );
+}
+
+#[test]
 fn bootstrap_and_non_run_cli_do_not_depend_on_source_config() {
     let src_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let banned = [

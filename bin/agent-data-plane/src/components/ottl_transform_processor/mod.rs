@@ -12,8 +12,6 @@ use ottl::{CallbackMap, EnumMap, OttlParser};
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
 use saluki_common::collections::FastHashMap;
 use saluki_component_config::{OttlErrorMode, OttlTransformConfiguration as NativeOttlTransformConfiguration};
-#[cfg(test)]
-use saluki_config::GenericConfiguration;
 use saluki_core::{
     components::{transforms::*, ComponentContext},
     data_model::event::trace::{AttributeValue, Span},
@@ -44,22 +42,6 @@ impl OttlTransformConfiguration {
                 trace_statements: config.trace_statements().to_vec(),
             },
         }
-    }
-
-    /// Creates an `OttlTransformConfiguration` from the given configuration.
-    ///
-    /// Reads the OTTL Transform config from the `ottl_transform_config` key at the top level of the data-plane
-    /// configuration.
-    ///
-    /// # Errors
-    ///
-    /// If a value at `ottl_transform_config` exists but fails to deserialize, an error is returned.
-    #[cfg(test)]
-    pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
-        let transform_config = config.try_get_typed::<OttlTransformConfig>("ottl_transform_config")?;
-        Ok(Self {
-            config: transform_config.unwrap_or_default(),
-        })
     }
 }
 
@@ -176,7 +158,6 @@ mod tests {
     use std::sync::Arc;
 
     use saluki_common::collections::FastHashMap;
-    use saluki_config::ConfigurationLoader;
     use saluki_core::{
         components::{transforms::*, ComponentContext},
         data_model::event::{
@@ -191,6 +172,20 @@ mod tests {
     use super::*;
 
     // ---- Helpers ----
+
+    fn configuration_from_json(
+        cfg_json: Option<serde_json::Value>,
+    ) -> Result<OttlTransformConfiguration, serde_json::Error> {
+        let transform_config = cfg_json
+            .and_then(|mut value| value.as_object_mut()?.remove("ottl_transform_config"))
+            .map(serde_json::from_value::<OttlTransformConfig>)
+            .transpose()?
+            .unwrap_or_default();
+
+        Ok(OttlTransformConfiguration {
+            config: transform_config,
+        })
+    }
 
     fn make_span(_trace_id: u64, span_id: u64, meta: HashMap<String, String>) -> Span {
         let mut attr_map = FastHashMap::default();
@@ -233,8 +228,7 @@ mod tests {
     }
 
     async fn build_transform(cfg_json: Option<serde_json::Value>) -> Box<dyn SynchronousTransform + Send> {
-        let (config, _) = ConfigurationLoader::for_tests(cfg_json, None, false).await;
-        let ottl_config = OttlTransformConfiguration::from_configuration(&config).expect("config should parse");
+        let ottl_config = configuration_from_json(cfg_json).expect("config should parse");
         let ctx = ComponentContext::transform(ComponentId::try_from("ottl_transform").unwrap());
         ottl_config.build(ctx).await.expect("build should succeed")
     }
@@ -263,8 +257,7 @@ mod tests {
                 "unknown_field": 1
             }
         });
-        let (config, _) = ConfigurationLoader::for_tests(Some(invalid), None, false).await;
-        let result = OttlTransformConfiguration::from_configuration(&config);
+        let result = configuration_from_json(Some(invalid));
         assert!(result.is_err(), "unknown fields must cause deserialization error");
     }
 
@@ -275,8 +268,7 @@ mod tests {
                 "trace_statements": ["syntax error !!"]
             }
         });
-        let (config, _) = ConfigurationLoader::for_tests(Some(cfg_json), None, false).await;
-        let ottl_config = OttlTransformConfiguration::from_configuration(&config).expect("config is valid");
+        let ottl_config = configuration_from_json(Some(cfg_json)).expect("config is valid");
         let ctx = ComponentContext::transform(ComponentId::try_from("ottl_transform").unwrap());
         let result = ottl_config.build(ctx).await;
         assert!(result.is_err(), "invalid OTTL syntax must make build fail");

@@ -1,6 +1,65 @@
 //! Component-native configuration structs shared by ADP translators and components.
 
+use std::future::pending;
+
 use saluki_io::net::ListenAddress;
+use tokio::sync::watch;
+
+/// Dynamic component configuration value.
+#[derive(Clone, Debug)]
+pub struct DynamicValue<T> {
+    current: T,
+    updates: Option<watch::Receiver<T>>,
+}
+
+impl<T> DynamicValue<T>
+where
+    T: Clone,
+{
+    /// Creates a fixed dynamic value with no update stream.
+    pub fn fixed(current: T) -> Self {
+        Self { current, updates: None }
+    }
+
+    /// Creates a dynamic value from an initial value and update receiver.
+    pub fn new(current: T, updates: watch::Receiver<T>) -> Self {
+        Self {
+            current,
+            updates: Some(updates),
+        }
+    }
+
+    /// Returns the current value.
+    pub fn current(&self) -> T {
+        self.current.clone()
+    }
+
+    /// Waits for the next update, returning `None` only if the update stream closes.
+    pub async fn changed(&mut self) -> Option<T> {
+        let Some(updates) = self.updates.as_mut() else {
+            pending::<()>().await;
+            unreachable!("pending future never completes")
+        };
+
+        if updates.changed().await.is_err() {
+            self.updates = None;
+            return None;
+        }
+
+        let value = updates.borrow().clone();
+        self.current = value.clone();
+        Some(value)
+    }
+}
+
+impl<T> Default for DynamicValue<T>
+where
+    T: Clone + Default,
+{
+    fn default() -> Self {
+        Self::fixed(T::default())
+    }
+}
 
 /// OTTL condition/statement error handling mode.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -498,6 +557,195 @@ impl DatadogServiceChecksEncoderConfiguration {
     /// Returns whether decoded payloads should be logged.
     pub const fn log_payloads(&self) -> bool {
         self.log_payloads
+    }
+}
+
+/// Native DogStatsD prefix/filter transform settings.
+#[derive(Clone, Debug)]
+pub struct DogStatsDPrefixFilterConfiguration {
+    metric_prefix: String,
+    metric_prefix_blocklist: Vec<String>,
+    metric_filterlist: DynamicValue<Vec<String>>,
+    metric_filterlist_match_prefix: DynamicValue<bool>,
+    metric_blocklist: DynamicValue<Vec<String>>,
+    metric_blocklist_match_prefix: DynamicValue<bool>,
+}
+
+impl DogStatsDPrefixFilterConfiguration {
+    /// Creates DogStatsD prefix/filter transform settings.
+    pub fn new(
+        metric_prefix: String, metric_prefix_blocklist: Vec<String>, metric_filterlist: DynamicValue<Vec<String>>,
+        metric_filterlist_match_prefix: DynamicValue<bool>, metric_blocklist: DynamicValue<Vec<String>>,
+        metric_blocklist_match_prefix: DynamicValue<bool>,
+    ) -> Self {
+        Self {
+            metric_prefix,
+            metric_prefix_blocklist,
+            metric_filterlist,
+            metric_filterlist_match_prefix,
+            metric_blocklist,
+            metric_blocklist_match_prefix,
+        }
+    }
+
+    /// Returns the metric prefix.
+    pub fn metric_prefix(&self) -> &str {
+        &self.metric_prefix
+    }
+
+    /// Returns prefixes excluded from prefixing.
+    pub fn metric_prefix_blocklist(&self) -> &[String] {
+        &self.metric_prefix_blocklist
+    }
+
+    /// Returns dynamic metric filterlist settings.
+    pub fn metric_filterlist(&self) -> DynamicValue<Vec<String>> {
+        self.metric_filterlist.clone()
+    }
+
+    /// Returns dynamic metric filterlist match-prefix settings.
+    pub fn metric_filterlist_match_prefix(&self) -> DynamicValue<bool> {
+        self.metric_filterlist_match_prefix.clone()
+    }
+
+    /// Returns dynamic metric blocklist settings.
+    pub fn metric_blocklist(&self) -> DynamicValue<Vec<String>> {
+        self.metric_blocklist.clone()
+    }
+
+    /// Returns dynamic metric blocklist match-prefix settings.
+    pub fn metric_blocklist_match_prefix(&self) -> DynamicValue<bool> {
+        self.metric_blocklist_match_prefix.clone()
+    }
+}
+
+/// Native DogStatsD post-aggregate filter settings.
+#[derive(Clone, Debug)]
+pub struct DogStatsDPostAggregateFilterConfiguration {
+    metric_filterlist: DynamicValue<Vec<String>>,
+    metric_filterlist_match_prefix: DynamicValue<bool>,
+    metric_blocklist: DynamicValue<Vec<String>>,
+    metric_blocklist_match_prefix: DynamicValue<bool>,
+    histogram_aggregates: Vec<String>,
+    histogram_percentiles: Vec<String>,
+}
+
+impl DogStatsDPostAggregateFilterConfiguration {
+    /// Creates DogStatsD post-aggregate filter settings.
+    pub fn new(
+        metric_filterlist: DynamicValue<Vec<String>>, metric_filterlist_match_prefix: DynamicValue<bool>,
+        metric_blocklist: DynamicValue<Vec<String>>, metric_blocklist_match_prefix: DynamicValue<bool>,
+        histogram_aggregates: Vec<String>, histogram_percentiles: Vec<String>,
+    ) -> Self {
+        Self {
+            metric_filterlist,
+            metric_filterlist_match_prefix,
+            metric_blocklist,
+            metric_blocklist_match_prefix,
+            histogram_aggregates,
+            histogram_percentiles,
+        }
+    }
+
+    /// Returns dynamic metric filterlist settings.
+    pub fn metric_filterlist(&self) -> DynamicValue<Vec<String>> {
+        self.metric_filterlist.clone()
+    }
+
+    /// Returns dynamic metric filterlist match-prefix settings.
+    pub fn metric_filterlist_match_prefix(&self) -> DynamicValue<bool> {
+        self.metric_filterlist_match_prefix.clone()
+    }
+
+    /// Returns dynamic metric blocklist settings.
+    pub fn metric_blocklist(&self) -> DynamicValue<Vec<String>> {
+        self.metric_blocklist.clone()
+    }
+
+    /// Returns dynamic metric blocklist match-prefix settings.
+    pub fn metric_blocklist_match_prefix(&self) -> DynamicValue<bool> {
+        self.metric_blocklist_match_prefix.clone()
+    }
+
+    /// Returns histogram aggregate suffixes.
+    pub fn histogram_aggregates(&self) -> &[String] {
+        &self.histogram_aggregates
+    }
+
+    /// Returns histogram percentile suffixes.
+    pub fn histogram_percentiles(&self) -> &[String] {
+        &self.histogram_percentiles
+    }
+}
+
+/// Action applied to a configured metric tag filterlist.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum MetricTagFilterAction {
+    /// Keep only listed tag keys.
+    Include,
+    /// Remove listed tag keys.
+    #[default]
+    Exclude,
+}
+
+/// Native metric tag filter entry.
+#[derive(Clone, Debug)]
+pub struct MetricTagFilterEntry {
+    metric_name: String,
+    action: MetricTagFilterAction,
+    tags: Vec<String>,
+}
+
+impl MetricTagFilterEntry {
+    /// Creates a metric tag filter entry.
+    pub fn new(metric_name: String, action: MetricTagFilterAction, tags: Vec<String>) -> Self {
+        Self {
+            metric_name,
+            action,
+            tags,
+        }
+    }
+
+    /// Returns the metric name.
+    pub fn metric_name(&self) -> &str {
+        &self.metric_name
+    }
+
+    /// Returns the filter action.
+    pub const fn action(&self) -> MetricTagFilterAction {
+        self.action
+    }
+
+    /// Returns tag keys targeted by this entry.
+    pub fn tags(&self) -> &[String] {
+        &self.tags
+    }
+}
+
+/// Native metric tag filterlist settings.
+#[derive(Clone, Debug)]
+pub struct TagFilterlistConfiguration {
+    entries: DynamicValue<Vec<MetricTagFilterEntry>>,
+    context_cache_capacity: usize,
+}
+
+impl TagFilterlistConfiguration {
+    /// Creates metric tag filterlist settings.
+    pub fn new(entries: DynamicValue<Vec<MetricTagFilterEntry>>, context_cache_capacity: usize) -> Self {
+        Self {
+            entries,
+            context_cache_capacity,
+        }
+    }
+
+    /// Returns dynamic metric tag filter entries.
+    pub fn entries(&self) -> DynamicValue<Vec<MetricTagFilterEntry>> {
+        self.entries.clone()
+    }
+
+    /// Returns context cache capacity.
+    pub const fn context_cache_capacity(&self) -> usize {
+        self.context_cache_capacity
     }
 }
 

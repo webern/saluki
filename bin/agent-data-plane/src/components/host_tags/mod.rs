@@ -26,6 +26,10 @@ const DEFAULT_EXPECTED_TAGS_DURATION: Duration = Duration::ZERO;
 
 impl HostTagsConfiguration {
     /// Creates a new `HostTagsConfiguration` from the given configuration.
+    ///
+    /// Transitional: superseded by `from_native` on the native path; retained until host tags are
+    /// sourced through the shared Datadog Agent connection.
+    #[allow(dead_code)]
     pub async fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
         let client = RemoteAgentClient::from_configuration(config).await?;
         let expected_tags_duration = config
@@ -45,7 +49,6 @@ impl HostTagsConfiguration {
     /// connection is provided to native-configured components is an unresolved design question. This
     /// builds a disabled config (no Agent client, zero duration) that never enriches metrics, matching
     /// a no-host-tags configuration.
-    #[allow(dead_code)]
     pub fn from_native() -> Result<Self, GenericError> {
         Ok(Self {
             client: None,

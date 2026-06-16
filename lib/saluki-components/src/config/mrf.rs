@@ -33,6 +33,26 @@ impl MrfConfiguration {
         })
     }
 
+    /// Creates a new `MrfConfiguration` from already-resolved native parts.
+    ///
+    /// Used by the native (non-raw-map) construction path. `api_key`/`site`/`dd_url` are only needed
+    /// to derive a metrics endpoint override; when the forwarder endpoint is already resolved
+    /// natively they may be left `None` (the gateway only consults `enabled` / `failover_metrics` /
+    /// `metric_allowlist`).
+    pub fn new(
+        enabled: bool, failover_metrics: bool, metric_allowlist: Vec<String>, api_key: Option<String>,
+        site: Option<String>, dd_url: Option<String>,
+    ) -> Self {
+        Self {
+            enabled,
+            failover_metrics,
+            metric_allowlist,
+            api_key,
+            site,
+            dd_url,
+        }
+    }
+
     /// Returns whether multi-region failover is enabled for this process.
     pub const fn is_enabled(&self) -> bool {
         self.enabled

@@ -295,8 +295,7 @@ async fn create_topology(
     }
 
     if dp_config.metrics_pipeline_required() {
-        add_baseline_metrics_pipeline_to_blueprint(&mut blueprint, config, saluki_config, dp_config, env_provider)
-            .await?;
+        add_baseline_metrics_pipeline_to_blueprint(&mut blueprint, saluki_config, dp_config, env_provider).await?;
     }
 
     if dp_config.logs_pipeline_required() {
@@ -349,8 +348,8 @@ async fn add_checks_pipeline_to_blueprint(
 }
 
 async fn add_baseline_metrics_pipeline_to_blueprint(
-    blueprint: &mut TopologyBlueprint, config: &GenericConfiguration, saluki_config: &SalukiConfiguration,
-    dp_config: &DataPlaneConfiguration, env_provider: &ADPEnvironmentProvider,
+    blueprint: &mut TopologyBlueprint, saluki_config: &SalukiConfiguration, dp_config: &DataPlaneConfiguration,
+    env_provider: &ADPEnvironmentProvider,
 ) -> Result<(), GenericError> {
     // Create the back half of the metrics processing pipeline.
     let host_enrichment_config = HostEnrichmentConfiguration::from_environment_provider(env_provider.clone());
@@ -358,10 +357,9 @@ async fn add_baseline_metrics_pipeline_to_blueprint(
         ChainedConfiguration::default().with_transform_builder("host_enrichment", host_enrichment_config);
 
     if !dp_config.standalone_mode() {
-        // Transitional: host tags are sourced from the Agent; the native path is a disabled stub
-        // pending the shared Datadog Agent connection design question, so we keep the raw-config
-        // constructor here to preserve behavior.
-        let host_tags_config = HostTagsConfiguration::from_configuration(config).await?;
+        // Transitional: host-tags-over-the-shared-Datadog-Agent-connection is the design's open
+        // question, so the native path uses a disabled host-tags transform for now.
+        let host_tags_config = HostTagsConfiguration::from_native()?;
         metrics_enrich_config = metrics_enrich_config.with_transform_builder("host_tags", host_tags_config);
     }
 
@@ -375,42 +373,41 @@ async fn add_baseline_metrics_pipeline_to_blueprint(
         // Metrics, then forwarding.
         .connect_components_in_order(["metrics_enrich", "dd_metrics_encode", "dd_out"])?;
 
-    add_mrf_metrics_pipeline_to_blueprint(blueprint, config)?;
+    add_mrf_metrics_pipeline_to_blueprint(blueprint, saluki_config)?;
 
     Ok(())
 }
 
 fn add_mrf_metrics_pipeline_to_blueprint(
-    blueprint: &mut TopologyBlueprint, config: &GenericConfiguration,
+    blueprint: &mut TopologyBlueprint, saluki_config: &SalukiConfiguration,
 ) -> Result<(), GenericError> {
-    let mrf_config = MrfConfiguration::from_configuration(config)
-        .error_context("Failed to configure Multi-Region Failover metrics pipeline.")?;
-
-    let Some((mrf_dd_url, mrf_api_key)) = mrf_config.metrics_endpoint_override() else {
-        if mrf_config.is_enabled() {
-            warn!(
-                "Multi-Region Failover is enabled, but multi_region_failover.api_key and one of \
-                 multi_region_failover.dd_url or multi_region_failover.site are required for metrics forwarding. The \
-                 MRF metrics branch will not be wired, and primary forwarding will continue. Restart ADP after \
-                 configuring the static MRF endpoint settings."
-            );
-        }
-
+    let Some(mrf) = &saluki_config.metrics.multi_region_failover else {
         return Ok(());
     };
 
-    let mrf_gateway_config = MrfMetricsGatewayConfiguration::new(mrf_config.clone(), config.clone());
-    let mrf_metrics_config = DatadogMetricsConfiguration::from_configuration(config)
+    // The failover forwarder's endpoint/API key are resolved natively; an empty endpoint set means
+    // the required failover endpoint/API key were not configured.
+    if mrf.forwarder.endpoints.is_empty() {
+        warn!(
+            "Multi-Region Failover is enabled, but a failover endpoint and API key are required for metrics \
+             forwarding. The MRF metrics branch will not be wired, and primary forwarding will continue."
+        );
+        return Ok(());
+    }
+
+    let mrf_config = MrfConfiguration::new(
+        true,
+        mrf.failover_metrics,
+        mrf.metric_allowlist.iter().map(|s| s.to_string()).collect(),
+        None,
+        None,
+        None,
+    );
+    let mrf_gateway_config = MrfMetricsGatewayConfiguration::from_native(mrf_config);
+    let mrf_metrics_config = DatadogMetricsConfiguration::from_native(&saluki_config.metrics.datadog_encoder)
         .error_context("Failed to configure Multi-Region Failover Datadog Metrics encoder.")?;
 
-    let mrf_forwarder_config = DatadogForwarderConfiguration::from_configuration(config)
-        .map(|config| {
-            config.with_endpoint_override_and_api_key_refresh_config_path(
-                mrf_dd_url,
-                mrf_api_key,
-                "multi_region_failover.api_key",
-            )
-        })
+    let mrf_forwarder_config = DatadogForwarderConfiguration::from_native(&mrf.forwarder)
         .error_context("Failed to configure Multi-Region Failover Datadog forwarder.")?;
 
     blueprint

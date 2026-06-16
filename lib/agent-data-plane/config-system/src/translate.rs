@@ -77,6 +77,8 @@ pub struct Translator {
 
     // Staged MRF inputs.
     mrf_enabled: bool,
+    mrf_failover_metrics: bool,
+    mrf_metric_allowlist: Vec<MetaString>,
     mrf_api_key: Option<String>,
     mrf_dd_url: Option<String>,
     mrf_site: Option<String>,
@@ -148,6 +150,8 @@ impl Translator {
             site: None,
             additional_endpoints: serde_json::Value::Null,
             mrf_enabled: false,
+            mrf_failover_metrics: false,
+            mrf_metric_allowlist: Vec::new(),
             mrf_api_key: None,
             mrf_dd_url: None,
             mrf_site: None,
@@ -212,8 +216,8 @@ impl Translator {
                 &serde_json::Value::Null,
             );
             Some(MultiRegionFailoverConfig {
-                failover_metrics: false,
-                metric_allowlist: Vec::new(),
+                failover_metrics: self.mrf_failover_metrics,
+                metric_allowlist: self.mrf_metric_allowlist.clone(),
                 forwarder: mrf_forwarder,
             })
         } else {
@@ -515,8 +519,12 @@ impl DatadogConfigConsumer for Translator {
     fn consume_multi_region_failover_site(&mut self, value: Option<String>) {
         self.mrf_site = value;
     }
-    fn consume_multi_region_failover_failover_metrics(&mut self, _value: bool) {}
-    fn consume_multi_region_failover_metric_allowlist(&mut self, _value: Vec<String>) {}
+    fn consume_multi_region_failover_failover_metrics(&mut self, value: bool) {
+        self.mrf_failover_metrics = value;
+    }
+    fn consume_multi_region_failover_metric_allowlist(&mut self, value: Vec<String>) {
+        self.mrf_metric_allowlist = metastrings(value);
+    }
 
     // ----- DogStatsD source -----
     fn consume_dogstatsd_port(&mut self, value: i64) {

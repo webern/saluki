@@ -33,7 +33,7 @@ use crate::config::MrfConfiguration;
 /// dynamic updates.
 pub struct MrfMetricsGatewayConfiguration {
     mrf_config: MrfConfiguration,
-    configuration: GenericConfiguration,
+    configuration: Option<GenericConfiguration>,
 }
 
 impl MrfMetricsGatewayConfiguration {
@@ -41,7 +41,19 @@ impl MrfMetricsGatewayConfiguration {
     pub fn new(mrf_config: MrfConfiguration, configuration: GenericConfiguration) -> Self {
         Self {
             mrf_config,
-            configuration,
+            configuration: Some(configuration),
+        }
+    }
+
+    /// Creates a new `MrfMetricsGatewayConfiguration` from native configuration.
+    ///
+    /// The static gateway mode comes from `mrf_config`; runtime updates are delivered through the
+    /// configuration system's typed, scoped handles rather than a retained raw map, so no
+    /// `GenericConfiguration` is held.
+    pub fn from_native(mrf_config: MrfConfiguration) -> Self {
+        Self {
+            mrf_config,
+            configuration: None,
         }
     }
 }
@@ -61,11 +73,11 @@ enum GatewayMode {
 pub struct MrfMetricsGateway {
     mrf_config: MrfConfiguration,
     mode: GatewayMode,
-    configuration: GenericConfiguration,
+    configuration: Option<GenericConfiguration>,
 }
 
 impl MrfMetricsGateway {
-    fn new(mrf_config: MrfConfiguration, configuration: GenericConfiguration) -> Self {
+    fn new(mrf_config: MrfConfiguration, configuration: Option<GenericConfiguration>) -> Self {
         let mode = Self::mode_for_config(&mrf_config);
 
         Self {
@@ -173,12 +185,16 @@ impl MemoryBounds for MrfMetricsGatewayConfiguration {
 impl Transform for MrfMetricsGateway {
     async fn run(mut self: Box<Self>, mut context: TransformContext) -> Result<(), GenericError> {
         let mut health = context.take_health_handle();
+        // String-key watchers exist only on the legacy raw-map path. On the native path the
+        // configuration system delivers updates through typed, scoped handles instead.
         let mut failover_metrics_watcher = self
             .configuration
-            .watch_for_updates("multi_region_failover.failover_metrics");
+            .as_ref()
+            .map(|c| c.watch_for_updates("multi_region_failover.failover_metrics"));
         let mut metric_allowlist_watcher = self
             .configuration
-            .watch_for_updates("multi_region_failover.metric_allowlist");
+            .as_ref()
+            .map(|c| c.watch_for_updates("multi_region_failover.metric_allowlist"));
 
         health.mark_ready();
         debug!(mode = ?self.mode, "MRF metrics gateway transform started.");
@@ -197,12 +213,12 @@ impl Transform for MrfMetricsGateway {
                         break;
                     }
                 },
-                (_, maybe_failover_metrics) = failover_metrics_watcher.changed::<bool>() => {
+                (_, maybe_failover_metrics) = async { failover_metrics_watcher.as_mut().unwrap().changed::<bool>().await }, if failover_metrics_watcher.is_some() => {
                     if let Some(failover_metrics) = maybe_failover_metrics {
                         self.update_failover_metrics(failover_metrics);
                     }
                 },
-                (_, maybe_metric_allowlist) = metric_allowlist_watcher.changed::<Vec<String>>() => {
+                (_, maybe_metric_allowlist) = async { metric_allowlist_watcher.as_mut().unwrap().changed::<Vec<String>>().await }, if metric_allowlist_watcher.is_some() => {
                     if let Some(metric_allowlist) = maybe_metric_allowlist {
                         self.update_metric_allowlist(metric_allowlist);
                     }

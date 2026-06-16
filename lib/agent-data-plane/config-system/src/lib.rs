@@ -24,4 +24,4 @@ pub use bootstrap::BootstrapInputs;
 pub use datadog_agent::DatadogAgentConnection;
 pub use logging::{DynamicLogLevelWorker, LoggingConfigurationTranslator};
 pub use stream::ConfigStreamHandle;
-pub use system::{ConfigurationSystem, StartedAttachments, StartedConfigurationSystem};
+pub use system::{ConfigurationSystem, LocalDatadogSources, StartedAttachments, StartedConfigurationSystem};

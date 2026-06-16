@@ -11,13 +11,12 @@ use std::time::Instant;
 // building for antithesis. Load-baring: equired to avoid the shim being dropped
 // as unused.
 use agent_data_plane_config::{DataPlaneConfiguration, DogStatsDCliConfiguration};
-use agent_data_plane_config_system::{BootstrapInputs, ConfigurationSystem};
+use agent_data_plane_config_system::{BootstrapInputs, ConfigurationSystem, LocalDatadogSources};
 #[cfg(feature = "antithesis")]
 use antithesis_instrumentation as _;
 use datadog_agent_commons::platform::PlatformSettings;
 use metrics::Level;
 use saluki_app::bootstrap::{AppBootstrapper, Bootstrap, BootstrapGuard};
-use saluki_config::GenericConfiguration;
 use saluki_core::runtime::Supervisor;
 use saluki_error::{generic_error, ErrorContext as _, GenericError};
 use tracing::{error, info, warn};
@@ -63,20 +62,24 @@ async fn main() -> Result<(), GenericError> {
     let bootstrap_config_path = cli.config_file.unwrap_or_else(PlatformSettings::get_config_file_path);
     let env_var_prefix = PlatformSettings::get_env_var_prefix();
     let bootstrap_inputs = BootstrapInputs::new(bootstrap_config_path.clone(), env_var_prefix);
-    let bootstrap_config = ConfigurationSystem::load_local_datadog_sources(&bootstrap_inputs)
+    let bootstrap_sources = ConfigurationSystem::load_local_datadog_sources(&bootstrap_inputs)
         .await
         .error_context("Failed to load Datadog Agent configuration during bootstrap.")?;
 
     // Translate the bootstrap configuration into ADP's logging configuration, applying ADP-specific rules
     // (per-subagent log file key, never sharing a file with the Core Agent).
-    let bootstrap_logging_config = ConfigurationSystem::translate_local_datadog_logging(&bootstrap_config)
+    let bootstrap_logging_config = bootstrap_sources
+        .logging_configuration()
         .error_context("Failed to translate logging configuration during bootstrap phase.")?;
 
-    let typed_bootstrap_config = ConfigurationSystem::translate_local_datadog_bootstrap(&bootstrap_config)
+    let typed_bootstrap_config = bootstrap_sources
+        .bootstrap_configuration()
         .error_context("Failed to translate bootstrap configuration.")?;
-    let bootstrap_data_plane_config = ConfigurationSystem::translate_local_datadog_data_plane(&bootstrap_config)
+    let bootstrap_data_plane_config = bootstrap_sources
+        .data_plane_configuration()
         .error_context("Failed to translate bootstrap data-plane configuration.")?;
-    let bootstrap_dogstatsd_cli_config = ConfigurationSystem::translate_local_datadog_dogstatsd_cli(&bootstrap_config)
+    let bootstrap_dogstatsd_cli_config = bootstrap_sources
+        .dogstatsd_cli_configuration()
         .error_context("Failed to translate bootstrap DogStatsD CLI configuration.")?;
     let metrics_default_level = parse_metrics_level(typed_bootstrap_config.telemetry.metrics_level.as_deref())?;
 
@@ -107,7 +110,7 @@ async fn main() -> Result<(), GenericError> {
     let maybe_exit_code = run_inner(
         cli.action,
         started,
-        bootstrap_config,
+        bootstrap_sources,
         &bootstrap_data_plane_config,
         &bootstrap_dogstatsd_cli_config,
         bootstrap_inputs,
@@ -135,7 +138,7 @@ fn parse_metrics_level(raw: Option<&str>) -> Result<Level, GenericError> {
 }
 
 async fn run_inner(
-    action: Action, started: Instant, bootstrap_config: GenericConfiguration,
+    action: Action, started: Instant, bootstrap_sources: LocalDatadogSources,
     bootstrap_data_plane_config: &DataPlaneConfiguration, bootstrap_dogstatsd_cli_config: &DogStatsDCliConfiguration,
     bootstrap_inputs: BootstrapInputs, bootstrap_guard: &mut BootstrapGuard, bootstrap_supervisor: Supervisor,
 ) -> Result<Option<i32>, GenericError> {
@@ -152,7 +155,7 @@ async fn run_inner(
 
             let exit_code = match handle_run_command(
                 started,
-                bootstrap_config,
+                bootstrap_sources,
                 bootstrap_inputs,
                 bootstrap_guard,
                 bootstrap_supervisor,

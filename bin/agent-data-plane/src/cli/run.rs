@@ -4,7 +4,7 @@ use std::{
 };
 
 use agent_data_plane_config::SalukiConfiguration;
-use agent_data_plane_config_system::{BootstrapInputs, ConfigurationSystem, StartedAttachments};
+use agent_data_plane_config_system::{BootstrapInputs, ConfigurationSystem, LocalDatadogSources, StartedAttachments};
 use argh::FromArgs;
 use datadog_agent_commons::platform::PlatformSettings;
 use resource_accounting::{ComponentBounds, ComponentRegistry};
@@ -61,7 +61,7 @@ pub struct RunCommand {
 
 /// Entrypoint for the `run` commands.
 pub async fn handle_run_command(
-    started: Instant, bootstrap_config: GenericConfiguration, bootstrap_inputs: BootstrapInputs,
+    started: Instant, bootstrap_sources: LocalDatadogSources, bootstrap_inputs: BootstrapInputs,
     bootstrap_guard: &mut BootstrapGuard, bootstrap_supervisor: Supervisor,
 ) -> Result<(), GenericError> {
     let app_details = saluki_metadata::get_app_details();
@@ -77,7 +77,7 @@ pub async fn handle_run_command(
     let started_config = ConfigurationSystem {
         inputs: bootstrap_inputs,
     }
-    .start_from_local_datadog_sources(bootstrap_config)
+    .start_from_local_datadog_sources(bootstrap_sources.into_source())
     .await
     .error_context("Failed to start configuration system.")?;
     let config = started_config.compat_datadog_source();

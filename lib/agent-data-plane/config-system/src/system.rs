@@ -53,8 +53,8 @@ impl ConfigurationSystem {
     }
 
     /// Loads Datadog-shaped local bootstrap sources for callers that need bootstrap-phase setup.
-    pub async fn load_local_datadog_sources(inputs: &BootstrapInputs) -> Result<GenericConfiguration, GenericError> {
-        load_local_datadog_sources(inputs).await
+    pub async fn load_local_datadog_sources(inputs: &BootstrapInputs) -> Result<LocalDatadogSources, GenericError> {
+        load_local_datadog_sources(inputs).await.map(LocalDatadogSources::new)
     }
 
     /// Translates bootstrap decisions from an already loaded local Datadog-shaped bootstrap snapshot.
@@ -96,6 +96,43 @@ impl ConfigurationSystem {
         self, local: GenericConfiguration,
     ) -> Result<StartedConfigurationSystem, GenericError> {
         start_from_local_datadog_sources(local, &self.inputs).await
+    }
+}
+
+/// Loaded local Datadog-shaped sources used during bootstrap.
+#[derive(Clone, Debug)]
+pub struct LocalDatadogSources {
+    config: GenericConfiguration,
+}
+
+impl LocalDatadogSources {
+    fn new(config: GenericConfiguration) -> Self {
+        Self { config }
+    }
+
+    /// Translates bootstrap decisions from this local source snapshot.
+    pub fn bootstrap_configuration(&self) -> Result<BootstrapConfiguration, GenericError> {
+        ConfigurationSystem::translate_local_datadog_bootstrap(&self.config)
+    }
+
+    /// Translates logging settings from this local source snapshot.
+    pub fn logging_configuration(&self) -> Result<LoggingConfiguration, GenericError> {
+        ConfigurationSystem::translate_local_datadog_logging(&self.config)
+    }
+
+    /// Translates data-plane API settings from this local source snapshot.
+    pub fn data_plane_configuration(&self) -> Result<DataPlaneConfiguration, GenericError> {
+        ConfigurationSystem::translate_local_datadog_data_plane(&self.config)
+    }
+
+    /// Translates DogStatsD CLI/debug settings from this local source snapshot.
+    pub fn dogstatsd_cli_configuration(&self) -> Result<DogStatsDCliConfiguration, GenericError> {
+        ConfigurationSystem::translate_local_datadog_dogstatsd_cli(&self.config)
+    }
+
+    /// Consumes this wrapper and returns the underlying source snapshot.
+    pub fn into_source(self) -> GenericConfiguration {
+        self.config
     }
 }
 

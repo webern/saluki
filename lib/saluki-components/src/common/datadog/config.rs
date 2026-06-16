@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use facet::Facet;
-use saluki_config::GenericConfiguration;
+use saluki_component_config::{DatadogForwarderConfig, ScopedConfigHandle};
 use saluki_error::GenericError;
 use saluki_io::net::client::http::{HttpProtocol, TlsMinimumVersion};
 use serde::Deserialize;
@@ -335,21 +335,11 @@ impl ForwarderConfiguration {
         self.http_protocol.into()
     }
 
-    /// Returns a mutable reference to the endpoint configuration.
-    pub fn endpoint_mut(&mut self) -> &mut EndpointConfiguration {
-        &mut self.endpoint
-    }
-
-    /// Clears the OPW metrics endpoint override.
-    pub(crate) fn clear_opw_metrics_endpoint(&mut self) {
-        self.opw_metrics = OpwMetricsConfiguration::default();
-    }
-
     /// Builds resolved endpoints with routing metadata.
     ///
     /// The normal primary and OPW metrics primary endpoints share the same dynamic API key source.
     pub(crate) fn build_routable_endpoints(
-        &self, configuration: Option<GenericConfiguration>,
+        &self, configuration: Option<ScopedConfigHandle<DatadogForwarderConfig>>,
     ) -> Result<Vec<RoutableEndpoint>, GenericError> {
         // Label each endpoint so the I/O loop can route metrics to OPW and non-metrics to the normal primary.
         let mut endpoints = Vec::new();

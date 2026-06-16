@@ -22,7 +22,8 @@ mod validate;
 
 pub use bootstrap::BootstrapInputs;
 pub use datadog_agent::DatadogAgentConnection;
-pub use dynamic::{ConfigUpdateRouter, DynamicConfigHandles, ScopedConfigHandle};
+pub use dynamic::{ConfigUpdateRouter, DynamicConfigHandles};
+pub use saluki_component_config::ScopedConfigHandle;
 pub use stream::ConfigStreamHandle;
 pub use system::{
     translate_from_generic, ConfigurationSystem, StartedAttachments, StartedConfigurationSystem, StartedParts,

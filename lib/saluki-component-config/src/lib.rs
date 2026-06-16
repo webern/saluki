@@ -24,6 +24,7 @@
 pub mod checks;
 pub mod common;
 pub mod dogstatsd;
+pub mod dynamic;
 pub mod events;
 pub mod forwarder;
 pub mod logs;
@@ -38,6 +39,7 @@ pub use dogstatsd::{
     AggregateConfig, DogStatsDConfig, DogStatsDDebugLogConfig, DogStatsDMapperConfig, HistogramConfig,
     PrefixFilterConfig, TagFilterEntry, TagFilterlistConfig,
 };
+pub use dynamic::ScopedConfigHandle;
 pub use events::DatadogEventsEncoderConfig;
 pub use forwarder::{DatadogForwarderConfig, MultiRegionFailoverConfig};
 pub use logs::DatadogLogsEncoderConfig;

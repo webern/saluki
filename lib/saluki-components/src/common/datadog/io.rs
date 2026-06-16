@@ -14,7 +14,7 @@ use http_body::Body;
 use http_body_util::BodyExt as _;
 use hyper::{body::Incoming, Response};
 use saluki_common::{hash::hash_single_stable, task::spawn_traced_named, time::get_unix_timestamp};
-use saluki_config::GenericConfiguration;
+use saluki_component_config::{DatadogForwarderConfig, ScopedConfigHandle};
 use saluki_core::components::ComponentContext;
 use saluki_error::{generic_error, GenericError};
 use saluki_io::net::{
@@ -94,7 +94,7 @@ where
 pub struct TransactionForwarder<B> {
     context: ComponentContext,
     config: ForwarderConfiguration,
-    live_config: Option<GenericConfiguration>,
+    live_config: Option<ScopedConfigHandle<DatadogForwarderConfig>>,
     telemetry: ComponentTelemetry,
     metrics_builder: MetricsBuilder,
     client: HttpClient,
@@ -152,8 +152,9 @@ where
 {
     /// Creates a new `TransactionForwarder` instance from the given configuration.
     pub fn from_config<F>(
-        context: ComponentContext, config: ForwarderConfiguration, live_config: Option<GenericConfiguration>,
-        endpoint_name: F, telemetry: ComponentTelemetry, metrics_builder: MetricsBuilder,
+        context: ComponentContext, config: ForwarderConfiguration,
+        live_config: Option<ScopedConfigHandle<DatadogForwarderConfig>>, endpoint_name: F,
+        telemetry: ComponentTelemetry, metrics_builder: MetricsBuilder,
     ) -> Result<Self, GenericError>
     where
         F: Fn(&Uri) -> Option<MetaString> + Send + Sync + 'static,
@@ -248,9 +249,9 @@ where
 #[allow(clippy::too_many_arguments)]
 async fn run_io_loop<B>(
     mut transactions_rx: mpsc::Receiver<Transaction<B>>, io_shutdown_tx: oneshot::Sender<()>,
-    context: ComponentContext, config: ForwarderConfiguration, live_config: Option<GenericConfiguration>,
-    service: HttpClient, telemetry: ComponentTelemetry, metrics_builder: MetricsBuilder,
-    resolved_endpoints: Vec<RoutableEndpoint>,
+    context: ComponentContext, config: ForwarderConfiguration,
+    live_config: Option<ScopedConfigHandle<DatadogForwarderConfig>>, service: HttpClient,
+    telemetry: ComponentTelemetry, metrics_builder: MetricsBuilder, resolved_endpoints: Vec<RoutableEndpoint>,
 ) where
     B: Body + Buf + Clone + Send + Sync + 'static,
     B::Data: Send,
@@ -364,13 +365,21 @@ fn should_route_to_endpoint(is_metrics_request: bool, has_metrics_primary: bool,
 #[allow(clippy::too_many_arguments)]
 async fn run_endpoint_io_loop<B>(
     mut txns_rx: mpsc::Receiver<Transaction<B>>, task_barrier: Arc<Barrier>, context: ComponentContext,
-    config: ForwarderConfiguration, live_config: Option<GenericConfiguration>, service: HttpClient,
-    telemetry: ComponentTelemetry, txnq_telemetry: TransactionQueueTelemetry, endpoint: ResolvedEndpoint,
+    config: ForwarderConfiguration, live_config: Option<ScopedConfigHandle<DatadogForwarderConfig>>,
+    service: HttpClient, telemetry: ComponentTelemetry, txnq_telemetry: TransactionQueueTelemetry,
+    endpoint: ResolvedEndpoint,
 ) where
     B: Body + Buf + Clone + Send + Sync + 'static,
     B::Data: Send,
     B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
 {
+    // The 403-retry gate is enabled when the forwarder config indicates secrets are in use. Read the
+    // latest value from the typed handle (defaulting to false when no handle is wired).
+    let secrets_in_use = live_config
+        .as_ref()
+        .map(|handle| handle.borrow().retry.secrets_in_use)
+        .unwrap_or(false);
+
     let queue_id = generate_retry_queue_id(context, &endpoint);
     let endpoint_url = endpoint.endpoint().to_string();
     let endpoint_domain = endpoint.endpoint().origin().ascii_serialization();
@@ -397,7 +406,7 @@ async fn run_endpoint_io_loop<B>(
         .map_request(with_version_info())
         .concurrency_limit(config.endpoint_concurrency())
         .layer(RetryCircuitBreakerLayer::new(
-            config.retry().to_default_http_retry_policy(live_config),
+            config.retry().to_default_http_retry_policy(secrets_in_use),
         ))
         .map_request(|req: Request<TransactionBody<B>>| req.map(into_client_body))
         .service(service);
@@ -815,15 +824,14 @@ mod tests {
         RootCertStore, ServerConfig,
     };
     use saluki_common::buf::FrozenChunkedBytesBuffer;
-    use saluki_config::ConfigurationLoader;
+    use saluki_component_config::RetryConfig;
     use saluki_core::{observability::ComponentMetricsExt as _, topology::ComponentId};
     use saluki_io::net::client::http::TlsMinimumVersion;
     use saluki_metrics::test::TestRecorder;
-    use serde_json::json;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
-        sync::mpsc,
+        sync::{mpsc, watch},
         time::{timeout, Duration},
     };
     use tokio_rustls::TlsAcceptor;
@@ -1313,7 +1321,7 @@ app.datadoghq.com: [key-a, key-b]
     }
 
     fn build_test_forwarder(
-        forwarder_url: &str, live_config: Option<GenericConfiguration>,
+        forwarder_url: &str, live_config: Option<ScopedConfigHandle<DatadogForwarderConfig>>,
     ) -> TransactionForwarder<FrozenChunkedBytesBuffer> {
         // The HTTP client builder requires the process-wide TLS crypto provider to be initialized, even when the
         // forwarder is pointed at a plain HTTP endpoint.
@@ -1365,9 +1373,17 @@ app.datadoghq.com: [key-a, key-b]
         Transaction::from_original(TxnMetadata::from_event_and_data_point_count(1, 0), request)
     }
 
-    async fn config_with(values: serde_json::Value) -> GenericConfiguration {
-        let (config, _) = ConfigurationLoader::for_tests(Some(values), None, false).await;
-        config
+    /// Builds a forwarder config handle seeded with the given secrets-in-use flag.
+    fn handle_with_secrets(secrets_in_use: bool) -> ScopedConfigHandle<DatadogForwarderConfig> {
+        let forwarder = DatadogForwarderConfig {
+            retry: RetryConfig {
+                secrets_in_use,
+                ..RetryConfig::default()
+            },
+            ..DatadogForwarderConfig::default()
+        };
+        let (_sender, rx) = watch::channel(forwarder);
+        ScopedConfigHandle::new(rx)
     }
 
     async fn wait_for_count_at_least(counter: &Arc<AtomicUsize>, target: usize, deadline: Duration) -> usize {
@@ -1389,7 +1405,7 @@ app.datadoghq.com: [key-a, key-b]
         // The server returns 403 to the first request and 200 to every subsequent request; the forwarder must drive
         // at least one retry to observe the second request.
         let (server_url, counter) = start_recording_http_server(vec![StatusCode::FORBIDDEN, StatusCode::OK]).await;
-        let live_config = config_with(json!({ "secret_backend_command": "/bin/true" })).await;
+        let live_config = handle_with_secrets(true);
         let forwarder = build_test_forwarder(&server_url, Some(live_config));
 
         let handle = forwarder.spawn().await;

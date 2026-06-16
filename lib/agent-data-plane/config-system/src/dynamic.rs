@@ -21,39 +21,16 @@
 
 use agent_data_plane_config::{SalukiConfiguration, SalukiPrivateConfiguration};
 use datadog_agent_config::DatadogConfiguration;
-use saluki_component_config::{DatadogForwarderConfig, DogStatsDConfig, PrefixFilterConfig, TagFilterlistConfig};
+use saluki_component_config::{
+    DatadogForwarderConfig, DogStatsDConfig, DogStatsDDebugLogConfig, MultiRegionFailoverConfig, PrefixFilterConfig,
+    ScopedConfigHandle, TagFilterlistConfig,
+};
 use saluki_config::{dynamic::ConfigUpdate, upsert};
 use tokio::sync::{mpsc, watch};
 use tracing::{debug, warn};
 
 use crate::bootstrap::read_pipeline_gates_value;
 use crate::translate::translate_datadog;
-
-/// A scoped, typed handle a single component holds to observe updates to *its* config slice.
-///
-/// A component can read the latest value and await the next change. Because the channel only ever
-/// carries this slice's type, the component cannot observe another component's configuration.
-#[derive(Clone, Debug)]
-pub struct ScopedConfigHandle<T> {
-    rx: watch::Receiver<T>,
-}
-
-impl<T: Clone> ScopedConfigHandle<T> {
-    /// Returns the current value for this slice.
-    pub fn current(&self) -> T {
-        self.rx.borrow().clone()
-    }
-
-    /// Waits for the next change to this slice and returns the new value.
-    ///
-    /// Returns `None` if the configuration system has shut down.
-    pub async fn changed(&mut self) -> Option<T> {
-        match self.rx.changed().await {
-            Ok(()) => Some(self.rx.borrow().clone()),
-            Err(_) => None,
-        }
-    }
-}
 
 /// The set of typed, scoped handles handed to components.
 ///
@@ -75,6 +52,16 @@ pub struct DynamicConfigHandles {
 
     /// DogStatsD source configuration.
     pub dogstatsd_source: ScopedConfigHandle<DogStatsDConfig>,
+
+    /// Multi-region failover configuration (failover-metrics gate and metric allowlist).
+    pub mrf: ScopedConfigHandle<Option<MultiRegionFailoverConfig>>,
+
+    /// Multi-region failover forwarder configuration (carries the failover region's refreshed API
+    /// key/endpoint). Defaulted when failover is disabled.
+    pub mrf_forwarder: ScopedConfigHandle<DatadogForwarderConfig>,
+
+    /// DogStatsD debug-log destination configuration (metric-stats gating).
+    pub debug_log: ScopedConfigHandle<Option<DogStatsDDebugLogConfig>>,
 }
 
 struct Senders {
@@ -83,6 +70,9 @@ struct Senders {
     prefix_filter: watch::Sender<PrefixFilterConfig>,
     tag_filterlist: watch::Sender<TagFilterlistConfig>,
     dogstatsd_source: watch::Sender<DogStatsDConfig>,
+    mrf: watch::Sender<Option<MultiRegionFailoverConfig>>,
+    mrf_forwarder: watch::Sender<DatadogForwarderConfig>,
+    debug_log: watch::Sender<Option<DogStatsDDebugLogConfig>>,
 }
 
 /// Routes inbound config updates to typed, scoped handles by re-translating and diffing.
@@ -106,13 +96,19 @@ impl ConfigUpdateRouter {
         let (prefix_tx, prefix_rx) = watch::channel(initial.dogstatsd.prefix_filter.clone());
         let (tag_tx, tag_rx) = watch::channel(initial.dogstatsd.tag_filterlist.clone());
         let (dsd_tx, dsd_rx) = watch::channel(initial.dogstatsd.source.clone());
+        let (mrf_tx, mrf_rx) = watch::channel(initial.metrics.multi_region_failover.clone());
+        let (mrf_fwd_tx, mrf_fwd_rx) = watch::channel(mrf_forwarder_of(initial));
+        let (debug_log_tx, debug_log_rx) = watch::channel(initial.dogstatsd.debug_log.clone());
 
         let handles = DynamicConfigHandles {
-            log_level: ScopedConfigHandle { rx: log_level_rx },
-            forwarder: ScopedConfigHandle { rx: forwarder_rx },
-            prefix_filter: ScopedConfigHandle { rx: prefix_rx },
-            tag_filterlist: ScopedConfigHandle { rx: tag_rx },
-            dogstatsd_source: ScopedConfigHandle { rx: dsd_rx },
+            log_level: ScopedConfigHandle::new(log_level_rx),
+            forwarder: ScopedConfigHandle::new(forwarder_rx),
+            prefix_filter: ScopedConfigHandle::new(prefix_rx),
+            tag_filterlist: ScopedConfigHandle::new(tag_rx),
+            dogstatsd_source: ScopedConfigHandle::new(dsd_rx),
+            mrf: ScopedConfigHandle::new(mrf_rx),
+            mrf_forwarder: ScopedConfigHandle::new(mrf_fwd_rx),
+            debug_log: ScopedConfigHandle::new(debug_log_rx),
         };
 
         let router = Self {
@@ -122,6 +118,9 @@ impl ConfigUpdateRouter {
                 prefix_filter: prefix_tx,
                 tag_filterlist: tag_tx,
                 dogstatsd_source: dsd_tx,
+                mrf: mrf_tx,
+                mrf_forwarder: mrf_fwd_tx,
+                debug_log: debug_log_tx,
             },
             private,
             last_snapshot: initial_snapshot,
@@ -153,6 +152,8 @@ impl ConfigUpdateRouter {
         };
         let gates = read_pipeline_gates_value(&self.last_snapshot);
         let next = translate_datadog(&dd_config, &self.private, gates);
+        // Derived before the per-slice sends below move fields out of `next`.
+        let next_mrf_forwarder = mrf_forwarder_of(&next);
 
         // Each `send_if_modified` only fires receivers when the slice actually changed, so a handle
         // observes a change only when *its* slice changed.
@@ -171,7 +172,27 @@ impl ConfigUpdateRouter {
         self.senders
             .dogstatsd_source
             .send_if_modified(|current| replace_if_changed(current, next.dogstatsd.source));
+        self.senders
+            .mrf
+            .send_if_modified(|current| replace_if_changed(current, next.metrics.multi_region_failover));
+        self.senders
+            .mrf_forwarder
+            .send_if_modified(|current| replace_if_changed(current, next_mrf_forwarder));
+        self.senders
+            .debug_log
+            .send_if_modified(|current| replace_if_changed(current, next.dogstatsd.debug_log));
     }
+}
+
+/// Extracts the failover forwarder configuration from a [`SalukiConfiguration`], defaulting when
+/// multi-region failover is disabled.
+fn mrf_forwarder_of(config: &SalukiConfiguration) -> DatadogForwarderConfig {
+    config
+        .metrics
+        .multi_region_failover
+        .as_ref()
+        .map(|mrf| mrf.forwarder.clone())
+        .unwrap_or_default()
 }
 
 /// Replace `current` with `next` when they differ, reporting whether a change occurred.
@@ -229,7 +250,7 @@ mod tests {
         // The DogStatsD source slice did not change, so its current value is unchanged and it has no
         // pending update (scoping: an unrelated change cannot reach it).
         assert_eq!(handles.dogstatsd_source.current().port, 8125);
-        assert!(!handles.dogstatsd_source.rx.has_changed().unwrap());
+        assert!(!handles.dogstatsd_source.has_changed());
 
         drop(tx);
         let _ = task.await;

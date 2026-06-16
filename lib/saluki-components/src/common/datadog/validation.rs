@@ -5,12 +5,12 @@ use http::{Request, StatusCode, Uri};
 use http_body_util::Empty;
 use regex::Regex;
 use saluki_common::task::spawn_traced_named;
-use saluki_config::GenericConfiguration;
+use saluki_component_config::{DatadogForwarderConfig, ScopedConfigHandle};
 use saluki_error::{generic_error, GenericError};
 use saluki_io::net::client::http::HttpClient;
 use tokio::{
     select,
-    sync::{broadcast, mpsc},
+    sync::mpsc,
     task::JoinHandle,
     time::{self, MissedTickBehavior},
 };
@@ -39,15 +39,15 @@ pub(crate) enum ValidationReadiness {
 pub(crate) struct ApiKeyValidator {
     endpoints: Vec<RoutableEndpoint>,
     client: HttpClient,
-    live_config: Option<GenericConfiguration>,
+    live_config: Option<ScopedConfigHandle<DatadogForwarderConfig>>,
     interval: Duration,
 }
 
 impl ApiKeyValidator {
     /// Creates API key validation for the given startup endpoint set.
     pub(crate) fn new(
-        endpoints: Vec<RoutableEndpoint>, client: HttpClient, live_config: Option<GenericConfiguration>,
-        interval: Duration,
+        endpoints: Vec<RoutableEndpoint>, client: HttpClient,
+        live_config: Option<ScopedConfigHandle<DatadogForwarderConfig>>, interval: Duration,
     ) -> Self {
         Self {
             endpoints,
@@ -125,8 +125,9 @@ enum KeyValidationResult {
 }
 
 fn spawn_validation_task(
-    endpoints: Vec<RoutableEndpoint>, client: HttpClient, live_config: Option<GenericConfiguration>,
-    interval: Duration, readiness_tx: mpsc::Sender<ValidationReadiness>,
+    endpoints: Vec<RoutableEndpoint>, client: HttpClient,
+    live_config: Option<ScopedConfigHandle<DatadogForwarderConfig>>, interval: Duration,
+    readiness_tx: mpsc::Sender<ValidationReadiness>,
 ) -> JoinHandle<()> {
     spawn_traced_named(
         "dd-api-key-validation",
@@ -135,8 +136,9 @@ fn spawn_validation_task(
 }
 
 async fn run_validation_loop(
-    mut endpoints: Vec<RoutableEndpoint>, mut client: HttpClient, live_config: Option<GenericConfiguration>,
-    interval: Duration, readiness_tx: mpsc::Sender<ValidationReadiness>,
+    mut endpoints: Vec<RoutableEndpoint>, mut client: HttpClient,
+    mut live_config: Option<ScopedConfigHandle<DatadogForwarderConfig>>, interval: Duration,
+    readiness_tx: mpsc::Sender<ValidationReadiness>,
 ) {
     if !validate_and_send_readiness(&mut endpoints, &mut client, &readiness_tx).await {
         return;
@@ -147,10 +149,6 @@ async fn run_validation_loop(
     // The startup validation above is the immediate tick.
     interval.tick().await;
 
-    let mut config_updates_rx = live_config
-        .as_ref()
-        .and_then(GenericConfiguration::subscribe_for_updates);
-
     loop {
         select! {
             _ = interval.tick() => {
@@ -158,7 +156,7 @@ async fn run_validation_loop(
                     return;
                 }
             },
-            _ = wait_for_validation_config_change(&mut config_updates_rx) => {
+            _ = wait_for_validation_config_change(&mut live_config) => {
                 if !validate_and_send_readiness(&mut endpoints, &mut client, &readiness_tx).await {
                     return;
                 }
@@ -167,32 +165,19 @@ async fn run_validation_loop(
     }
 }
 
-async fn wait_for_validation_config_change(
-    rx: &mut Option<broadcast::Receiver<saluki_config::dynamic::ConfigChangeEvent>>,
-) {
-    let Some(rx) = rx else {
-        std::future::pending::<()>().await;
-        return;
-    };
-
-    loop {
-        match rx.recv().await {
-            Ok(event) if is_validation_trigger_key(&event.key) => return,
-            Ok(_) => {}
-            Err(broadcast::error::RecvError::Lagged(_)) => return,
-            Err(broadcast::error::RecvError::Closed) => {
+/// Awaits the next forwarder configuration change as the re-validation trigger.
+///
+/// When no handle is wired, this never resolves so only the periodic interval drives re-validation.
+async fn wait_for_validation_config_change(live_config: &mut Option<ScopedConfigHandle<DatadogForwarderConfig>>) {
+    match live_config {
+        Some(handle) => {
+            if handle.changed().await.is_none() {
+                // The configuration system shut down; stop triggering on config changes.
                 std::future::pending::<()>().await;
-                return;
             }
         }
+        None => std::future::pending::<()>().await,
     }
-}
-
-fn is_validation_trigger_key(key: &str) -> bool {
-    key == "api_key"
-        || key == "multi_region_failover.api_key"
-        || key == "additional_endpoints"
-        || key.starts_with("additional_endpoints.")
 }
 
 async fn validate_and_send_readiness(
@@ -386,22 +371,6 @@ mod tests {
 
         for (case_name, raw_endpoint, expected_url) in cases {
             assert_eq!(validation_url_for(raw_endpoint), expected_url, "{case_name}");
-        }
-    }
-
-    #[test]
-    fn validation_config_triggers_include_nested_additional_endpoints_changes() {
-        let cases = [
-            ("api_key", true),
-            ("multi_region_failover.api_key", true),
-            ("additional_endpoints", true),
-            ("additional_endpoints.http://additional.example.com.0", true),
-            ("forwarder_timeout", false),
-            ("multi_region_failover.enabled", false),
-        ];
-
-        for (key, should_trigger) in cases {
-            assert_eq!(is_validation_trigger_key(key), should_trigger, "{key}");
         }
     }
 

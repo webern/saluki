@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use http::Uri;
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder, UsageExpr};
 use saluki_common::buf::FrozenChunkedBytesBuffer;
-use saluki_config::GenericConfiguration;
+use saluki_component_config::{DatadogForwarderConfig, ScopedConfigHandle};
 use saluki_core::{
     components::{forwarders::*, ComponentContext},
     data_model::payload::PayloadType,
@@ -34,14 +34,14 @@ pub struct DatadogForwarderConfiguration {
     /// See [`ForwarderConfiguration`] for more information about the available settings.
     forwarder_config: ForwarderConfiguration,
 
-    configuration: Option<GenericConfiguration>,
+    configuration: Option<ScopedConfigHandle<DatadogForwarderConfig>>,
 }
 
 impl DatadogForwarderConfiguration {
     /// Creates a new `DatadogForwarderConfiguration` from native configuration.
     ///
-    /// The legacy `Option<GenericConfiguration>` used for runtime API-key refresh is set to `None`;
-    /// runtime refresh is handled elsewhere now.
+    /// Runtime API-key refresh is supplied separately via [`with_dynamic_handle`][Self::with_dynamic_handle];
+    /// the handle defaults to `None` (no runtime refresh).
     pub fn from_native(native: &saluki_component_config::DatadogForwarderConfig) -> Result<Self, GenericError> {
         let forwarder_config = ForwarderConfiguration::from_native(native)?;
         Ok(Self {
@@ -50,28 +50,10 @@ impl DatadogForwarderConfiguration {
         })
     }
 
-    /// Overrides the default endpoint and refreshes its API key from the given config path.
-    ///
-    /// This is for override endpoints whose API key does not refresh from the top-level `api_key`
-    /// config path, such as Multi-Region Failover.
-    pub fn with_endpoint_override_and_api_key_refresh_config_path(
-        mut self, dd_url: String, api_key: String, api_key_refresh_config_path: &'static str,
-    ) -> Self {
-        self.apply_endpoint_override(dd_url, api_key, api_key_refresh_config_path);
-
+    /// Attaches the typed forwarder configuration handle used for runtime API-key refresh.
+    pub fn with_dynamic_handle(mut self, handle: ScopedConfigHandle<DatadogForwarderConfig>) -> Self {
+        self.configuration = Some(handle);
         self
-    }
-
-    fn apply_endpoint_override(&mut self, dd_url: String, api_key: String, api_key_refresh_config_path: &'static str) {
-        // Clear any existing additional endpoints, and set the new DD URL and API key.
-        //
-        // This ensures that the only endpoint we'll send to is this one.
-        let endpoint = self.forwarder_config.endpoint_mut();
-        endpoint.clear_additional_endpoints();
-        endpoint.set_dd_url(dd_url);
-        endpoint.set_api_key(api_key);
-        endpoint.set_api_key_refresh_config_path(api_key_refresh_config_path);
-        self.forwarder_config.clear_opw_metrics_endpoint();
     }
 }
 

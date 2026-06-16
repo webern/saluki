@@ -198,13 +198,17 @@ async fn create_topology(
         || data_plane.service_checks_pipeline_required()
         || data_plane.traces_pipeline_required()
     {
-        let dd_forwarder_config = DatadogForwarderConfiguration::from_native(&saluki_config.forwarder.datadog)
+        let mut dd_forwarder_config = DatadogForwarderConfiguration::from_native(&saluki_config.forwarder.datadog)
             .error_context("Failed to configure Datadog forwarder.")?;
+        if let Some(handles) = dynamic_handles {
+            dd_forwarder_config = dd_forwarder_config.with_dynamic_handle(handles.forwarder.clone());
+        }
         blueprint.add_forwarder("dd_out", dd_forwarder_config)?;
     }
 
     if data_plane.metrics_pipeline_required() {
-        add_baseline_metrics_pipeline_to_blueprint(&mut blueprint, saluki_config, env_provider).await?;
+        add_baseline_metrics_pipeline_to_blueprint(&mut blueprint, saluki_config, dynamic_handles, env_provider)
+            .await?;
     }
 
     if data_plane.logs_pipeline_required() {
@@ -257,7 +261,8 @@ async fn add_checks_pipeline_to_blueprint(
 }
 
 async fn add_baseline_metrics_pipeline_to_blueprint(
-    blueprint: &mut TopologyBlueprint, saluki_config: &SalukiConfiguration, env_provider: &ADPEnvironmentProvider,
+    blueprint: &mut TopologyBlueprint, saluki_config: &SalukiConfiguration,
+    dynamic_handles: Option<&DynamicConfigHandles>, env_provider: &ADPEnvironmentProvider,
 ) -> Result<(), GenericError> {
     // Create the back half of the metrics processing pipeline.
     let host_enrichment_config = HostEnrichmentConfiguration::from_environment_provider(env_provider.clone());
@@ -277,13 +282,14 @@ async fn add_baseline_metrics_pipeline_to_blueprint(
         // Metrics, then forwarding.
         .connect_components_in_order(["metrics_enrich", "dd_metrics_encode", "dd_out"])?;
 
-    add_mrf_metrics_pipeline_to_blueprint(blueprint, saluki_config)?;
+    add_mrf_metrics_pipeline_to_blueprint(blueprint, saluki_config, dynamic_handles)?;
 
     Ok(())
 }
 
 fn add_mrf_metrics_pipeline_to_blueprint(
     blueprint: &mut TopologyBlueprint, saluki_config: &SalukiConfiguration,
+    dynamic_handles: Option<&DynamicConfigHandles>,
 ) -> Result<(), GenericError> {
     let Some(mrf) = &saluki_config.metrics.multi_region_failover else {
         return Ok(());
@@ -307,12 +313,18 @@ fn add_mrf_metrics_pipeline_to_blueprint(
         None,
         None,
     );
-    let mrf_gateway_config = MrfMetricsGatewayConfiguration::from_native(mrf_config);
+    let mut mrf_gateway_config = MrfMetricsGatewayConfiguration::from_native(mrf_config);
+    if let Some(handles) = dynamic_handles {
+        mrf_gateway_config = mrf_gateway_config.with_dynamic_handle(handles.mrf.clone());
+    }
     let mrf_metrics_config = DatadogMetricsConfiguration::from_native(&saluki_config.metrics.datadog_encoder)
         .error_context("Failed to configure Multi-Region Failover Datadog Metrics encoder.")?;
 
-    let mrf_forwarder_config = DatadogForwarderConfiguration::from_native(&mrf.forwarder)
+    let mut mrf_forwarder_config = DatadogForwarderConfiguration::from_native(&mrf.forwarder)
         .error_context("Failed to configure Multi-Region Failover Datadog forwarder.")?;
+    if let Some(handles) = dynamic_handles {
+        mrf_forwarder_config = mrf_forwarder_config.with_dynamic_handle(handles.mrf_forwarder.clone());
+    }
 
     blueprint
         .add_transform("mrf_metrics_gateway", mrf_gateway_config)?
@@ -530,11 +542,14 @@ async fn add_dsd_pipeline_to_blueprint(
         .connect_components("dsd_in.metrics", "dsd_stats_out")?;
 
     if let Some(debug_log) = &saluki_config.dogstatsd.debug_log {
-        let dsd_debug_log_config = DogStatsDDebugLogConfiguration::from_native(
+        let mut dsd_debug_log_config = DogStatsDDebugLogConfiguration::from_native(
             debug_log,
             PlatformSettings::get_default_dogstatsd_log_file_path(),
         )
         .error_context("Failed to configure DogStatsD debug log destination.")?;
+        if let Some(handles) = dynamic_handles {
+            dsd_debug_log_config = dsd_debug_log_config.with_dynamic_handle(handles.debug_log.clone());
+        }
         if dsd_debug_log_config.enabled() {
             blueprint
                 // DogStatsD debug log.

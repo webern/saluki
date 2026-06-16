@@ -8,7 +8,7 @@ use bytesize::ByteSize;
 use chrono::{DateTime, Utc};
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
 use saluki_common::collections::FastHashMap;
-use saluki_config::GenericConfiguration;
+use saluki_component_config::{DogStatsDDebugLogConfig, ScopedConfigHandle};
 use saluki_context::tags::TagSet;
 use saluki_core::{
     components::{
@@ -28,7 +28,6 @@ use tracing_rolling_file::{RollingConditionBase, RollingFileAppenderBase};
 const DEFAULT_DOGSTATSD_LOG_FILE_MAX_SIZE: ByteSize = ByteSize::mb(10);
 const DEFAULT_DOGSTATSD_LOG_FILE_MAX_ROLLS: usize = 3;
 const DEBUG_LOG_WRITER_BUFFER_LINES: usize = 4096;
-const DOGSTATSD_METRICS_STATS_ENABLE_KEY: &str = "dogstatsd_metrics_stats_enable";
 
 const fn default_true() -> bool {
     true
@@ -56,7 +55,7 @@ pub struct DogStatsDDebugLogConfiguration {
     metrics_stats_enabled: bool,
 
     #[serde(skip)]
-    configuration: Option<GenericConfiguration>,
+    dynamic_handle: Option<ScopedConfigHandle<Option<DogStatsDDebugLogConfig>>>,
 
     /// Whether DogStatsD metric-level statistics should also be written to a log file.
     ///
@@ -102,7 +101,7 @@ struct DogStatsDDebugLog {
     log_file_max_rolls: usize,
     writer: Option<DebugLogWriter>,
     metrics_stats_enabled: bool,
-    configuration: Option<GenericConfiguration>,
+    dynamic_handle: Option<ScopedConfigHandle<Option<DogStatsDDebugLogConfig>>>,
     stats: FastHashMap<ContextNoOrigin, MetricSample>,
 }
 
@@ -129,9 +128,7 @@ impl DogStatsDDebugLogConfiguration {
     /// No `GenericConfiguration` is retained; the `dogstatsd_metrics_stats_enable` runtime toggle is
     /// delivered through the configuration system's typed, scoped handles instead of a string-key
     /// watcher. If the native `log_file` is empty, `default_log_file_path` is used.
-    pub fn from_native(
-        native: &saluki_component_config::DogStatsDDebugLogConfig, default_log_file_path: PathBuf,
-    ) -> Result<Self, GenericError> {
+    pub fn from_native(native: &DogStatsDDebugLogConfig, default_log_file_path: PathBuf) -> Result<Self, GenericError> {
         let log_file = if native.log_file.as_os_str().is_empty() {
             default_log_file_path
         } else {
@@ -147,12 +144,22 @@ impl DogStatsDDebugLogConfiguration {
 
         Ok(Self {
             metrics_stats_enabled: native.metrics_stats_enabled,
-            configuration: None,
+            dynamic_handle: None,
             logging_enabled: native.logging_enabled,
             log_file,
             log_file_max_size: native.log_file_max_size,
             log_file_max_rolls: native.log_file_max_rolls,
         })
+    }
+
+    /// Attaches the typed, scoped dynamic-configuration handle for this slice.
+    ///
+    /// The built destination watches this handle and applies the refreshed
+    /// `dogstatsd_metrics_stats_enable` toggle at runtime, replacing the legacy raw-key
+    /// configuration watcher.
+    pub fn with_dynamic_handle(mut self, handle: ScopedConfigHandle<Option<DogStatsDDebugLogConfig>>) -> Self {
+        self.dynamic_handle = Some(handle);
+        self
     }
 
     /// Returns `true` if the debug log destination should be added to the topology.
@@ -184,7 +191,7 @@ impl DogStatsDDebugLog {
             log_file_max_rolls: config.log_file_max_rolls,
             writer: None,
             metrics_stats_enabled: config.metrics_stats_enabled,
-            configuration: config.configuration.clone(),
+            dynamic_handle: config.dynamic_handle.clone(),
             stats: FastHashMap::default(),
         };
 
@@ -266,12 +273,11 @@ impl Destination for DogStatsDDebugLog {
         let mut health = context.take_health_handle();
         health.mark_ready();
 
-        // The string-key watcher exists only on the legacy raw-map path; on the native path the
-        // configuration system delivers the `metrics_stats_enable` toggle via a typed scoped handle.
-        let mut metrics_stats_enabled_watcher = self
-            .configuration
-            .as_ref()
-            .map(|c| c.watch_for_updates(DOGSTATSD_METRICS_STATS_ENABLE_KEY));
+        // Dynamic updates arrive as a fully-typed `Option<DogStatsDDebugLogConfig>` over the scoped
+        // handle (the configuration system re-translates and routes only changed slices here).
+        // Absent a handle, the destination applies its static initial configuration with no runtime
+        // updates.
+        let mut handle = self.dynamic_handle.take();
 
         loop {
             select! {
@@ -288,10 +294,16 @@ impl Destination for DogStatsDDebugLog {
                     },
                     None => break,
                 },
-                (_, maybe_metrics_stats_enabled) = async { metrics_stats_enabled_watcher.as_mut().unwrap().changed::<bool>().await }, if metrics_stats_enabled_watcher.is_some() => {
-                    if let Some(metrics_stats_enabled) = maybe_metrics_stats_enabled {
-                        self.metrics_stats_enabled = metrics_stats_enabled;
-                        debug!(metrics_stats_enabled, "Updated DogStatsD metrics stats debug logging gate.");
+                maybe_update = async { handle.as_mut().unwrap().changed().await }, if handle.is_some() => {
+                    match maybe_update {
+                        Some(maybe_cfg) => {
+                            self.metrics_stats_enabled = maybe_cfg.map(|c| c.metrics_stats_enabled).unwrap_or(false);
+                            debug!(
+                                metrics_stats_enabled = self.metrics_stats_enabled,
+                                "Updated DogStatsD metrics stats debug logging gate."
+                            );
+                        }
+                        None => handle = None,
                     }
                 },
             }

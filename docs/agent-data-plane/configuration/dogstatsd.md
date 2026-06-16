@@ -557,6 +557,8 @@ compressed wire payload bytes.
 | `proxy.http`                                                   | HTTP proxy URL                                     |
 | `proxy.https`                                                  | HTTPS proxy URL                                    |
 | `proxy.no_proxy`                                               | Hosts bypassing proxy                              |
+| `secret_backend_command`                                       | Secret backend command for API keys                |
+| `secret_refresh_on_api_key_failure_interval`                   | Secret refresh interval (min) on API-key failure   |
 | `serializer_compressor_kind`                                   | Payload compression algorithm                      |
 | `serializer_max_payload_size`                                  | Max compressed payload size (generic)              |
 | `serializer_max_series_payload_size`                           | Max compressed V2 series payload size              |

@@ -371,6 +371,24 @@ pub struct DatadogConfiguration {
     #[serde(default, skip_serializing_if = "::std::option::Option::is_none")]
     pub proxy: Option<DatadogConfigurationProxy>,
 
+    /// `secret_backend_command` is the path to your custom script to execute to fetch secrets.
+    /// The executable must have specific rights that differ on Windows and Linux.
+    ///
+    /// This option take precedence over `secret_backend_type`.
+    ///
+    /// For more information see: https://docs.datadoghq.com/agent/configuration/secrets-management
+    #[serde(default)]
+    pub secret_backend_command: String,
+
+    /// `secret_refresh_on_api_key_failure_interval` is the time in minutes between two secret refreshes
+    /// triggered by the Agent using an invalid or expired API key (HTTP error code 403 received or the
+    /// health probe failing). This rate limits how often the secrets are refreshed in response to errors.
+    /// Set to 0 to disable the refresh.
+    ///
+    /// For more information see: https://docs.datadoghq.com/agent/configuration/secrets-management/#refreshing-apiapp-keys-at-runtime
+    #[serde(default)]
+    pub secret_refresh_on_api_key_failure_interval: i64,
+
     #[serde(default = "defaults::datadog_configuration_serializer_compressor_kind")]
     pub serializer_compressor_kind: String,
 
@@ -541,6 +559,8 @@ impl Default for DatadogConfiguration {
             otlp_config: Default::default(),
             provider_kind: Default::default(),
             proxy: Default::default(),
+            secret_backend_command: Default::default(),
+            secret_refresh_on_api_key_failure_interval: Default::default(),
             serializer_compressor_kind: defaults::datadog_configuration_serializer_compressor_kind(),
             serializer_max_payload_size: defaults::default_u64::<i64, 2621440>(),
             serializer_max_series_payload_size: defaults::default_u64::<i64, 512000>(),

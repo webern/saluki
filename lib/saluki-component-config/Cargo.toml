@@ -9,6 +9,7 @@ repository = { workspace = true }
 bytesize = { workspace = true }
 saluki-io = { workspace = true }
 stringtheory = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
 
 [lints]
 workspace = true

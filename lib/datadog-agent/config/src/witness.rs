@@ -374,6 +374,12 @@ pub trait DatadogConfigConsumer {
     /// Consume the `proxy.no_proxy` value.
     fn consume_proxy_no_proxy(&mut self, value: Vec<String>);
 
+    /// Consume the `secret_backend_command` value.
+    fn consume_secret_backend_command(&mut self, value: Option<String>);
+
+    /// Consume the `secret_refresh_on_api_key_failure_interval` value.
+    fn consume_secret_refresh_on_api_key_failure_interval(&mut self, value: i64);
+
     /// Consume the `serializer_compressor_kind` value.
     fn consume_serializer_compressor_kind(&mut self, value: Option<String>);
 
@@ -653,6 +659,11 @@ pub fn drive(config: &DatadogConfiguration, consumer: &mut impl DatadogConfigCon
     consumer.consume_proxy_http(witness_get(&root, "proxy.http"));
     consumer.consume_proxy_https(witness_get(&root, "proxy.https"));
     consumer.consume_proxy_no_proxy(witness_get(&root, "proxy.no_proxy"));
+    consumer.consume_secret_backend_command(witness_get(&root, "secret_backend_command"));
+    consumer.consume_secret_refresh_on_api_key_failure_interval(witness_get(
+        &root,
+        "secret_refresh_on_api_key_failure_interval",
+    ));
     consumer.consume_serializer_compressor_kind(witness_get(&root, "serializer_compressor_kind"));
     consumer.consume_serializer_max_payload_size(witness_get(&root, "serializer_max_payload_size"));
     consumer.consume_serializer_max_series_payload_size(witness_get(&root, "serializer_max_series_payload_size"));

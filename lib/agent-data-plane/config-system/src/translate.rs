@@ -7,6 +7,9 @@
 //! supplemental configuration is folded in alongside, so no component ever reads a private knob from
 //! a raw map.
 
+use std::path::PathBuf;
+use std::time::Duration;
+
 use agent_data_plane_config::{
     ChecksConfigs, DataPlaneConfig, DogStatsDConfigs, EventsConfigs, ForwarderConfigs, LogsConfigs, MetricsConfigs,
     OtlpConfigs, PipelineGate, RuntimeLoggingConfig, SalukiConfiguration, SalukiPrivateConfiguration,
@@ -23,8 +26,6 @@ use saluki_component_config::{
     TagFilterlistConfig, TraceObfuscationConfig, TraceSamplerConfig, TracesEnrichmentConfig,
 };
 use saluki_io::net::ListenAddress;
-use std::path::PathBuf;
-use std::time::Duration;
 use stringtheory::MetaString;
 
 /// The set of pipeline enable/disable gates ADP control keys, resolved outside the witnessed Datadog
@@ -388,6 +389,19 @@ impl DatadogConfigConsumer for Translator {
     }
     fn consume_forwarder_storage_max_size_in_bytes(&mut self, value: i64) {
         self.forwarder.retry.disk_persistence_enabled = value > 0;
+    }
+    // Secrets management: either signal marks API keys as secret-backed, which makes the forwarder
+    // retry classifier treat a 403 as retriable. Each consumer only ever sets the flag true, so the
+    // derived value is independent of the order in which the witness drives these keys.
+    fn consume_secret_backend_command(&mut self, value: Option<String>) {
+        if value.is_some_and(|command| !command.trim().is_empty()) {
+            self.forwarder.retry.secrets_in_use = true;
+        }
+    }
+    fn consume_secret_refresh_on_api_key_failure_interval(&mut self, value: i64) {
+        if value > 0 {
+            self.forwarder.retry.secrets_in_use = true;
+        }
     }
     // Forwarder knobs ADP does not yet model natively.
     fn consume_forwarder_apikey_validation_interval(&mut self, _value: i64) {}

@@ -4305,6 +4305,7 @@ dependencies = [
  "bytesize",
  "saluki-io",
  "stringtheory",
+ "tokio",
 ]
 
 [[package]]

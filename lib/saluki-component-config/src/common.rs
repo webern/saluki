@@ -79,6 +79,13 @@ pub struct RetryConfig {
 
     /// Whether failed payloads are persisted to disk for later retry.
     pub disk_persistence_enabled: bool,
+
+    /// Whether secrets management is active for API keys.
+    ///
+    /// When true, the forwarder retry classifier treats a `403 Forbidden` as retriable, because a
+    /// stale secret-backed API key may be refreshed out of band. This is a derived value: it is true
+    /// when a secret backend command is configured or a secret-refresh-on-failure interval is set.
+    pub secrets_in_use: bool,
 }
 
 impl Default for RetryConfig {
@@ -87,6 +94,7 @@ impl Default for RetryConfig {
             max_backoff: Duration::from_secs(30),
             base_backoff: Duration::from_secs(2),
             disk_persistence_enabled: false,
+            secrets_in_use: false,
         }
     }
 }

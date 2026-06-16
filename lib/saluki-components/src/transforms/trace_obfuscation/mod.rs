@@ -60,6 +60,16 @@ impl TraceObfuscationConfiguration {
             config: ObfuscationConfig::default(),
         }
     }
+
+    /// Creates a new `TraceObfuscationConfiguration` from native configuration.
+    ///
+    /// The native model summarizes obfuscation; the detailed rule set is taken from the default
+    /// `ObfuscationConfig`.
+    pub fn from_native(_native: &saluki_component_config::TraceObfuscationConfig) -> Result<Self, GenericError> {
+        Ok(Self {
+            config: ObfuscationConfig::default(),
+        })
+    }
 }
 
 impl Default for TraceObfuscationConfiguration {

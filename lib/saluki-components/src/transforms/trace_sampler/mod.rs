@@ -83,6 +83,17 @@ impl TraceSamplerConfiguration {
             otlp_sampling_rate,
         })
     }
+
+    /// Creates a new `TraceSamplerConfiguration` from native configuration.
+    ///
+    /// The APM sampler parameters are carried by the default `ApmConfig`; the native OTLP sampling
+    /// rate is applied directly.
+    pub fn from_native(native: &saluki_component_config::TraceSamplerConfig) -> Result<Self, GenericError> {
+        Ok(Self {
+            apm_config: ApmConfig::default(),
+            otlp_sampling_rate: normalize_sampling_rate(native.otlp_sampling_rate),
+        })
+    }
 }
 
 #[async_trait]

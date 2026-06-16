@@ -71,6 +71,18 @@ impl ApmStatsTransformConfiguration {
         })
     }
 
+    /// Creates a new `ApmStatsTransformConfiguration` from native configuration.
+    ///
+    /// APM parameters are carried by the default `ApmConfig`; the hostname and workload provider are
+    /// supplied later via `with_environment_provider`.
+    pub fn from_native(_native: &saluki_component_config::ApmStatsEncoderConfig) -> Result<Self, GenericError> {
+        Ok(Self {
+            apm_config: ApmConfig::default(),
+            default_hostname: None,
+            workload_provider: None,
+        })
+    }
+
     /// Sets the default hostname using the environment provider.
     pub async fn with_environment_provider<E>(mut self, env_provider: E) -> Result<Self, GenericError>
     where

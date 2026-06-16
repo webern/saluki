@@ -42,10 +42,20 @@ impl OttlTransformConfiguration {
     /// # Errors
     ///
     /// If a value at `ottl_transform_config` exists but fails to deserialize, an error is returned.
+    #[allow(dead_code)]
     pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
         let transform_config = config.try_get_typed::<OttlTransformConfig>("ottl_transform_config")?;
         Ok(Self {
             config: transform_config.unwrap_or_default(),
+        })
+    }
+
+    /// Creates a native (no-op) OTTL transform configuration.
+    ///
+    /// OTTL rules are not part of the supported native model; a default (no-op) config is used.
+    pub fn from_native() -> Result<Self, GenericError> {
+        Ok(Self {
+            config: OttlTransformConfig::default(),
         })
     }
 }

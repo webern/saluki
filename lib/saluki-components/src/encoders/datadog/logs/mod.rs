@@ -4,6 +4,7 @@ use facet::Facet;
 use http::{uri::PathAndQuery, HeaderValue, Method, Uri};
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
 use saluki_common::iter::ReusableDeduplicator;
+use saluki_component_config::DatadogLogsEncoderConfiguration as NativeDatadogLogsEncoderConfiguration;
 use saluki_config::GenericConfiguration;
 use saluki_context::tags::Tag;
 use saluki_core::{
@@ -65,6 +66,14 @@ impl DatadogLogsConfiguration {
     /// Creates a new `DatadogLogsConfiguration` from the given configuration.
     pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
         Ok(config.as_typed()?)
+    }
+
+    /// Creates a new `DatadogLogsConfiguration` from native component configuration.
+    pub fn from_native(native: &NativeDatadogLogsEncoderConfiguration) -> Self {
+        Self {
+            compressor_kind: native.compressor_kind().to_string(),
+            zstd_compressor_level: native.zstd_compressor_level(),
+        }
     }
 }
 

@@ -1,0 +1,49 @@
+//! ADP-native configuration model.
+//!
+//! This crate owns the target side of configuration translation: the typed configuration ADP wants
+//! to run with after source-specific loading is complete. It contains lifecycle and runtime concepts
+//! such as `BootstrapConfiguration`, `SalukiPrivateConfiguration`, `RuntimeConfigAuthority`, and
+//! `SalukiConfiguration`.
+//!
+//! This crate must not depend on `datadog-agent-config` or `saluki-config::GenericConfiguration`.
+//! Datadog key names, schema defaults, environment aliases, and raw-map loading belong outside this
+//! model. Keeping this crate source-agnostic lets Datadog, Saluki-private, OTel, or future inputs
+//! translate into the same ADP-owned runtime shape.
+
+pub mod authority;
+pub mod bootstrap;
+pub mod cli;
+pub mod private;
+pub mod saluki;
+
+pub use authority::{ConfigStreamAuthority, RuntimeConfigAuthority, RuntimeConfigLanguage};
+pub use bootstrap::{BootstrapConfiguration, BootstrapStartupConfiguration, BootstrapTelemetryConfiguration};
+pub use cli::DogStatsDCliConfiguration;
+pub use private::SalukiPrivateConfiguration;
+pub use saluki::{ControlPlaneConfiguration, DataPlaneConfiguration, EnvironmentConfiguration, SalukiConfiguration};
+pub use saluki_component_config::{
+    AggregateConfiguration, ApmStatsTransformConfiguration, ChecksIpcConfiguration,
+    DatadogApmStatsEncoderConfiguration, DatadogEventsEncoderConfiguration, DatadogForwarderConfiguration,
+    DatadogForwarderEndpointConfiguration, DatadogForwarderHttpProtocol, DatadogForwarderRetryConfiguration,
+    DatadogLogsEncoderConfiguration, DatadogMetricsEncoderConfiguration, DatadogOpwMetricsConfiguration,
+    DatadogProxyConfiguration, DatadogServiceChecksEncoderConfiguration, DatadogTraceEncoderConfiguration,
+    DogStatsDDebugLogConfiguration, DogStatsDEnablePayloadsConfiguration, DogStatsDMapperConfiguration,
+    DogStatsDMapperProfileConfiguration, DogStatsDMetricMappingConfiguration, DogStatsDOriginEnrichmentConfiguration,
+    DogStatsDOriginTagCardinality, DogStatsDPostAggregateFilterConfiguration, DogStatsDPrefixFilterConfiguration,
+    DogStatsDSourceConfiguration, DynamicValue, MetricTagFilterAction, MetricTagFilterEntry,
+    MultiRegionFailoverConfiguration, OtlpForwarderConfiguration, OtlpPipelineConfiguration, OtlpProxyConfiguration,
+    OtlpReceiverConfiguration, OtlpSourceConfiguration, OtlpTracesConfiguration, OttlErrorMode,
+    OttlFilterConfiguration, OttlTransformConfiguration, PipelineConfiguration, TagFilterlistConfiguration,
+    TraceObfuscationConfiguration, TraceSamplerConfiguration,
+};
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn cargo_toml_does_not_take_source_model_dependencies() {
+        let manifest = include_str!("../Cargo.toml");
+
+        assert!(!manifest.contains("datadog-agent-config"));
+        assert!(!manifest.contains("saluki-config"));
+    }
+}

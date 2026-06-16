@@ -9,6 +9,7 @@ use bytesize::ByteSize;
 use regex::Regex;
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
 use saluki_common::cache::{Cache, CacheBuilder};
+use saluki_component_config::DogStatsDMapperConfiguration as NativeDogStatsDMapperConfiguration;
 use saluki_config::GenericConfiguration;
 use saluki_context::tags::SharedTagSet;
 use saluki_context::tags::TagSet;
@@ -351,6 +352,34 @@ impl DogStatsDMapperConfiguration {
     /// Creates a new `DogstatsDMapperConfiguration` from the given configuration.
     pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
         Ok(config.as_typed()?)
+    }
+
+    /// Creates a new `DogstatsDMapperConfiguration` from native settings.
+    pub fn from_native(config: &NativeDogStatsDMapperConfiguration) -> Self {
+        Self {
+            context_string_interner_bytes: ByteSize::b(config.context_string_interner_bytes() as u64),
+            cache_size: config.cache_size(),
+            dogstatsd_mapper_profiles: MapperProfileConfigs(
+                config
+                    .profiles()
+                    .iter()
+                    .map(|profile| MappingProfileConfig {
+                        name: profile.name().to_string(),
+                        prefix: profile.prefix().to_string(),
+                        mappings: profile
+                            .mappings()
+                            .iter()
+                            .map(|mapping| MetricMappingConfig {
+                                metric_match: mapping.metric_match().to_string(),
+                                match_type: mapping.match_type().to_string(),
+                                name: mapping.name().to_string(),
+                                tags: mapping.tags().clone(),
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+            ),
+        }
     }
 }
 

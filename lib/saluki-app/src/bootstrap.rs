@@ -63,16 +63,21 @@ impl AppBootstrapper {
     /// The bootstrapper is initialized with a [`simple`][LoggingConfiguration::simple] logging configuration. Callers
     /// that have application-specific logging requirements should follow up with
     /// [`with_logging_configuration`][Self::with_logging_configuration] to override this default.
+    pub fn new() -> Self {
+        Self {
+            logging_config: LoggingConfiguration::simple(),
+            metrics_prefix: "saluki".to_string(),
+            metrics_default_level: Level::INFO,
+        }
+    }
+
+    /// Creates a new `AppBootstrapper` from a raw configuration map.
     ///
     /// # Errors
     ///
     /// This currently doesn't fail, but the signature returns `Result` to leave room for future failures.
     pub fn from_configuration(_config: &GenericConfiguration) -> Result<Self, GenericError> {
-        Ok(Self {
-            logging_config: LoggingConfiguration::simple(),
-            metrics_prefix: "saluki".to_string(),
-            metrics_default_level: Level::INFO,
-        })
+        Ok(Self::new())
     }
 
     /// Sets the prefix to use for internal metrics.

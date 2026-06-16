@@ -5,6 +5,7 @@ use axum::body::Bytes;
 use facet::Facet;
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
 use saluki_common::buf::FrozenChunkedBytesBuffer;
+use saluki_component_config::OtlpReceiverConfiguration;
 use saluki_config::GenericConfiguration;
 use saluki_core::components::relays::{Relay, RelayBuilder, RelayContext};
 use saluki_core::components::ComponentContext;
@@ -18,7 +19,7 @@ use tokio::sync::mpsc;
 use tokio::{pin, select};
 use tracing::{debug, error};
 
-use crate::common::otlp::config::Receiver;
+use crate::common::otlp::config::{receiver_config_from_native, Receiver};
 use crate::common::otlp::{
     build_metrics, Metrics, OtlpHandler, OtlpServerBuilder, OTLP_LOGS_GRPC_SERVICE_PATH,
     OTLP_METRICS_GRPC_SERVICE_PATH, OTLP_TRACES_GRPC_SERVICE_PATH,
@@ -41,6 +42,15 @@ pub struct OtlpRelayConfig {
 }
 
 impl OtlpRelayConfiguration {
+    /// Creates a new `OtlpRelayConfiguration` from native receiver configuration.
+    pub fn from_native(config: &OtlpReceiverConfiguration) -> Self {
+        Self {
+            otlp_config: OtlpRelayConfig {
+                receiver: receiver_config_from_native(config),
+            },
+        }
+    }
+
     /// Creates a new `OtlpRelayConfiguration` from the given generic configuration.
     pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
         config.as_typed().map_err(Into::into)

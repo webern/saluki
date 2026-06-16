@@ -11,6 +11,7 @@ use otlp_protos::opentelemetry::proto::collector::trace::v1::{
 use prost::Message;
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
 use saluki_common::buf::FrozenChunkedBytesBuffer;
+use saluki_component_config::OtlpForwarderConfiguration as NativeOtlpForwarderConfiguration;
 use saluki_config::GenericConfiguration;
 use saluki_core::data_model::payload::Payload;
 use saluki_core::{
@@ -36,6 +37,14 @@ pub struct OtlpForwarderConfiguration {
 }
 
 impl OtlpForwarderConfiguration {
+    /// Creates a new `OtlpForwarderConfiguration` from native component configuration.
+    pub fn from_native(config: &NativeOtlpForwarderConfiguration) -> Self {
+        Self {
+            core_agent_otlp_grpc_endpoint: config.core_agent_otlp_grpc_endpoint().to_string(),
+            core_agent_traces_internal_port: config.core_agent_traces_internal_port(),
+        }
+    }
+
     /// Creates a new `OtlpForwarderConfiguration` from the given configuration.
     pub fn from_configuration(
         config: &GenericConfiguration, core_agent_otlp_grpc_endpoint: String,

@@ -13,6 +13,7 @@ mod sql_tokenizer;
 use async_trait::async_trait;
 use facet::Facet;
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
+use saluki_component_config::TraceObfuscationConfiguration as NativeTraceObfuscationConfiguration;
 use saluki_config::GenericConfiguration;
 use saluki_core::{
     components::{transforms::*, ComponentContext},
@@ -52,6 +53,13 @@ impl TraceObfuscationConfiguration {
         Ok(Self {
             config: apm_config.obfuscation().clone(),
         })
+    }
+
+    /// Creates a new `TraceObfuscationConfiguration` from native component configuration.
+    pub fn from_native(config: &NativeTraceObfuscationConfiguration) -> Self {
+        Self {
+            config: ObfuscationConfig::from_native(config),
+        }
     }
 
     /// Creates a new `TraceObfuscationConfiguration` with default settings.

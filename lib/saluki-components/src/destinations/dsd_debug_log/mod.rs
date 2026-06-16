@@ -1,4 +1,5 @@
 use std::{
+    future::pending,
     io::Write,
     path::{Path, PathBuf},
 };
@@ -8,6 +9,7 @@ use bytesize::ByteSize;
 use chrono::{DateTime, Utc};
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
 use saluki_common::collections::FastHashMap;
+use saluki_component_config::{DogStatsDDebugLogConfiguration as NativeDogStatsDDebugLogConfiguration, DynamicValue};
 use saluki_config::GenericConfiguration;
 use saluki_context::tags::TagSet;
 use saluki_core::{
@@ -58,6 +60,9 @@ pub struct DogStatsDDebugLogConfiguration {
     #[serde(skip)]
     configuration: Option<GenericConfiguration>,
 
+    #[serde(skip)]
+    metrics_stats_enabled_dynamic: Option<DynamicValue<bool>>,
+
     /// Whether DogStatsD metric-level statistics should also be written to a log file.
     ///
     /// This controls whether the destination is added to the topology.
@@ -102,7 +107,8 @@ struct DogStatsDDebugLog {
     log_file_max_rolls: usize,
     writer: Option<DebugLogWriter>,
     metrics_stats_enabled: bool,
-    configuration: GenericConfiguration,
+    metrics_stats_enabled_dynamic: Option<DynamicValue<bool>>,
+    configuration: Option<GenericConfiguration>,
     stats: FastHashMap<ContextNoOrigin, MetricSample>,
 }
 
@@ -148,6 +154,19 @@ impl DogStatsDDebugLogConfiguration {
         Ok(cfg)
     }
 
+    /// Creates a new `DogStatsDDebugLogConfiguration` from native settings.
+    pub fn from_native(config: &NativeDogStatsDDebugLogConfiguration) -> Self {
+        Self {
+            metrics_stats_enabled: config.metrics_stats_enabled().current(),
+            configuration: None,
+            metrics_stats_enabled_dynamic: Some(config.metrics_stats_enabled()),
+            logging_enabled: config.logging_enabled(),
+            log_file: config.log_file().clone(),
+            log_file_max_size: ByteSize::b(config.log_file_max_size_bytes()),
+            log_file_max_rolls: config.log_file_max_rolls(),
+        }
+    }
+
     /// Returns `true` if the debug log destination should be added to the topology.
     pub const fn enabled(&self) -> bool {
         self.logging_enabled
@@ -177,10 +196,8 @@ impl DogStatsDDebugLog {
             log_file_max_rolls: config.log_file_max_rolls,
             writer: None,
             metrics_stats_enabled: config.metrics_stats_enabled,
-            configuration: config
-                .configuration
-                .clone()
-                .expect("configuration must be set via from_configuration"),
+            metrics_stats_enabled_dynamic: config.metrics_stats_enabled_dynamic.clone(),
+            configuration: config.configuration.clone(),
             stats: FastHashMap::default(),
         };
 
@@ -262,8 +279,11 @@ impl Destination for DogStatsDDebugLog {
         let mut health = context.take_health_handle();
         health.mark_ready();
 
-        let mut metrics_stats_enabled_watcher =
-            self.configuration.watch_for_updates(DOGSTATSD_METRICS_STATS_ENABLE_KEY);
+        let mut metrics_stats_enabled_dynamic = self.metrics_stats_enabled_dynamic.take();
+        let mut metrics_stats_enabled_watcher = self
+            .configuration
+            .as_ref()
+            .map(|configuration| configuration.watch_for_updates(DOGSTATSD_METRICS_STATS_ENABLE_KEY));
 
         loop {
             select! {
@@ -280,7 +300,23 @@ impl Destination for DogStatsDDebugLog {
                     },
                     None => break,
                 },
-                (_, maybe_metrics_stats_enabled) = metrics_stats_enabled_watcher.changed::<bool>() => {
+                maybe_metrics_stats_enabled = async {
+                    match metrics_stats_enabled_dynamic.as_mut() {
+                        Some(dynamic) => dynamic.changed().await,
+                        None => pending().await,
+                    }
+                } => {
+                    if let Some(metrics_stats_enabled) = maybe_metrics_stats_enabled {
+                        self.metrics_stats_enabled = metrics_stats_enabled;
+                        debug!(metrics_stats_enabled, "Updated DogStatsD metrics stats debug logging gate.");
+                    }
+                },
+                (_, maybe_metrics_stats_enabled) = async {
+                    match metrics_stats_enabled_watcher.as_mut() {
+                        Some(watcher) => watcher.changed::<bool>().await,
+                        None => pending().await,
+                    }
+                } => {
                     if let Some(metrics_stats_enabled) = maybe_metrics_stats_enabled {
                         self.metrics_stats_enabled = metrics_stats_enabled;
                         debug!(metrics_stats_enabled, "Updated DogStatsD metrics stats debug logging gate.");
@@ -553,6 +589,8 @@ mod tests {
             DogStatsDDebugLog::from_configuration(&dsd_config).expect("debug log destination should be built");
         let mut watcher = destination
             .configuration
+            .as_ref()
+            .expect("legacy dynamic configuration should be present")
             .watch_for_updates(super::DOGSTATSD_METRICS_STATS_ENABLE_KEY);
         destination
             .process_metric(&metric)

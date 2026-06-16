@@ -1,11 +1,10 @@
+use agent_data_plane_config::{ControlPlaneConfiguration, DataPlaneConfiguration};
+use agent_data_plane_config_system::DynamicLogLevelWorker;
 use resource_accounting::ComponentRegistry;
-use saluki_app::logging::LoggingOverrideController;
-use saluki_config::GenericConfiguration;
+use saluki_app::config::ConfigView;
 use saluki_core::health::HealthRegistry;
 use saluki_core::runtime::Supervisor;
 use saluki_error::GenericError;
-
-use crate::config::DataPlaneConfiguration;
 
 mod control_plane;
 pub use self::control_plane::create_control_plane_supervisor;
@@ -14,8 +13,6 @@ mod control_surfaces;
 pub use self::control_surfaces::{DogStatsDControlSurface, TopologyControlSurfaces};
 
 pub mod env;
-
-pub mod logging;
 
 pub mod remote_agent;
 use self::remote_agent::RemoteAgentBootstrap;
@@ -35,9 +32,10 @@ mod telemetry;
 ///
 /// If the supervisor can't be created, an error is returned.
 pub async fn create_internal_supervisor(
-    config: &GenericConfiguration, dp_config: &DataPlaneConfiguration, component_registry: &ComponentRegistry,
+    dynamic_log_level_worker: DynamicLogLevelWorker, config_view: ConfigView, dp_config: &DataPlaneConfiguration,
+    control_plane_config: &ControlPlaneConfiguration, component_registry: &ComponentRegistry,
     health_registry: HealthRegistry, control_surfaces: TopologyControlSurfaces,
-    ra_bootstrap: Option<RemoteAgentBootstrap>, logging_controller: LoggingOverrideController,
+    ra_bootstrap: Option<RemoteAgentBootstrap>,
 ) -> Result<Supervisor, GenericError> {
     // The root supervisor runs in ambient mode (caller's runtime) since its children each have their own
     // dedicated runtimes. The default restart strategy (one-for-one, 1 restart per 5s) applies to the child
@@ -47,13 +45,14 @@ pub async fn create_internal_supervisor(
     // Add control plane supervisor (dedicated single-threaded runtime)
     root.add_worker(
         create_control_plane_supervisor(
-            config,
+            dynamic_log_level_worker,
+            config_view,
             dp_config,
+            control_plane_config,
             component_registry,
             health_registry.clone(),
             control_surfaces,
             ra_bootstrap,
-            logging_controller,
         )
         .await?,
     );

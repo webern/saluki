@@ -1,9 +1,10 @@
 //! MRF metrics gateway transform.
 
-use std::collections::HashSet;
+use std::{collections::HashSet, future::pending};
 
 use async_trait::async_trait;
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
+use saluki_component_config::{DynamicValue, MultiRegionFailoverConfiguration};
 use saluki_config::GenericConfiguration;
 use saluki_core::{
     components::{
@@ -33,7 +34,9 @@ use crate::config::MrfConfiguration;
 /// dynamic updates.
 pub struct MrfMetricsGatewayConfiguration {
     mrf_config: MrfConfiguration,
-    configuration: GenericConfiguration,
+    configuration: Option<GenericConfiguration>,
+    failover_metrics: Option<DynamicValue<bool>>,
+    metric_allowlist: Option<DynamicValue<Vec<String>>>,
 }
 
 impl MrfMetricsGatewayConfiguration {
@@ -41,7 +44,19 @@ impl MrfMetricsGatewayConfiguration {
     pub fn new(mrf_config: MrfConfiguration, configuration: GenericConfiguration) -> Self {
         Self {
             mrf_config,
-            configuration,
+            configuration: Some(configuration),
+            failover_metrics: None,
+            metric_allowlist: None,
+        }
+    }
+
+    /// Creates a new `MrfMetricsGatewayConfiguration` from native settings.
+    pub fn from_native(config: &MultiRegionFailoverConfiguration) -> Self {
+        Self {
+            mrf_config: MrfConfiguration::from_native(config),
+            configuration: None,
+            failover_metrics: Some(config.failover_metrics()),
+            metric_allowlist: Some(config.metric_allowlist()),
         }
     }
 }
@@ -61,17 +76,24 @@ enum GatewayMode {
 pub struct MrfMetricsGateway {
     mrf_config: MrfConfiguration,
     mode: GatewayMode,
-    configuration: GenericConfiguration,
+    configuration: Option<GenericConfiguration>,
+    failover_metrics: Option<DynamicValue<bool>>,
+    metric_allowlist: Option<DynamicValue<Vec<String>>>,
 }
 
 impl MrfMetricsGateway {
-    fn new(mrf_config: MrfConfiguration, configuration: GenericConfiguration) -> Self {
+    fn new(
+        mrf_config: MrfConfiguration, configuration: Option<GenericConfiguration>,
+        failover_metrics: Option<DynamicValue<bool>>, metric_allowlist: Option<DynamicValue<Vec<String>>>,
+    ) -> Self {
         let mode = Self::mode_for_config(&mrf_config);
 
         Self {
             mrf_config,
             mode,
             configuration,
+            failover_metrics,
+            metric_allowlist,
         }
     }
 
@@ -135,6 +157,8 @@ impl TransformBuilder for MrfMetricsGatewayConfiguration {
         Ok(Box::new(MrfMetricsGateway::new(
             self.mrf_config.clone(),
             self.configuration.clone(),
+            self.failover_metrics.clone(),
+            self.metric_allowlist.clone(),
         )))
     }
 
@@ -173,12 +197,16 @@ impl MemoryBounds for MrfMetricsGatewayConfiguration {
 impl Transform for MrfMetricsGateway {
     async fn run(mut self: Box<Self>, mut context: TransformContext) -> Result<(), GenericError> {
         let mut health = context.take_health_handle();
+        let mut failover_metrics = self.failover_metrics.take();
+        let mut metric_allowlist = self.metric_allowlist.take();
         let mut failover_metrics_watcher = self
             .configuration
-            .watch_for_updates("multi_region_failover.failover_metrics");
+            .as_ref()
+            .map(|configuration| configuration.watch_for_updates("multi_region_failover.failover_metrics"));
         let mut metric_allowlist_watcher = self
             .configuration
-            .watch_for_updates("multi_region_failover.metric_allowlist");
+            .as_ref()
+            .map(|configuration| configuration.watch_for_updates("multi_region_failover.metric_allowlist"));
 
         health.mark_ready();
         debug!(mode = ?self.mode, "MRF metrics gateway transform started.");
@@ -197,12 +225,42 @@ impl Transform for MrfMetricsGateway {
                         break;
                     }
                 },
-                (_, maybe_failover_metrics) = failover_metrics_watcher.changed::<bool>() => {
+                maybe_failover_metrics = async {
+                    match failover_metrics.as_mut() {
+                        Some(dynamic) => dynamic.changed().await,
+                        None => pending().await,
+                    }
+                } => {
                     if let Some(failover_metrics) = maybe_failover_metrics {
                         self.update_failover_metrics(failover_metrics);
                     }
                 },
-                (_, maybe_metric_allowlist) = metric_allowlist_watcher.changed::<Vec<String>>() => {
+                maybe_metric_allowlist = async {
+                    match metric_allowlist.as_mut() {
+                        Some(dynamic) => dynamic.changed().await,
+                        None => pending().await,
+                    }
+                } => {
+                    if let Some(metric_allowlist) = maybe_metric_allowlist {
+                        self.update_metric_allowlist(metric_allowlist);
+                    }
+                },
+                (_, maybe_failover_metrics) = async {
+                    match failover_metrics_watcher.as_mut() {
+                        Some(watcher) => watcher.changed::<bool>().await,
+                        None => pending().await,
+                    }
+                } => {
+                    if let Some(failover_metrics) = maybe_failover_metrics {
+                        self.update_failover_metrics(failover_metrics);
+                    }
+                },
+                (_, maybe_metric_allowlist) = async {
+                    match metric_allowlist_watcher.as_mut() {
+                        Some(watcher) => watcher.changed::<Vec<String>>().await,
+                        None => pending().await,
+                    }
+                } => {
                     if let Some(metric_allowlist) = maybe_metric_allowlist {
                         self.update_metric_allowlist(metric_allowlist);
                     }
@@ -235,7 +293,7 @@ mod tests {
         config.ready().await;
 
         let mrf_config = MrfConfiguration::from_configuration(&config).expect("MRF configuration should deserialize");
-        (MrfMetricsGateway::new(mrf_config, config), sender)
+        (MrfMetricsGateway::new(mrf_config, Some(config), None, None), sender)
     }
 
     #[tokio::test]
@@ -251,6 +309,8 @@ mod tests {
         .await;
         let mut watcher = gw
             .configuration
+            .as_ref()
+            .expect("legacy dynamic configuration should be present")
             .watch_for_updates("multi_region_failover.failover_metrics");
 
         assert!(!gw.should_forward(&Event::Metric(Metric::counter("any.metric", 1.0))));
@@ -297,6 +357,8 @@ mod tests {
         .await;
         let mut watcher = gw
             .configuration
+            .as_ref()
+            .expect("legacy dynamic configuration should be present")
             .watch_for_updates("multi_region_failover.metric_allowlist");
 
         assert!(gw.should_forward(&Event::Metric(Metric::counter("allowed.metric", 1.0))));

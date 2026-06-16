@@ -7,6 +7,9 @@ use std::{
 use facet::Facet;
 use http::uri::Authority;
 use regex::Regex;
+use saluki_component_config::{
+    DatadogForwarderEndpointConfiguration as NativeDatadogForwarderEndpointConfiguration, DynamicValue,
+};
 use saluki_config::GenericConfiguration;
 use saluki_error::{ErrorContext as _, GenericError};
 use saluki_metadata;
@@ -72,6 +75,16 @@ impl std::fmt::Display for MappedAPIKeys {
 pub(crate) struct AdditionalEndpoints(#[serde_as(as = "PickFirst<(DisplayFromStr, _)>")] MappedAPIKeys);
 
 impl AdditionalEndpoints {
+    /// Creates additional endpoint settings from native component configuration.
+    fn from_native(endpoints: HashMap<String, Vec<String>>) -> Self {
+        Self(MappedAPIKeys(
+            endpoints
+                .into_iter()
+                .map(|(endpoint, keys)| (endpoint, APIKeys(keys)))
+                .collect(),
+        ))
+    }
+
     /// Returns the resolved endpoints from the additional endpoint configuration.
     ///
     /// This will generate a [`ResolvedEndpoint`] for each unique endpoint/API key pair, assigning
@@ -83,8 +96,16 @@ impl AdditionalEndpoints {
     ///
     /// If any of the additional endpoints aren't valid URLs, or a valid URL couldn't be constructed after applying
     /// the necessary normalization / modifications, an error will be returned.
+    #[cfg(test)]
     pub fn resolved_endpoints(
         &self, configuration: Option<GenericConfiguration>,
+    ) -> Result<Vec<ResolvedEndpoint>, EndpointError> {
+        self.resolved_endpoints_with_native(configuration, None)
+    }
+
+    pub fn resolved_endpoints_with_native(
+        &self, configuration: Option<GenericConfiguration>,
+        native_additional_endpoints: Option<DynamicValue<HashMap<String, Vec<String>>>>,
     ) -> Result<Vec<ResolvedEndpoint>, EndpointError> {
         let mut resolved = Vec::new();
 
@@ -107,6 +128,8 @@ impl AdditionalEndpoints {
                     endpoint: endpoint.clone(),
                     api_key: trimmed_api_key.to_string(),
                     config: configuration.clone(),
+                    native_api_key: None,
+                    native_additional_endpoints: native_additional_endpoints.clone(),
                     api_key_refresh_config_path: None,
                     api_key_index: Some(index),
                     raw_additional_url: Some(raw_endpoint.to_string()),
@@ -126,6 +149,16 @@ impl AdditionalEndpoints {
 pub struct EndpointConfiguration {
     /// The API key to use.
     api_key: String,
+
+    /// Native dynamic API key refresh handle for primary-like endpoints.
+    #[serde(skip)]
+    #[facet(opaque)]
+    native_api_key: Option<DynamicValue<String>>,
+
+    /// Native dynamic additional endpoint map refresh handle.
+    #[serde(skip)]
+    #[facet(opaque)]
+    native_additional_endpoints: Option<DynamicValue<HashMap<String, Vec<String>>>>,
 
     /// Config path used to refresh the API key for primary-like endpoints.
     #[serde(skip)]
@@ -158,6 +191,19 @@ pub struct EndpointConfiguration {
 }
 
 impl EndpointConfiguration {
+    /// Creates endpoint settings from native component configuration.
+    pub fn from_native(native: &NativeDatadogForwarderEndpointConfiguration) -> Self {
+        Self {
+            api_key: native.api_key().current(),
+            native_api_key: Some(native.api_key()),
+            native_additional_endpoints: Some(native.additional_endpoints()),
+            api_key_refresh_config_path: None,
+            site: native.site().to_string(),
+            dd_url: native.dd_url().map(str::to_string),
+            additional_endpoints: AdditionalEndpoints::from_native(native.additional_endpoints().current()),
+        }
+    }
+
     /// Sets the full URL base to send metrics to.
     pub fn set_dd_url(&mut self, url: String) {
         self.dd_url = Some(url);
@@ -166,6 +212,9 @@ impl EndpointConfiguration {
     /// Sets the API key to use.
     pub fn set_api_key(&mut self, api_key: String) {
         self.api_key = api_key;
+        if self.native_api_key.is_some() {
+            self.native_api_key = Some(DynamicValue::fixed(self.api_key.clone()));
+        }
     }
 
     /// Sets the config path used to refresh the API key.
@@ -176,6 +225,7 @@ impl EndpointConfiguration {
     /// Clears all additional endpoints.
     pub fn clear_additional_endpoints(&mut self) {
         self.additional_endpoints = AdditionalEndpoints::default();
+        self.native_additional_endpoints = Some(DynamicValue::fixed(HashMap::new()));
     }
 
     /// Builds the resolved primary endpoint from `site`/`dd_url`.
@@ -190,6 +240,7 @@ impl EndpointConfiguration {
         calculate_resolved_endpoint(self.dd_url.as_deref(), &self.site, &self.api_key)
             .error_context("Failed parsing/resolving the primary destination endpoint.")
             .map(|endpoint| endpoint.with_configuration(configuration))
+            .map(|endpoint| endpoint.with_native_api_key(self.native_api_key.clone()))
             .map(|endpoint| endpoint.with_api_key_refresh_config_path(self.api_key_refresh_config_path))
     }
 
@@ -199,6 +250,7 @@ impl EndpointConfiguration {
     ) -> Result<ResolvedEndpoint, EndpointError> {
         calculate_resolved_endpoint(Some(url), &self.site, &self.api_key)
             .map(|endpoint| endpoint.with_configuration(configuration))
+            .map(|endpoint| endpoint.with_native_api_key(self.native_api_key.clone()))
             .map(|endpoint| endpoint.with_api_key_refresh_config_path(self.api_key_refresh_config_path))
     }
 
@@ -215,7 +267,7 @@ impl EndpointConfiguration {
         &self, configuration: Option<GenericConfiguration>,
     ) -> Result<Vec<ResolvedEndpoint>, GenericError> {
         self.additional_endpoints
-            .resolved_endpoints(configuration)
+            .resolved_endpoints_with_native(configuration, self.native_additional_endpoints.clone())
             .error_context("Failed parsing/resolving the additional destination endpoints.")
     }
 }
@@ -229,6 +281,8 @@ pub struct ResolvedEndpoint {
     endpoint: Url,
     api_key: String,
     config: Option<GenericConfiguration>,
+    native_api_key: Option<DynamicValue<String>>,
+    native_additional_endpoints: Option<DynamicValue<HashMap<String, Vec<String>>>>,
     /// Config path used to refresh the API key for primary-like endpoints. `None` uses `api_key`.
     api_key_refresh_config_path: Option<&'static str>,
     /// Position of this key in the `additional_endpoints` config key list for its URL (raw
@@ -307,6 +361,8 @@ impl ResolvedEndpoint {
             endpoint,
             api_key: api_key.to_string(),
             config: None,
+            native_api_key: None,
+            native_additional_endpoints: None,
             api_key_refresh_config_path: None,
             api_key_index: None,
             raw_additional_url: None,
@@ -318,6 +374,12 @@ impl ResolvedEndpoint {
     /// Creates a new  `ResolvedEndpoint` instance from an existing `ResolvedEndpoint`, adding an optional `GenericConfiguration` which can be used to fetch the up-to-date API key.
     pub fn with_configuration(mut self, config: Option<GenericConfiguration>) -> Self {
         self.config = config;
+        self
+    }
+
+    /// Adds a native dynamic API key refresh handle.
+    pub fn with_native_api_key(mut self, api_key: Option<DynamicValue<String>>) -> Self {
+        self.native_api_key = api_key;
         self
     }
 
@@ -343,7 +405,33 @@ impl ResolvedEndpoint {
     /// looked up by position in the `additional_endpoints` config value. For the primary endpoint,
     /// the `api_key` config key is used directly.
     pub fn api_key(&mut self) -> &str {
-        if let Some(config) = &self.config {
+        if let (Some(index), Some(raw_url), Some(additional_endpoints)) = (
+            self.api_key_index,
+            self.raw_additional_url.as_deref(),
+            self.native_additional_endpoints.as_ref(),
+        ) {
+            let current = additional_endpoints.current();
+            match current.get(raw_url).and_then(|keys| keys.get(index)).cloned() {
+                Some(key) if !key.trim().is_empty() && key != self.api_key => {
+                    debug!(endpoint = %self.endpoint, index, "Refreshed additional endpoint API key.");
+                    self.api_key = key;
+                }
+                None => {
+                    debug!(
+                        endpoint = %self.endpoint,
+                        index,
+                        "Could not refresh additional endpoint key from native config. Continuing with last known valid API key."
+                    );
+                }
+                _ => {}
+            }
+        } else if let Some(api_key) = &self.native_api_key {
+            let api_key = api_key.current();
+            if !api_key.is_empty() && self.api_key != api_key {
+                debug!(endpoint = %self.endpoint, "Refreshed API key from native config.");
+                self.api_key = api_key;
+            }
+        } else if let Some(config) = &self.config {
             if let (Some(index), Some(raw_url)) = (self.api_key_index, self.raw_additional_url.as_deref()) {
                 // Additional endpoint: look up current key by raw index in this URL's key list.
                 match lookup_additional_key(config, raw_url, index) {

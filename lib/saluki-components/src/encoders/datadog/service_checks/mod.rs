@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use facet::Facet;
 use http::{uri::PathAndQuery, HeaderValue, Method, Uri};
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
+use saluki_component_config::DatadogServiceChecksEncoderConfiguration as NativeDatadogServiceChecksEncoderConfiguration;
 use saluki_config::GenericConfiguration;
 use saluki_core::{
     components::{encoders::*, ComponentContext},
@@ -113,6 +114,17 @@ impl DatadogServiceChecksConfiguration {
     /// Creates a new `DatadogServiceChecksConfiguration` from the given configuration.
     pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
         Ok(config.as_typed()?)
+    }
+
+    /// Creates a new `DatadogServiceChecksConfiguration` from native component configuration.
+    pub fn from_native(native: &NativeDatadogServiceChecksEncoderConfiguration) -> Self {
+        Self {
+            max_payload_size: native.max_payload_size(),
+            max_uncompressed_payload_size: native.max_uncompressed_payload_size(),
+            compressor_kind: native.compressor_kind().to_string(),
+            zstd_compressor_level: native.zstd_compressor_level(),
+            log_payloads: native.log_payloads(),
+        }
     }
 }
 

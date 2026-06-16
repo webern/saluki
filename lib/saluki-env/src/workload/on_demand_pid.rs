@@ -76,15 +76,20 @@ pub struct OnDemandPIDResolver {
 }
 
 impl OnDemandPIDResolver {
+    /// Creates a no-op `OnDemandPIDResolver`.
+    pub fn noop() -> Self {
+        Self {
+            inner: Arc::new(Inner::Noop),
+        }
+    }
+
     /// Creates a new `OnDemandPIDResolver` from the given configuration.
     #[cfg(not(target_os = "linux"))]
     pub fn from_configuration(
         _config: &GenericConfiguration, _feature_detector: FeatureDetector, _interner: GenericMapInterner,
     ) -> Result<Self, GenericError> {
         // On non-Linux platforms, we don't need to do anything special.
-        Ok(Self {
-            inner: Arc::new(Inner::Noop),
-        })
+        Ok(Self::noop())
     }
 
     /// Creates a new `OnDemandPIDResolver` from the given configuration.

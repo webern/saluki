@@ -5,7 +5,6 @@ use async_trait::async_trait;
 use datadog_agent_commons::ipc::client::RemoteAgentClient;
 use futures::StreamExt;
 use saluki_common::sync::shutdown::ShutdownHandle;
-use saluki_config::GenericConfiguration;
 use saluki_core::runtime::{InitializationError, Supervisable, Supervisor, SupervisorFuture};
 use saluki_env::autodiscovery::AutodiscoveryEvent;
 use saluki_env::AutodiscoveryProvider;
@@ -30,14 +29,8 @@ pub struct RemoteAgentAutodiscoveryProvider {
 type AutodiscoverySubscribers = Arc<Mutex<Vec<Sender<AutodiscoveryEvent>>>>;
 
 impl RemoteAgentAutodiscoveryProvider {
-    /// Creates a new `RemoteAgentAutodiscoveryProvider` based on the given configuration, along with a [`Supervisor`] that
-    /// drives the collection and broadcasting of autodiscovery events.
-    ///
-    /// # Errors
-    ///
-    /// If the remote agent client couldn't be created, an error is returned.
-    pub async fn from_configuration(config: &GenericConfiguration) -> Result<(Self, Supervisor), GenericError> {
-        let client = RemoteAgentClient::from_configuration(config).await?;
+    /// Creates a new `RemoteAgentAutodiscoveryProvider` from an already established Datadog Agent IPC client.
+    pub fn from_client(client: RemoteAgentClient) -> Result<(Self, Supervisor), GenericError> {
         let subscribers = Arc::new(Mutex::new(Vec::new()));
 
         let provider = Self {

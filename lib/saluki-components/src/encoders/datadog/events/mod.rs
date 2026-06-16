@@ -5,6 +5,7 @@ use http::{uri::PathAndQuery, HeaderValue, Method, Uri};
 use protobuf::{rt::WireType, CodedOutputStream};
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
 use saluki_common::iter::ReusableDeduplicator;
+use saluki_component_config::DatadogEventsEncoderConfiguration as NativeDatadogEventsEncoderConfiguration;
 use saluki_config::GenericConfiguration;
 use saluki_context::tags::Tag;
 use saluki_core::{
@@ -117,6 +118,17 @@ impl DatadogEventsConfiguration {
     /// Creates a new `DatadogEventsConfiguration` from the given configuration.
     pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
         Ok(config.as_typed()?)
+    }
+
+    /// Creates a new `DatadogEventsConfiguration` from native component configuration.
+    pub fn from_native(native: &NativeDatadogEventsEncoderConfiguration) -> Self {
+        Self {
+            max_payload_size: native.max_payload_size(),
+            max_uncompressed_payload_size: native.max_uncompressed_payload_size(),
+            compressor_kind: native.compressor_kind().to_string(),
+            zstd_compressor_level: native.zstd_compressor_level(),
+            log_payloads: native.log_payloads(),
+        }
     }
 }
 

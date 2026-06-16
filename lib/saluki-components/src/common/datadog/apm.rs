@@ -282,13 +282,6 @@ impl ApmConfig {
         &self.hostname
     }
 
-    /// Sets the hostname if it's currently empty.
-    pub fn set_hostname_if_empty(&mut self, hostname: impl Into<MetaString>) {
-        if self.hostname.is_empty() {
-            self.hostname = hostname.into();
-        }
-    }
-
     /// Returns `true` if the rare sampler is enabled.
     pub const fn rare_sampler_enabled(&self) -> bool {
         self.enable_rare_sampler

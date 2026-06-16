@@ -22,6 +22,7 @@ use saluki_common::{
     sync::shutdown::{ShutdownCoordinator, ShutdownHandle},
     task::spawn_traced_named,
 };
+use saluki_component_config::DogStatsDSourceConfiguration as NativeDogStatsDSourceConfiguration;
 use saluki_config::{deserialize_space_separated_or_seq, GenericConfiguration};
 use saluki_context::{
     origin::RawOrigin,
@@ -609,6 +610,51 @@ async fn resolve_bind_host(host: &str) -> Result<std::net::IpAddr, Error> {
 }
 
 impl DogStatsDConfiguration {
+    /// Creates a new `DogStatsDConfiguration` from native component configuration.
+    pub fn from_native(config: &NativeDogStatsDSourceConfiguration) -> Self {
+        let enable_payloads = config.enable_payloads();
+        Self {
+            buffer_size: config.buffer_size(),
+            buffer_count: config.buffer_count(),
+            port: config.port(),
+            socket_receive_buffer_size: config.socket_receive_buffer_size(),
+            tcp_port: config.tcp_port(),
+            statsd_forward_host: config.statsd_forward_host().map(MetaString::from),
+            statsd_forward_port: config.statsd_forward_port(),
+            socket_path: config.socket_path().map(str::to_string),
+            socket_stream_path: config.socket_stream_path().map(str::to_string),
+            stream_log_too_big: config.stream_log_too_big(),
+            eol_required: config.eol_required().to_vec(),
+            bind_host: config.bind_host().map(str::to_string),
+            non_local_traffic: config.non_local_traffic(),
+            autoscale_udp_listeners: config.autoscale_udp_listeners(),
+            allow_context_heap_allocations: config.allow_context_heap_allocations(),
+            no_aggregation_pipeline_support: config.no_aggregation_pipeline_support(),
+            context_string_interner_entry_count: config.context_string_interner_entry_count(),
+            context_string_interner_size_bytes: config.context_string_interner_size_bytes().map(ByteSize::b),
+            cached_contexts_limit: config.cached_contexts_limit(),
+            cached_tagsets_limit: config.cached_tagsets_limit(),
+            context_expiry_seconds: config.context_expiry_seconds(),
+            permissive_decoding: config.permissive_decoding(),
+            minimum_sample_rate: config.minimum_sample_rate(),
+            enable_payloads: EnablePayloadsConfiguration {
+                series: enable_payloads.series(),
+                sketches: enable_payloads.sketches(),
+                events: enable_payloads.events(),
+                service_checks: enable_payloads.service_checks(),
+            },
+            origin_enrichment: OriginEnrichmentConfiguration::from_native(config.origin_enrichment()),
+            workload_provider: None,
+            capture_entity_resolver: None,
+            additional_tags: config.additional_tags().to_vec(),
+            capture_path: config.capture_path().clone(),
+            capture_depth: config.capture_depth().max(MIN_CAPTURE_DEPTH),
+            capture_control: DogStatsDCaptureControl::default(),
+            replay_control: DogStatsDReplayControl::default(),
+            provider_kind: config.provider_kind().to_string(),
+        }
+    }
+
     /// Creates a new `DogStatsDConfiguration` from the given configuration.
     pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
         let mut dogstatsd_config: Self = config.as_typed()?;

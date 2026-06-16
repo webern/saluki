@@ -44,7 +44,16 @@ impl RemoteAgentClient {
     /// authentication token is invalid, an error will be returned.
     pub async fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
         let config = RemoteAgentClientConfiguration::from_configuration(config)?;
+        Self::connect(config).await
+    }
 
+    /// Connects a new `RemoteAgentClient` from typed IPC configuration.
+    ///
+    /// # Errors
+    ///
+    /// If the Agent gRPC client can't be created (invalid API endpoint, missing authentication token, etc), or if the
+    /// authentication token is invalid, an error will be returned.
+    pub async fn connect(config: RemoteAgentClientConfiguration) -> Result<Self, GenericError> {
         // TODO: We need to write a Tower middleware service that allows applying a backoff between failed calls,
         // specifically so that we can throttle reconnection attempts.
         //

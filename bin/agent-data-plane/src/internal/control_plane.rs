@@ -1,23 +1,21 @@
-use datadog_agent_commons::ipc::{config::IpcAuthConfiguration, tls::build_ipc_server_tls_config};
+use agent_data_plane_config::{ControlPlaneConfiguration, DataPlaneConfiguration};
+use agent_data_plane_config_system::DynamicLogLevelWorker;
+use datadog_agent_commons::ipc::tls::build_ipc_server_tls_config;
 use resource_accounting::ComponentRegistry;
 use saluki_api::EndpointType;
 use saluki_app::{
-    accounting::ResourceTelemetryWorker, config::ConfigWorker, dynamic_api::DynamicAPIBuilder,
-    logging::LoggingOverrideController,
+    accounting::ResourceTelemetryWorker,
+    config::{ConfigView, ConfigWorker},
+    dynamic_api::DynamicAPIBuilder,
 };
-use saluki_config::GenericConfiguration;
 use saluki_core::{
     health::HealthRegistry,
     runtime::{RestartStrategy, RuntimeConfiguration, Supervisor},
 };
 use saluki_error::GenericError;
 
-use crate::{
-    config::DataPlaneConfiguration,
-    internal::{
-        logging::DynamicLogLevelWorker, remote_agent::RemoteAgentBootstrap, telemetry::InternalTelemetryAPIWorker,
-        TopologyControlSurfaces,
-    },
+use crate::internal::{
+    remote_agent::RemoteAgentBootstrap, telemetry::InternalTelemetryAPIWorker, TopologyControlSurfaces,
 };
 
 /// Creates the control plane supervisor.
@@ -31,9 +29,10 @@ use crate::{
 ///
 /// If the supervisor can't be created, an error is returned.
 pub async fn create_control_plane_supervisor(
-    config: &GenericConfiguration, dp_config: &DataPlaneConfiguration, component_registry: &ComponentRegistry,
+    dynamic_log_level_worker: DynamicLogLevelWorker, config_view: ConfigView, dp_config: &DataPlaneConfiguration,
+    control_plane_config: &ControlPlaneConfiguration, component_registry: &ComponentRegistry,
     health_registry: HealthRegistry, control_surfaces: TopologyControlSurfaces,
-    ra_bootstrap: Option<RemoteAgentBootstrap>, logging_controller: LoggingOverrideController,
+    ra_bootstrap: Option<RemoteAgentBootstrap>,
 ) -> Result<Supervisor, GenericError> {
     let mut supervisor = Supervisor::new("ctrl-pln")?
         .with_dedicated_runtime(RuntimeConfiguration::single_threaded())
@@ -42,15 +41,14 @@ pub async fn create_control_plane_supervisor(
     supervisor.add_worker(health_registry.worker());
     supervisor.add_worker(ResourceTelemetryWorker::new(component_registry));
     supervisor.add_worker(InternalTelemetryAPIWorker::new());
-    supervisor.add_worker(DynamicLogLevelWorker::new(config, logging_controller));
-    supervisor.add_worker(ConfigWorker::new(config.clone()));
+    supervisor.add_worker(dynamic_log_level_worker);
+    supervisor.add_worker(ConfigWorker::new(config_view));
 
     supervisor.add_worker(DynamicAPIBuilder::new(
         EndpointType::Unprivileged,
         dp_config.api_listen_address().clone(),
     ));
-    let ipc_config = IpcAuthConfiguration::from_configuration(config)?;
-    let tls_config = build_ipc_server_tls_config(ipc_config.ipc_cert_file_path()).await?;
+    let tls_config = build_ipc_server_tls_config(control_plane_config.ipc_cert_file_path()).await?;
 
     let mut privileged_api =
         DynamicAPIBuilder::new(EndpointType::Privileged, dp_config.secure_api_listen_address().clone())

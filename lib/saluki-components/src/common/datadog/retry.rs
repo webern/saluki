@@ -6,6 +6,9 @@ use std::{
 
 use facet::Facet;
 use http::StatusCode;
+use saluki_component_config::{
+    DatadogForwarderRetryConfiguration as NativeDatadogForwarderRetryConfiguration, DynamicValue,
+};
 use saluki_config::GenericConfiguration;
 use saluki_io::net::util::retry::{
     DefaultHttpRetryPolicy, ExponentialBackoff, HttpRetryPredicate, StandardHttpClassifier,
@@ -165,9 +168,33 @@ pub struct RetryConfiguration {
         rename = "forwarder_retry_queue_capacity_time_interval_sec"
     )]
     capacity_time_interval_secs: u64,
+
+    /// Native dynamic secret retry gate.
+    #[serde(skip)]
+    #[facet(opaque)]
+    native_retry_forbidden_when_secrets_in_use: Option<DynamicValue<bool>>,
 }
 
 impl RetryConfiguration {
+    /// Creates retry settings from native component configuration.
+    pub fn from_native(native: &NativeDatadogForwarderRetryConfiguration) -> Self {
+        Self {
+            backoff_factor: native.backoff_factor(),
+            backoff_base: native.backoff_base_secs(),
+            backoff_max: native.backoff_max_secs(),
+            recovery_error_decrease_factor: native.recovery_error_decrease_factor(),
+            recovery_reset: native.recovery_reset(),
+            retry_queue_payloads_max_size: Some(native.retry_queue_payloads_max_size_bytes()),
+            retry_queue_max_size: None,
+            storage_max_size_bytes: native.storage_max_size_bytes(),
+            storage_path: native.storage_path().clone(),
+            storage_max_disk_ratio: native.storage_max_disk_ratio(),
+            outdated_file_in_days: native.outdated_file_in_days(),
+            capacity_time_interval_secs: native.capacity_time_interval_secs(),
+            native_retry_forbidden_when_secrets_in_use: Some(native.retry_forbidden_when_secrets_in_use()),
+        }
+    }
+
     pub(super) fn fix_empty_storage_path(&mut self, config: &GenericConfiguration) {
         // If `forwarder_storage_path` is empty, try setting it to a default path based on `run_path`.
         if self.storage_path.parent().is_none() {
@@ -244,7 +271,11 @@ impl RetryConfiguration {
             self.backoff_factor,
         );
 
-        let classifier = if let Some(config) = live_config {
+        let classifier = if let Some(secrets_in_use) = self.native_retry_forbidden_when_secrets_in_use.clone() {
+            let gate: HttpRetryPredicate<B> =
+                Arc::new(move |response| response.status() == StatusCode::FORBIDDEN && secrets_in_use.current());
+            StandardHttpClassifier::new().with_predicate(gate)
+        } else if let Some(config) = live_config {
             let gate: HttpRetryPredicate<B> =
                 Arc::new(move |response| response.status() == StatusCode::FORBIDDEN && secrets_in_use(&config));
             StandardHttpClassifier::new().with_predicate(gate)

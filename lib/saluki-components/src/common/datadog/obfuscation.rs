@@ -1,6 +1,7 @@
 //! Obfuscation configuration types.
 
 use facet::Facet;
+use saluki_component_config::TraceObfuscationConfiguration as NativeTraceObfuscationConfiguration;
 use saluki_config::deserialize_space_separated_or_seq;
 use serde::Deserialize;
 
@@ -48,6 +49,57 @@ pub struct ObfuscationConfig {
     /// OpenSearch obfuscation settings.
     #[serde(flatten)]
     pub(crate) open_search: OpenSearchObfuscationConfig,
+}
+
+impl ObfuscationConfig {
+    /// Creates obfuscation settings from native component configuration.
+    pub fn from_native(native: &NativeTraceObfuscationConfiguration) -> Self {
+        Self {
+            credit_cards: CreditCardObfuscationConfig {
+                enabled: native.credit_cards_enabled(),
+                luhn: native.credit_cards_luhn(),
+                keep_values: native.credit_cards_keep_values().to_vec(),
+            },
+            http: HttpObfuscationConfig {
+                remove_query_string: native.http_remove_query_string(),
+                remove_path_digits: native.http_remove_paths_with_digits(),
+            },
+            memcached: MemcachedObfuscationConfig {
+                enabled: native.memcached_enabled(),
+                keep_command: native.memcached_keep_command(),
+            },
+            redis: RedisObfuscationConfig {
+                enabled: native.redis_enabled(),
+                remove_all_args: native.redis_remove_all_args(),
+            },
+            valkey: ValkeyObfuscationConfig {
+                enabled: native.valkey_enabled(),
+                remove_all_args: native.valkey_remove_all_args(),
+            },
+            sql: SqlObfuscationConfig {
+                dbms: native.sql_dbms().to_string(),
+                table_names: native.sql_table_names(),
+                replace_digits: native.sql_replace_digits(),
+                keep_sql_alias: native.sql_keep_sql_alias(),
+                dollar_quoted_func: native.sql_dollar_quoted_func(),
+            },
+            mongo: MongoObfuscationConfig {
+                enabled: native.mongodb_enabled(),
+                keep_values: native.mongodb_keep_values().to_vec(),
+                obfuscate_sql_values: native.mongodb_obfuscate_sql_values().to_vec(),
+            },
+            es: EsObfuscationConfig {
+                enabled: native.elasticsearch_enabled(),
+                keep_values: native.elasticsearch_keep_values().to_vec(),
+                obfuscate_sql_values: native.elasticsearch_obfuscate_sql_values().to_vec(),
+            },
+            open_search: OpenSearchObfuscationConfig {
+                enabled: native.opensearch_enabled(),
+                keep_values: native.opensearch_keep_values().to_vec(),
+                obfuscate_sql_values: native.opensearch_obfuscate_sql_values().to_vec(),
+            },
+        }
+    }
 }
 
 /// HTTP URL obfuscation configuration.

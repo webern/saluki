@@ -1,5 +1,6 @@
 //! Multi-region failover configuration.
 
+use saluki_component_config::MultiRegionFailoverConfiguration;
 use saluki_config::GenericConfiguration;
 use saluki_error::GenericError;
 
@@ -31,6 +32,18 @@ impl MrfConfiguration {
             site: get_non_empty_string(config, "multi_region_failover.site")?,
             dd_url: get_non_empty_string(config, "multi_region_failover.dd_url")?,
         })
+    }
+
+    /// Creates a new `MrfConfiguration` from native settings.
+    pub fn from_native(config: &MultiRegionFailoverConfiguration) -> Self {
+        Self {
+            enabled: config.enabled(),
+            failover_metrics: config.failover_metrics().current(),
+            metric_allowlist: config.metric_allowlist().current(),
+            api_key: config.api_key().map(ToString::to_string),
+            site: config.site().map(ToString::to_string),
+            dd_url: config.dd_url().map(ToString::to_string),
+        }
     }
 
     /// Returns whether multi-region failover is enabled for this process.

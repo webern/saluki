@@ -1,6 +1,11 @@
 use std::time::Duration;
 
 use facet::Facet;
+use saluki_component_config::{
+    DatadogForwarderConfiguration as NativeDatadogForwarderConfiguration,
+    DatadogForwarderHttpProtocol as NativeDatadogForwarderHttpProtocol,
+    DatadogOpwMetricsConfiguration as NativeDatadogOpwMetricsConfiguration,
+};
 use saluki_config::GenericConfiguration;
 use saluki_error::GenericError;
 use saluki_io::net::client::http::{HttpProtocol, TlsMinimumVersion};
@@ -88,6 +93,15 @@ pub enum ForwarderHttpProtocol {
     Http1,
 }
 
+impl From<NativeDatadogForwarderHttpProtocol> for ForwarderHttpProtocol {
+    fn from(protocol: NativeDatadogForwarderHttpProtocol) -> Self {
+        match protocol {
+            NativeDatadogForwarderHttpProtocol::Auto => Self::Auto,
+            NativeDatadogForwarderHttpProtocol::Http1 => Self::Http1,
+        }
+    }
+}
+
 impl From<ForwarderHttpProtocol> for HttpProtocol {
     fn from(protocol: ForwarderHttpProtocol) -> Self {
         match protocol {
@@ -137,6 +151,15 @@ struct SelectedOpwMetricsEndpoint<'a> {
 }
 
 impl OpwMetricsConfiguration {
+    fn from_native(native: &NativeDatadogOpwMetricsConfiguration) -> Self {
+        Self {
+            observability_pipelines_worker_enabled: native.observability_pipelines_worker_enabled(),
+            observability_pipelines_worker_url: native.observability_pipelines_worker_url().to_string(),
+            vector_enabled: native.vector_enabled(),
+            vector_url: native.vector_url().to_string(),
+        }
+    }
+
     fn selected_endpoint(&self) -> Option<SelectedOpwMetricsEndpoint<'_>> {
         if self.observability_pipelines_worker_enabled {
             return Some(SelectedOpwMetricsEndpoint {
@@ -282,6 +305,28 @@ pub struct ForwarderConfiguration {
 }
 
 impl ForwarderConfiguration {
+    /// Creates a new `ForwarderConfiguration` from native component configuration.
+    pub fn from_native(native: &NativeDatadogForwarderConfiguration) -> Self {
+        Self {
+            endpoint_concurrency: native.endpoint_concurrency(),
+            endpoint_concurrency_multiplier: native.endpoint_concurrency_multiplier(),
+            request_timeout_secs: native.request_timeout_secs(),
+            endpoint_buffer_size: native.endpoint_buffer_size(),
+            endpoint: EndpointConfiguration::from_native(native.endpoint()),
+            retry: RetryConfiguration::from_native(native.retry()),
+            proxy: native.proxy().map(ProxyConfiguration::from_native),
+            opw_metrics: OpwMetricsConfiguration::from_native(native.opw_metrics()),
+            http_protocol: native.http_protocol().into(),
+            connection_reset_interval_secs: native.connection_reset_interval_secs(),
+            skip_ssl_validation: native.skip_ssl_validation(),
+            sslkeylogfile: native.ssl_key_log_file_path().unwrap_or_default().to_string(),
+            min_tls_version: native.min_tls_version().to_string(),
+            parsed_min_tls_version: min_tls_version_from_config_value(native.min_tls_version()),
+            allow_arbitrary_tags: native.allow_arbitrary_tags(),
+            api_key_validation_interval_mins: native.api_key_validation_interval_mins() as i64,
+        }
+    }
+
     /// Creates a new `ForwarderConfiguration` from the given configuration.
     pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
         let mut forwarder_config = config.as_typed::<Self>()?;

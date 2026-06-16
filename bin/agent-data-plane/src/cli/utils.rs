@@ -1,3 +1,4 @@
+use agent_data_plane_config::DataPlaneConfiguration;
 use futures::TryFutureExt as _;
 use http::{header::CONTENT_TYPE, uri::PathAndQuery, Request, Response, StatusCode, Uri};
 use http_body_util::BodyExt as _;
@@ -8,12 +9,9 @@ use hyper::body::Bytes;
 use hyper::body::Incoming;
 #[cfg(target_os = "linux")]
 use prost::Message as _;
-use saluki_config::GenericConfiguration;
 use saluki_error::{generic_error, ErrorContext as _, GenericError};
 use saluki_io::net::{client::http::HttpClient, ListenAddress};
 use serde::{Deserialize, Serialize};
-
-use crate::config::DataPlaneConfiguration;
 
 /// Typed API client for interacting with the APIs exposed by ADP.
 pub struct DataPlaneAPIClient {
@@ -41,16 +39,13 @@ struct DogStatsDReplaySessionResponseBody {
 }
 
 impl DataPlaneAPIClient {
-    /// Creates a new `DataPlaneAPIClient` from the given generic configuration.
+    /// Creates a new `DataPlaneAPIClient` from native data-plane configuration.
     ///
     /// # Errors
     ///
-    /// If the data plane configuration can't be deserialized, or the data plane API endpoints can't be
-    /// determined, an error will be returned.
-    pub fn from_config(config: &GenericConfiguration) -> Result<Self, GenericError> {
-        let dp_config = DataPlaneConfiguration::from_configuration(config)?;
-
-        let listen_address = dp_config.secure_api_listen_address();
+    /// If the privileged API endpoint can't be used for local client connections, an error is returned.
+    pub fn from_data_plane_config(config: &DataPlaneConfiguration) -> Result<Self, GenericError> {
+        let listen_address = config.secure_api_listen_address().clone();
 
         let builder = HttpClient::builder().with_tls_config(|b| b.danger_accept_invalid_certs());
 

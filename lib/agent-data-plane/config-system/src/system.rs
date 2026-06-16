@@ -13,7 +13,7 @@ use datadog_agent_config::{
     classifier::{ConfigClassifier, Pipeline, PipelineAffinity, Severity, SupportLevel},
     DatadogConfiguration, DatadogRemapper, KEY_ALIASES,
 };
-use saluki_config::{ConfigurationLoader, GenericConfiguration};
+use saluki_config::{ConfigurationLoader, DurationString, GenericConfiguration};
 use saluki_error::{generic_error, ErrorContext as _, GenericError};
 use saluki_io::net::{GrpcTargetAddress, ListenAddress};
 use tracing::{debug, error, info, trace, warn};
@@ -243,6 +243,11 @@ fn translate_datadog_snapshot(config: &GenericConfiguration) -> Result<SalukiCon
         config
             .try_get_typed("hostname")
             .error_context("Failed to read `hostname`.")?
+            .unwrap_or_default(),
+        config
+            .try_get_typed::<DurationString>("expected_tags_duration")
+            .error_context("Failed to read `expected_tags_duration`.")?
+            .map(|ds| ds.as_duration())
             .unwrap_or_default(),
     );
 

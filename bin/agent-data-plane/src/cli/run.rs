@@ -248,7 +248,7 @@ async fn create_topology(
     }
 
     if dp_config.metrics_pipeline_required() {
-        add_baseline_metrics_pipeline_to_blueprint(&mut blueprint, config, dp_config, env_provider).await?;
+        add_baseline_metrics_pipeline_to_blueprint(&mut blueprint, config, saluki_config, env_provider).await?;
     }
 
     if dp_config.logs_pipeline_required() {
@@ -300,7 +300,7 @@ async fn add_checks_pipeline_to_blueprint(
 }
 
 async fn add_baseline_metrics_pipeline_to_blueprint(
-    blueprint: &mut TopologyBlueprint, config: &GenericConfiguration, dp_config: &DataPlaneConfiguration,
+    blueprint: &mut TopologyBlueprint, config: &GenericConfiguration, saluki_config: &SalukiConfiguration,
     env_provider: &ADPEnvironmentProvider,
 ) -> Result<(), GenericError> {
     // Create the back half of the metrics processing pipeline.
@@ -308,8 +308,9 @@ async fn add_baseline_metrics_pipeline_to_blueprint(
     let mut metrics_enrich_config =
         ChainedConfiguration::default().with_transform_builder("host_enrichment", host_enrichment_config);
 
-    if !dp_config.standalone_mode() {
-        let host_tags_config = HostTagsConfiguration::from_configuration(config).await?;
+    if let Some(client) = env_provider.datadog_agent_client() {
+        let host_tags_config =
+            HostTagsConfiguration::from_client(client, saluki_config.environment.host_tags_expected_tags_duration());
         metrics_enrich_config = metrics_enrich_config.with_transform_builder("host_tags", host_tags_config);
     }
 

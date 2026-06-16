@@ -1,5 +1,7 @@
 //! ADP-native runtime configuration.
 
+use std::time::Duration;
+
 use saluki_component_config::{
     ChecksIpcConfiguration, DatadogEventsEncoderConfiguration, DatadogLogsEncoderConfiguration,
     DatadogServiceChecksEncoderConfiguration, OtlpPipelineConfiguration, PipelineConfiguration,
@@ -32,17 +34,26 @@ pub struct SalukiConfiguration {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EnvironmentConfiguration {
     hostname: String,
+    host_tags_expected_tags_duration: Duration,
 }
 
 impl EnvironmentConfiguration {
     /// Creates native runtime environment settings.
-    pub fn new(hostname: String) -> Self {
-        Self { hostname }
+    pub fn new(hostname: String, host_tags_expected_tags_duration: Duration) -> Self {
+        Self {
+            hostname,
+            host_tags_expected_tags_duration,
+        }
     }
 
     /// Returns the configured fixed hostname.
     pub fn hostname(&self) -> &str {
         &self.hostname
+    }
+
+    /// Returns how long startup host tags should be added to metrics.
+    pub const fn host_tags_expected_tags_duration(&self) -> Duration {
+        self.host_tags_expected_tags_duration
     }
 }
 

@@ -90,20 +90,40 @@ Native now:
 - **OTLP proxy**: the config system reads `data_plane.otlp.proxy.*` into the native `OtlpProxyConfig`.
 - **Host tags**: disabled native stub (pending the shared connection).
 
-### Transitional remainder — the raw-config shell in `cli/runtime_setup.rs`
+### Now native too — environment provider and control plane
 
-The only remaining holder of `GenericConfiguration` in the run path is `RuntimeShell` in
-`cli/runtime_setup.rs`. It is the honest gap to a *no-concessions* GenericConfiguration-free binary:
+The env/IPC/control-plane shell was subsequently made native:
 
-- **Bootstrap/authority resolution** (`DataPlaneConfiguration::from_configuration`, the
-  `RemoteAgentBootstrap` + dynamic-config-stream dance). Replaced in the end state by
-  `ConfigurationSystem::start()`.
-- **Environment provider** (host/workload/autodiscovery) and **internal supervisor** (`ConfigWorker`,
-  `DynamicLogLevelWorker`, `IpcAuthConfiguration` + server TLS). The workload collectors
-  (tagger/workloadmeta, plus containerd/cgroups/feature-detector/PID-resolver) each construct their
-  own IPC client and read config pervasively — routing them through the shared
-  `DatadogAgentConnection` is the design's open question and a genuine `saluki-env`/`saluki-app`
-  rewrite.
+- **Environment provider** (`ADPEnvironmentProvider::from_saluki`): host/autodiscovery/tagger/
+  workloadmeta reuse the shared `RemoteAgentClient` (`RemoteAgentBootstrap::client()`, the D1
+  decision); the containerd/cgroups collectors, `FeatureDetector`, and `OnDemandPIDResolver` gained
+  native constructors in `saluki-env`. Workload knobs flow via `SalukiPrivateConfiguration.workload`
+  → `SalukiConfiguration.workload`.
+- **Control plane**: `ConfigWorker` serves a resolved snapshot `Value`; the log-level worker holds no
+  raw map; server TLS uses a native IPC cert path; standalone uses `FixedHostProvider::from_hostname`.
+
+`RuntimeShell` stores **no** `GenericConfiguration`; `build_environment` and
+`build_internal_supervisor` are native.
+
+### The single remaining `GenericConfiguration` use: `RuntimeShell::resolve`
+
+The only remaining use in the run path is the bootstrap loader, `RuntimeShell::resolve` — it loads
+local/stream sources into a `GenericConfiguration`, translates to `SalukiConfiguration`, and extracts
+the control-plane snapshot + IPC cert path natively before dropping the raw config. Loading raw
+sources inherently uses `GenericConfiguration`; the design says that loading belongs in
+`config-system` (`ConfigurationSystem::start()`).
+
+Final step to absolute zero (a single, self-contained bootstrap restructure):
+
+- Switch `resolve` to call `ConfigurationSystem::start(BootstrapInputs, service_names)` so
+  config-system owns the raw loading. This needs `start()`'s ConfigStream path to populate
+  memory/OTLP-proxy/workload from the snapshot `Value` (it currently does so only on the local path,
+  via `translate_from_generic`), and to return the snapshot `Value` + IPC params.
+- Replace the bin-local `RemoteAgentBootstrap` with the config-system's `DatadogAgentConnection`: the
+  Remote Agent service split — build the status/flare/telemetry services from the connection's
+  session + shared metrics.
+- Map `RuntimeLoggingConfig` → the logging stack's `LoggingConfiguration` for the reload, and have
+  `main.rs` pass `BootstrapInputs`.
 
 (`main.rs` also reads local sources for the bootstrap phase — logging/metrics via `AppBootstrapper` —
 which the design's bootstrap phase explicitly permits.)

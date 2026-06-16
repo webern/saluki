@@ -52,6 +52,11 @@ impl ConfigurationSystem {
         start_from_local_datadog_sources(local, &self.inputs).await
     }
 
+    /// Loads Datadog-shaped local bootstrap sources for callers that need bootstrap-phase setup.
+    pub async fn load_local_datadog_sources(inputs: &BootstrapInputs) -> Result<GenericConfiguration, GenericError> {
+        load_local_datadog_sources(inputs).await
+    }
+
     /// Translates bootstrap decisions from an already loaded local Datadog-shaped bootstrap snapshot.
     pub fn translate_local_datadog_bootstrap(
         config: &GenericConfiguration,

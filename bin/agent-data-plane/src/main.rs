@@ -15,10 +15,9 @@ use agent_data_plane_config_system::{BootstrapInputs, ConfigurationSystem, Loggi
 #[cfg(feature = "antithesis")]
 use antithesis_instrumentation as _;
 use datadog_agent_commons::platform::PlatformSettings;
-use datadog_agent_config::{DatadogRemapper, KEY_ALIASES};
 use metrics::Level;
 use saluki_app::bootstrap::{AppBootstrapper, Bootstrap, BootstrapGuard};
-use saluki_config::{ConfigurationLoader, GenericConfiguration};
+use saluki_config::GenericConfiguration;
 use saluki_core::runtime::Supervisor;
 use saluki_error::{generic_error, ErrorContext as _, GenericError};
 use tracing::{error, info, warn};
@@ -64,14 +63,9 @@ async fn main() -> Result<(), GenericError> {
     let bootstrap_config_path = cli.config_file.unwrap_or_else(PlatformSettings::get_config_file_path);
     let env_var_prefix = PlatformSettings::get_env_var_prefix();
     let bootstrap_inputs = BootstrapInputs::new(bootstrap_config_path.clone(), env_var_prefix);
-    let bootstrap_config = ConfigurationLoader::default()
-        .with_key_aliases(KEY_ALIASES)
-        .from_yaml(&bootstrap_config_path)
-        .error_context("Failed to load Datadog Agent configuration file during bootstrap.")?
-        .add_providers([DatadogRemapper::new()])
-        .from_environment(env_var_prefix)
-        .error_context("Environment variable prefix should not be empty.")?
-        .bootstrap_generic();
+    let bootstrap_config = ConfigurationSystem::load_local_datadog_sources(&bootstrap_inputs)
+        .await
+        .error_context("Failed to load Datadog Agent configuration during bootstrap.")?;
 
     // Translate the bootstrap configuration into ADP's logging configuration, applying ADP-specific rules
     // (per-subagent log file key, never sharing a file with the Core Agent).

@@ -3,13 +3,13 @@
 use std::{path::PathBuf, time::Duration};
 
 use saluki_component_config::{
-    AggregateConfiguration, ChecksIpcConfiguration, DatadogApmStatsEncoderConfiguration,
-    DatadogEventsEncoderConfiguration, DatadogLogsEncoderConfiguration, DatadogMetricsEncoderConfiguration,
-    DatadogServiceChecksEncoderConfiguration, DogStatsDDebugLogConfiguration, DogStatsDMapperConfiguration,
-    DogStatsDPostAggregateFilterConfiguration, DogStatsDPrefixFilterConfiguration, MultiRegionFailoverConfiguration,
-    OtlpForwarderConfiguration, OtlpPipelineConfiguration, OtlpReceiverConfiguration, OtlpSourceConfiguration,
-    OtlpTracesConfiguration, OttlFilterConfiguration, OttlTransformConfiguration, PipelineConfiguration,
-    TagFilterlistConfiguration,
+    AggregateConfiguration, ApmStatsTransformConfiguration, ChecksIpcConfiguration,
+    DatadogApmStatsEncoderConfiguration, DatadogEventsEncoderConfiguration, DatadogLogsEncoderConfiguration,
+    DatadogMetricsEncoderConfiguration, DatadogServiceChecksEncoderConfiguration, DogStatsDDebugLogConfiguration,
+    DogStatsDMapperConfiguration, DogStatsDPostAggregateFilterConfiguration, DogStatsDPrefixFilterConfiguration,
+    MultiRegionFailoverConfiguration, OtlpForwarderConfiguration, OtlpPipelineConfiguration, OtlpReceiverConfiguration,
+    OtlpSourceConfiguration, OtlpTracesConfiguration, OttlFilterConfiguration, OttlTransformConfiguration,
+    PipelineConfiguration, TagFilterlistConfiguration, TraceSamplerConfiguration,
 };
 use saluki_io::net::ListenAddress;
 
@@ -45,6 +45,12 @@ pub struct SalukiConfiguration {
 
     /// Datadog APM stats encoder settings.
     pub datadog_apm_stats_encoder: DatadogApmStatsEncoderConfiguration,
+
+    /// APM stats transform settings.
+    pub apm_stats_transform: ApmStatsTransformConfiguration,
+
+    /// Trace sampler settings.
+    pub trace_sampler: TraceSamplerConfiguration,
 
     /// Multi-region failover settings.
     pub multi_region_failover: MultiRegionFailoverConfiguration,

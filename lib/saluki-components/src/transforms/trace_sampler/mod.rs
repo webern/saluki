@@ -15,6 +15,7 @@
 use async_trait::async_trait;
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
 use saluki_common::collections::FastHashMap;
+use saluki_component_config::TraceSamplerConfiguration as NativeTraceSamplerConfiguration;
 use saluki_config::GenericConfiguration;
 use saluki_core::{
     components::{transforms::*, ComponentContext},
@@ -68,7 +69,17 @@ fn normalize_sampling_rate(rate: f64) -> f64 {
 /// Configuration for the trace sampler transform.
 #[derive(Debug)]
 pub struct TraceSamplerConfiguration {
-    apm_config: ApmConfig,
+    target_traces_per_second: f64,
+    errors_per_second: f64,
+    probabilistic_sampler_enabled: bool,
+    probabilistic_sampler_sampling_percentage: f64,
+    error_sampling_enabled: bool,
+    error_tracking_standalone_enabled: bool,
+    rare_sampler_enabled: bool,
+    rare_sampler_tps: f64,
+    rare_sampler_cooldown_period_secs: f64,
+    rare_sampler_cardinality: usize,
+    default_env: MetaString,
     otlp_sampling_rate: f64,
 }
 
@@ -78,10 +89,42 @@ impl TraceSamplerConfiguration {
         let apm_config = ApmConfig::from_configuration(config)?;
         let otlp_traces: TracesConfig = config.try_get_typed("otlp_config.traces")?.unwrap_or_default();
         let otlp_sampling_rate = normalize_sampling_rate(otlp_traces.probabilistic_sampler.sampling_percentage / 100.0);
-        Ok(Self {
-            apm_config,
+        Ok(Self::from_parts(apm_config, otlp_sampling_rate))
+    }
+
+    /// Creates a new `TraceSamplerConfiguration` from native settings.
+    pub fn from_native(config: &NativeTraceSamplerConfiguration) -> Self {
+        Self {
+            target_traces_per_second: config.target_traces_per_second(),
+            errors_per_second: config.errors_per_second(),
+            probabilistic_sampler_enabled: config.probabilistic_sampler_enabled(),
+            probabilistic_sampler_sampling_percentage: config.probabilistic_sampler_sampling_percentage(),
+            error_sampling_enabled: config.error_sampling_enabled(),
+            error_tracking_standalone_enabled: config.error_tracking_standalone_enabled(),
+            rare_sampler_enabled: config.rare_sampler_enabled(),
+            rare_sampler_tps: config.rare_sampler_tps(),
+            rare_sampler_cooldown_period_secs: config.rare_sampler_cooldown_period_secs(),
+            rare_sampler_cardinality: config.rare_sampler_cardinality(),
+            default_env: MetaString::from(config.default_env()),
+            otlp_sampling_rate: config.otlp_sampling_rate(),
+        }
+    }
+
+    fn from_parts(apm_config: ApmConfig, otlp_sampling_rate: f64) -> Self {
+        Self {
+            target_traces_per_second: apm_config.target_traces_per_second(),
+            errors_per_second: apm_config.errors_per_second(),
+            probabilistic_sampler_enabled: apm_config.probabilistic_sampler_enabled(),
+            probabilistic_sampler_sampling_percentage: apm_config.probabilistic_sampler_sampling_percentage(),
+            error_sampling_enabled: apm_config.error_sampling_enabled(),
+            error_tracking_standalone_enabled: apm_config.error_tracking_standalone_enabled(),
+            rare_sampler_enabled: apm_config.rare_sampler_enabled(),
+            rare_sampler_tps: apm_config.rare_sampler_tps(),
+            rare_sampler_cooldown_period_secs: apm_config.rare_sampler_cooldown_period_secs(),
+            rare_sampler_cardinality: apm_config.rare_sampler_cardinality(),
+            default_env: apm_config.default_env().clone(),
             otlp_sampling_rate,
-        })
+        }
     }
 }
 
@@ -91,26 +134,26 @@ impl SynchronousTransformBuilder for TraceSamplerConfiguration {
         // TODO: Need to support remote configuration changing these at runtime
         // See https://github.com/DataDog/saluki/issues/1326
         let sampler = TraceSampler {
-            sampling_rate: self.apm_config.probabilistic_sampler_sampling_percentage() / 100.0,
-            error_sampling_enabled: self.apm_config.error_sampling_enabled(),
-            error_tracking_standalone: self.apm_config.error_tracking_standalone_enabled(),
-            probabilistic_sampler_enabled: self.apm_config.probabilistic_sampler_enabled(),
+            sampling_rate: self.probabilistic_sampler_sampling_percentage / 100.0,
+            error_sampling_enabled: self.error_sampling_enabled,
+            error_tracking_standalone: self.error_tracking_standalone_enabled,
+            probabilistic_sampler_enabled: self.probabilistic_sampler_enabled,
             otlp_sampling_rate: self.otlp_sampling_rate,
-            error_sampler: errors::ErrorsSampler::new(self.apm_config.errors_per_second(), ERROR_SAMPLE_RATE),
+            error_sampler: errors::ErrorsSampler::new(self.errors_per_second, ERROR_SAMPLE_RATE),
             priority_sampler: priority_sampler::PrioritySampler::new(
-                self.apm_config.default_env().clone(),
+                self.default_env.clone(),
                 ERROR_SAMPLE_RATE,
-                self.apm_config.target_traces_per_second(),
+                self.target_traces_per_second,
             ),
             no_priority_sampler: score_sampler::NoPrioritySampler::new(
-                self.apm_config.target_traces_per_second(),
+                self.target_traces_per_second,
                 ERROR_SAMPLE_RATE,
             ),
             rare_sampler: rare_sampler::RareSampler::new(
-                self.apm_config.rare_sampler_enabled(),
-                self.apm_config.rare_sampler_tps(),
-                std::time::Duration::from_secs_f64(self.apm_config.rare_sampler_cooldown_period_secs()),
-                self.apm_config.rare_sampler_cardinality(),
+                self.rare_sampler_enabled,
+                self.rare_sampler_tps,
+                std::time::Duration::from_secs_f64(self.rare_sampler_cooldown_period_secs),
+                self.rare_sampler_cardinality,
             ),
         };
 

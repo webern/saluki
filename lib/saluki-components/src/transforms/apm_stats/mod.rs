@@ -9,6 +9,7 @@ use std::{
 
 use async_trait::async_trait;
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
+use saluki_component_config::ApmStatsTransformConfiguration as NativeApmStatsTransformConfiguration;
 use saluki_config::GenericConfiguration;
 use saluki_context::{origin::OriginTagCardinality, tags::TagSet};
 use saluki_core::{
@@ -55,7 +56,11 @@ const MAX_STATS_GROUPS_PER_EVENT: usize = 4000;
 /// Aggregates incoming `Trace` events into time-bucketed statistics, emitting
 /// `TraceStats` events.
 pub struct ApmStatsTransformConfiguration {
-    apm_config: ApmConfig,
+    compute_stats_by_span_kind: bool,
+    peer_tags_aggregation: bool,
+    peer_tags: Vec<MetaString>,
+    default_env: MetaString,
+    hostname: MetaString,
     default_hostname: Option<String>,
     workload_provider: Option<Arc<dyn WorkloadProvider + Send + Sync>>,
 }
@@ -64,11 +69,36 @@ impl ApmStatsTransformConfiguration {
     /// Creates a new `ApmStatsTransformConfiguration` from the given configuration.
     pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
         let apm_config = ApmConfig::from_configuration(config)?;
-        Ok(Self {
-            apm_config,
+        Ok(Self::from_apm_config(apm_config))
+    }
+
+    /// Creates a new `ApmStatsTransformConfiguration` from native settings.
+    pub fn from_native(config: &NativeApmStatsTransformConfiguration) -> Self {
+        Self {
+            compute_stats_by_span_kind: config.compute_stats_by_span_kind(),
+            peer_tags_aggregation: config.peer_tags_aggregation(),
+            peer_tags: config
+                .peer_tags()
+                .iter()
+                .map(|tag| MetaString::from(tag.as_str()))
+                .collect(),
+            default_env: MetaString::from(config.default_env()),
+            hostname: MetaString::from(config.hostname()),
             default_hostname: None,
             workload_provider: None,
-        })
+        }
+    }
+
+    fn from_apm_config(apm_config: ApmConfig) -> Self {
+        Self {
+            compute_stats_by_span_kind: apm_config.compute_stats_by_span_kind(),
+            peer_tags_aggregation: apm_config.peer_tags_aggregation(),
+            peer_tags: apm_config.peer_tags().to_vec(),
+            default_env: apm_config.default_env().clone(),
+            hostname: apm_config.hostname().clone(),
+            default_hostname: None,
+            workload_provider: None,
+        }
     }
 
     /// Sets the default hostname using the environment provider.
@@ -96,24 +126,25 @@ impl ApmStatsTransformConfiguration {
 #[async_trait]
 impl TransformBuilder for ApmStatsTransformConfiguration {
     async fn build(&self, _context: ComponentContext) -> Result<Box<dyn Transform + Send>, GenericError> {
-        let mut apm_config = self.apm_config.clone();
-
-        if let Some(hostname) = &self.default_hostname {
-            apm_config.set_hostname_if_empty(hostname.as_str());
+        let mut hostname = self.hostname.clone();
+        if hostname.is_empty() {
+            if let Some(default_hostname) = &self.default_hostname {
+                hostname = MetaString::from(default_hostname.as_str());
+            }
         }
 
         let concentrator = SpanConcentrator::new(
-            apm_config.compute_stats_by_span_kind(),
-            apm_config.peer_tags_aggregation(),
-            apm_config.peer_tags(),
+            self.compute_stats_by_span_kind,
+            self.peer_tags_aggregation,
+            &self.peer_tags,
             now_nanos(),
         );
 
         Ok(Box::new(ApmStats {
             concentrator,
             flush_interval: DEFAULT_FLUSH_INTERVAL,
-            agent_env: apm_config.default_env().clone(),
-            agent_hostname: apm_config.hostname().clone(),
+            agent_env: self.default_env.clone(),
+            agent_hostname: hostname,
             workload_provider: self.workload_provider.clone(),
         }))
     }

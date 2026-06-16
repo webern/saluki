@@ -22,8 +22,8 @@ use saluki_components::{
     relays::otlp::OtlpRelayConfiguration,
     sources::{ChecksIPCConfiguration, OtlpConfiguration},
     transforms::{
-        AggregateConfiguration, ChainedConfiguration, DogStatsDMapperConfiguration, HostEnrichmentConfiguration,
-        MrfMetricsGatewayConfiguration,
+        AggregateConfiguration, ApmStatsTransformConfiguration, ChainedConfiguration, DogStatsDMapperConfiguration,
+        HostEnrichmentConfiguration, MrfMetricsGatewayConfiguration, TraceSamplerConfiguration,
     },
 };
 use saluki_core::health::HealthRegistry;
@@ -415,7 +415,7 @@ async fn add_baseline_traces_pipeline_to_blueprint(
         .with_environment_provider(env_provider.clone())
         .await?;
     let trace_obfuscation_config = runtime_config.trace_obfuscation_configuration()?;
-    let trace_sampler_config = runtime_config.trace_sampler_configuration()?;
+    let trace_sampler_config = TraceSamplerConfiguration::from_native(&saluki_config.trace_sampler);
     let ottl_filter_config = OttlFilterConfiguration::from_native(&saluki_config.ottl_filter);
     let ottl_transform_config = OttlTransformConfiguration::from_native(&saluki_config.ottl_transform);
     let dd_traces_enrich_config = ChainedConfiguration::default()
@@ -424,8 +424,7 @@ async fn add_baseline_traces_pipeline_to_blueprint(
         .with_transform_builder("apm_onboarding", ApmOnboardingConfiguration)
         .with_transform_builder("trace_obfuscation", trace_obfuscation_config)
         .with_transform_builder("trace_sampler", trace_sampler_config);
-    let apm_stats_transform_config = runtime_config
-        .apm_stats_transform_configuration()?
+    let apm_stats_transform_config = ApmStatsTransformConfiguration::from_native(&saluki_config.apm_stats_transform)
         .with_environment_provider(env_provider.clone())
         .await?;
     let dd_apm_stats_encoder =

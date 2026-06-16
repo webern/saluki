@@ -9,17 +9,18 @@ use std::{
 };
 
 use agent_data_plane_config::{
-    AggregateConfiguration, BootstrapConfiguration, BootstrapStartupConfiguration, BootstrapTelemetryConfiguration,
-    ChecksIpcConfiguration, ConfigStreamAuthority, ControlPlaneConfiguration, DataPlaneConfiguration,
-    DatadogApmStatsEncoderConfiguration, DatadogEventsEncoderConfiguration, DatadogLogsEncoderConfiguration,
-    DatadogMetricsEncoderConfiguration, DatadogServiceChecksEncoderConfiguration, DogStatsDCliConfiguration,
-    DogStatsDDebugLogConfiguration, DogStatsDMapperConfiguration, DogStatsDMapperProfileConfiguration,
-    DogStatsDMetricMappingConfiguration, DogStatsDPostAggregateFilterConfiguration, DogStatsDPrefixFilterConfiguration,
-    DynamicValue, EnvironmentConfiguration, MetricTagFilterAction, MetricTagFilterEntry,
-    MultiRegionFailoverConfiguration, OtlpForwarderConfiguration, OtlpPipelineConfiguration, OtlpProxyConfiguration,
-    OtlpReceiverConfiguration, OtlpSourceConfiguration, OtlpTracesConfiguration, OttlErrorMode,
-    OttlFilterConfiguration, OttlTransformConfiguration, PipelineConfiguration, RuntimeConfigAuthority,
-    RuntimeConfigLanguage, SalukiConfiguration, TagFilterlistConfiguration,
+    AggregateConfiguration, ApmStatsTransformConfiguration, BootstrapConfiguration, BootstrapStartupConfiguration,
+    BootstrapTelemetryConfiguration, ChecksIpcConfiguration, ConfigStreamAuthority, ControlPlaneConfiguration,
+    DataPlaneConfiguration, DatadogApmStatsEncoderConfiguration, DatadogEventsEncoderConfiguration,
+    DatadogLogsEncoderConfiguration, DatadogMetricsEncoderConfiguration, DatadogServiceChecksEncoderConfiguration,
+    DogStatsDCliConfiguration, DogStatsDDebugLogConfiguration, DogStatsDMapperConfiguration,
+    DogStatsDMapperProfileConfiguration, DogStatsDMetricMappingConfiguration,
+    DogStatsDPostAggregateFilterConfiguration, DogStatsDPrefixFilterConfiguration, DynamicValue,
+    EnvironmentConfiguration, MetricTagFilterAction, MetricTagFilterEntry, MultiRegionFailoverConfiguration,
+    OtlpForwarderConfiguration, OtlpPipelineConfiguration, OtlpProxyConfiguration, OtlpReceiverConfiguration,
+    OtlpSourceConfiguration, OtlpTracesConfiguration, OttlErrorMode, OttlFilterConfiguration,
+    OttlTransformConfiguration, PipelineConfiguration, RuntimeConfigAuthority, RuntimeConfigLanguage,
+    SalukiConfiguration, TagFilterlistConfiguration, TraceSamplerConfiguration,
 };
 use bytesize::ByteSize;
 use datadog_agent_commons::{
@@ -858,6 +859,139 @@ fn translate_dogstatsd_mapper_configuration(
     ))
 }
 
+const fn default_target_traces_per_second() -> f64 {
+    10.0
+}
+
+const fn default_errors_per_second() -> f64 {
+    10.0
+}
+
+const fn default_sampling_percentage() -> f64 {
+    100.0
+}
+
+const fn default_error_sampling_enabled() -> bool {
+    true
+}
+
+const fn default_compute_stats_by_span_kind() -> bool {
+    true
+}
+
+const fn default_peer_tags_aggregation() -> bool {
+    true
+}
+
+fn default_trace_env() -> String {
+    "none".to_string()
+}
+
+const fn default_rare_sampler_tps() -> f64 {
+    5.0
+}
+
+const fn default_rare_sampler_cooldown_secs() -> f64 {
+    300.0
+}
+
+const fn default_rare_sampler_cardinality() -> usize {
+    200
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct SourceProbabilisticSamplerConfiguration {
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default = "default_sampling_percentage")]
+    sampling_percentage: f64,
+}
+
+impl Default for SourceProbabilisticSamplerConfiguration {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            sampling_percentage: default_sampling_percentage(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct SourceRareSamplerConfiguration {
+    #[serde(default = "default_rare_sampler_tps")]
+    tps: f64,
+    #[serde(default = "default_rare_sampler_cooldown_secs")]
+    cooldown: f64,
+    #[serde(default = "default_rare_sampler_cardinality")]
+    cardinality: usize,
+}
+
+impl Default for SourceRareSamplerConfiguration {
+    fn default() -> Self {
+        Self {
+            tps: default_rare_sampler_tps(),
+            cooldown: default_rare_sampler_cooldown_secs(),
+            cardinality: default_rare_sampler_cardinality(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct SourceApmConfigurationSection {
+    #[serde(default = "default_target_traces_per_second")]
+    target_traces_per_second: f64,
+    #[serde(default = "default_errors_per_second")]
+    errors_per_second: f64,
+    #[serde(default)]
+    probabilistic_sampler: SourceProbabilisticSamplerConfiguration,
+    #[serde(default = "default_error_sampling_enabled")]
+    error_sampling_enabled: bool,
+    #[serde(default = "default_compute_stats_by_span_kind")]
+    compute_stats_by_span_kind: bool,
+    #[serde(default = "default_peer_tags_aggregation")]
+    peer_tags_aggregation: bool,
+    #[serde(default)]
+    peer_tags: Vec<String>,
+    #[serde(default = "default_trace_env")]
+    default_env: String,
+    #[serde(default)]
+    rare_sampler: SourceRareSamplerConfiguration,
+}
+
+impl Default for SourceApmConfigurationSection {
+    fn default() -> Self {
+        Self {
+            target_traces_per_second: default_target_traces_per_second(),
+            errors_per_second: default_errors_per_second(),
+            probabilistic_sampler: SourceProbabilisticSamplerConfiguration::default(),
+            error_sampling_enabled: default_error_sampling_enabled(),
+            compute_stats_by_span_kind: default_compute_stats_by_span_kind(),
+            peer_tags_aggregation: default_peer_tags_aggregation(),
+            peer_tags: Vec::new(),
+            default_env: default_trace_env(),
+            rare_sampler: SourceRareSamplerConfiguration::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+struct SourceApmConfiguration {
+    #[serde(default)]
+    apm_config: SourceApmConfigurationSection,
+    #[serde(default, rename = "apm_enable_rare_sampler")]
+    enable_rare_sampler: bool,
+    #[serde(default, rename = "apm_error_tracking_standalone_enabled")]
+    error_tracking_standalone_enabled: bool,
+}
+
+fn normalize_sampling_rate(rate: f64) -> f64 {
+    if rate <= 0.0 || rate >= 1.0 {
+        1.0
+    } else {
+        rate
+    }
+}
+
 fn get_non_empty_string(config: &GenericConfiguration, key: &'static str) -> Result<Option<String>, GenericError> {
     Ok(config
         .try_get_typed::<String>(key)
@@ -888,6 +1022,45 @@ fn translate_multi_region_failover_configuration(
         get_non_empty_string(config, "multi_region_failover.api_key")?,
         get_non_empty_string(config, "multi_region_failover.site")?,
         get_non_empty_string(config, "multi_region_failover.dd_url")?,
+    ))
+}
+
+fn translate_apm_stats_transform_configuration(
+    config: &GenericConfiguration,
+) -> Result<ApmStatsTransformConfiguration, GenericError> {
+    let source = config
+        .as_typed::<SourceApmConfiguration>()
+        .error_context("Failed to parse APM stats transform configuration.")?;
+    Ok(ApmStatsTransformConfiguration::new(
+        source.apm_config.compute_stats_by_span_kind,
+        source.apm_config.peer_tags_aggregation,
+        source.apm_config.peer_tags,
+        source.apm_config.default_env,
+        String::new(),
+    ))
+}
+
+fn translate_trace_sampler_configuration(
+    config: &GenericConfiguration,
+) -> Result<TraceSamplerConfiguration, GenericError> {
+    let source = config
+        .as_typed::<SourceApmConfiguration>()
+        .error_context("Failed to parse trace sampler configuration.")?;
+    let otlp_sampling_rate = normalize_sampling_rate(read_otlp_trace_sampling_percentage(config)? / 100.0);
+
+    Ok(TraceSamplerConfiguration::new(
+        source.apm_config.target_traces_per_second,
+        source.apm_config.errors_per_second,
+        source.apm_config.probabilistic_sampler.enabled,
+        source.apm_config.probabilistic_sampler.sampling_percentage,
+        source.apm_config.error_sampling_enabled,
+        source.error_tracking_standalone_enabled,
+        source.enable_rare_sampler,
+        source.apm_config.rare_sampler.tps,
+        source.apm_config.rare_sampler.cooldown,
+        source.apm_config.rare_sampler.cardinality,
+        source.apm_config.default_env,
+        otlp_sampling_rate,
     ))
 }
 
@@ -1076,6 +1249,8 @@ fn translate_datadog_snapshot(config: &GenericConfiguration) -> Result<SalukiCon
         source.log_payloads,
     );
     let datadog_apm_stats_encoder = translate_datadog_apm_stats_encoder_configuration(config)?;
+    let apm_stats_transform = translate_apm_stats_transform_configuration(config)?;
+    let trace_sampler = translate_trace_sampler_configuration(config)?;
     let multi_region_failover = translate_multi_region_failover_configuration(config)?;
     let dogstatsd_prefix_filter = translate_dogstatsd_prefix_filter_configuration(config)?;
     let dogstatsd_mapper = translate_dogstatsd_mapper_configuration(config)?;
@@ -1113,6 +1288,8 @@ fn translate_datadog_snapshot(config: &GenericConfiguration) -> Result<SalukiCon
         datadog_events_encoder,
         datadog_service_checks_encoder,
         datadog_apm_stats_encoder,
+        apm_stats_transform,
+        trace_sampler,
         multi_region_failover,
         dogstatsd_prefix_filter,
         dogstatsd_mapper,

@@ -22,14 +22,15 @@ pub use cli::DogStatsDCliConfiguration;
 pub use private::SalukiPrivateConfiguration;
 pub use saluki::{ControlPlaneConfiguration, DataPlaneConfiguration, EnvironmentConfiguration, SalukiConfiguration};
 pub use saluki_component_config::{
-    AggregateConfiguration, ChecksIpcConfiguration, DatadogApmStatsEncoderConfiguration,
-    DatadogEventsEncoderConfiguration, DatadogLogsEncoderConfiguration, DatadogMetricsEncoderConfiguration,
-    DatadogServiceChecksEncoderConfiguration, DogStatsDDebugLogConfiguration, DogStatsDMapperConfiguration,
-    DogStatsDMapperProfileConfiguration, DogStatsDMetricMappingConfiguration,
+    AggregateConfiguration, ApmStatsTransformConfiguration, ChecksIpcConfiguration,
+    DatadogApmStatsEncoderConfiguration, DatadogEventsEncoderConfiguration, DatadogLogsEncoderConfiguration,
+    DatadogMetricsEncoderConfiguration, DatadogServiceChecksEncoderConfiguration, DogStatsDDebugLogConfiguration,
+    DogStatsDMapperConfiguration, DogStatsDMapperProfileConfiguration, DogStatsDMetricMappingConfiguration,
     DogStatsDPostAggregateFilterConfiguration, DogStatsDPrefixFilterConfiguration, DynamicValue, MetricTagFilterAction,
     MetricTagFilterEntry, MultiRegionFailoverConfiguration, OtlpForwarderConfiguration, OtlpPipelineConfiguration,
     OtlpProxyConfiguration, OtlpReceiverConfiguration, OtlpSourceConfiguration, OtlpTracesConfiguration, OttlErrorMode,
     OttlFilterConfiguration, OttlTransformConfiguration, PipelineConfiguration, TagFilterlistConfiguration,
+    TraceSamplerConfiguration,
 };
 
 #[cfg(test)]

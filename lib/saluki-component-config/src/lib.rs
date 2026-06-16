@@ -1036,6 +1036,161 @@ impl MultiRegionFailoverConfiguration {
     }
 }
 
+/// Native APM stats transform settings.
+#[derive(Clone, Debug)]
+pub struct ApmStatsTransformConfiguration {
+    compute_stats_by_span_kind: bool,
+    peer_tags_aggregation: bool,
+    peer_tags: Vec<String>,
+    default_env: String,
+    hostname: String,
+}
+
+impl ApmStatsTransformConfiguration {
+    /// Creates native APM stats transform settings.
+    pub fn new(
+        compute_stats_by_span_kind: bool, peer_tags_aggregation: bool, peer_tags: Vec<String>, default_env: String,
+        hostname: String,
+    ) -> Self {
+        Self {
+            compute_stats_by_span_kind,
+            peer_tags_aggregation,
+            peer_tags,
+            default_env,
+            hostname,
+        }
+    }
+
+    /// Returns whether stats computation by span kind is enabled.
+    pub const fn compute_stats_by_span_kind(&self) -> bool {
+        self.compute_stats_by_span_kind
+    }
+
+    /// Returns whether peer tag aggregation is enabled.
+    pub const fn peer_tags_aggregation(&self) -> bool {
+        self.peer_tags_aggregation
+    }
+
+    /// Returns supplementary peer tags.
+    pub fn peer_tags(&self) -> &[String] {
+        &self.peer_tags
+    }
+
+    /// Returns the default trace environment.
+    pub fn default_env(&self) -> &str {
+        &self.default_env
+    }
+
+    /// Returns the configured trace hostname.
+    pub fn hostname(&self) -> &str {
+        &self.hostname
+    }
+}
+
+/// Native trace sampler settings.
+#[derive(Clone, Debug)]
+pub struct TraceSamplerConfiguration {
+    target_traces_per_second: f64,
+    errors_per_second: f64,
+    probabilistic_sampler_enabled: bool,
+    probabilistic_sampler_sampling_percentage: f64,
+    error_sampling_enabled: bool,
+    error_tracking_standalone_enabled: bool,
+    rare_sampler_enabled: bool,
+    rare_sampler_tps: f64,
+    rare_sampler_cooldown_period_secs: f64,
+    rare_sampler_cardinality: usize,
+    default_env: String,
+    otlp_sampling_rate: f64,
+}
+
+impl TraceSamplerConfiguration {
+    /// Creates native trace sampler settings.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        target_traces_per_second: f64, errors_per_second: f64, probabilistic_sampler_enabled: bool,
+        probabilistic_sampler_sampling_percentage: f64, error_sampling_enabled: bool,
+        error_tracking_standalone_enabled: bool, rare_sampler_enabled: bool, rare_sampler_tps: f64,
+        rare_sampler_cooldown_period_secs: f64, rare_sampler_cardinality: usize, default_env: String,
+        otlp_sampling_rate: f64,
+    ) -> Self {
+        Self {
+            target_traces_per_second,
+            errors_per_second,
+            probabilistic_sampler_enabled,
+            probabilistic_sampler_sampling_percentage,
+            error_sampling_enabled,
+            error_tracking_standalone_enabled,
+            rare_sampler_enabled,
+            rare_sampler_tps,
+            rare_sampler_cooldown_period_secs,
+            rare_sampler_cardinality,
+            default_env,
+            otlp_sampling_rate,
+        }
+    }
+
+    /// Returns the target traces per second for priority sampling.
+    pub const fn target_traces_per_second(&self) -> f64 {
+        self.target_traces_per_second
+    }
+
+    /// Returns the target traces per second for error sampling.
+    pub const fn errors_per_second(&self) -> f64 {
+        self.errors_per_second
+    }
+
+    /// Returns whether probabilistic sampling is enabled.
+    pub const fn probabilistic_sampler_enabled(&self) -> bool {
+        self.probabilistic_sampler_enabled
+    }
+
+    /// Returns the probabilistic sampler percentage.
+    pub const fn probabilistic_sampler_sampling_percentage(&self) -> f64 {
+        self.probabilistic_sampler_sampling_percentage
+    }
+
+    /// Returns whether error sampling is enabled.
+    pub const fn error_sampling_enabled(&self) -> bool {
+        self.error_sampling_enabled
+    }
+
+    /// Returns whether error tracking standalone mode is enabled.
+    pub const fn error_tracking_standalone_enabled(&self) -> bool {
+        self.error_tracking_standalone_enabled
+    }
+
+    /// Returns whether the rare sampler is enabled.
+    pub const fn rare_sampler_enabled(&self) -> bool {
+        self.rare_sampler_enabled
+    }
+
+    /// Returns rare sampler target traces per second.
+    pub const fn rare_sampler_tps(&self) -> f64 {
+        self.rare_sampler_tps
+    }
+
+    /// Returns rare sampler cooldown period in seconds.
+    pub const fn rare_sampler_cooldown_period_secs(&self) -> f64 {
+        self.rare_sampler_cooldown_period_secs
+    }
+
+    /// Returns rare sampler cardinality.
+    pub const fn rare_sampler_cardinality(&self) -> usize {
+        self.rare_sampler_cardinality
+    }
+
+    /// Returns the default trace environment.
+    pub fn default_env(&self) -> &str {
+        &self.default_env
+    }
+
+    /// Returns normalized OTLP sampling rate.
+    pub const fn otlp_sampling_rate(&self) -> f64 {
+        self.otlp_sampling_rate
+    }
+}
+
 /// Native Datadog APM stats encoder settings.
 #[derive(Clone, Debug)]
 pub struct DatadogApmStatsEncoderConfiguration {

@@ -1,10 +1,8 @@
 //! Temporary runtime component configuration adapters.
 
 use saluki_components::{
-    encoders::DatadogTraceConfiguration,
-    forwarders::DatadogForwarderConfiguration,
-    sources::DogStatsDConfiguration,
-    transforms::{ApmStatsTransformConfiguration, TraceObfuscationConfiguration, TraceSamplerConfiguration},
+    encoders::DatadogTraceConfiguration, forwarders::DatadogForwarderConfiguration, sources::DogStatsDConfiguration,
+    transforms::TraceObfuscationConfiguration,
 };
 use saluki_config::GenericConfiguration;
 use saluki_error::{ErrorContext as _, GenericError};
@@ -50,18 +48,6 @@ impl RuntimeComponentConfiguration {
     /// Builds trace obfuscation transform configuration.
     pub fn trace_obfuscation_configuration(&self) -> Result<TraceObfuscationConfiguration, GenericError> {
         TraceObfuscationConfiguration::from_apm_configuration(&self.config)
-    }
-
-    /// Builds trace sampler transform configuration.
-    pub fn trace_sampler_configuration(&self) -> Result<TraceSamplerConfiguration, GenericError> {
-        TraceSamplerConfiguration::from_configuration(&self.config)
-            .error_context("Failed to configure Trace Sampler transform.")
-    }
-
-    /// Builds APM stats transform configuration.
-    pub fn apm_stats_transform_configuration(&self) -> Result<ApmStatsTransformConfiguration, GenericError> {
-        ApmStatsTransformConfiguration::from_configuration(&self.config)
-            .error_context("Failed to configure APM Stats transform.")
     }
 
     /// Builds DogStatsD source configuration.

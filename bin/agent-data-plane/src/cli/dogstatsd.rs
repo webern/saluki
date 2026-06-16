@@ -7,6 +7,7 @@ use std::time::Duration;
 #[cfg(target_os = "linux")]
 use std::time::Instant;
 
+use agent_data_plane_config::DataPlaneConfiguration;
 use argh::{FromArgValue, FromArgs};
 use comfy_table::{presets::ASCII_FULL_CONDENSED, Cell, ContentArrangement, Row, Table};
 #[cfg(any(target_os = "linux", test))]
@@ -167,8 +168,10 @@ struct StatsResponse<'a> {
 }
 
 /// Entrypoint for the `dogstatsd` commands.
-pub async fn handle_dogstatsd_command(bootstrap_config: &GenericConfiguration, cmd: DogstatsdCommand) {
-    let mut api_client = match DataPlaneAPIClient::from_config(bootstrap_config) {
+pub async fn handle_dogstatsd_command(
+    data_plane_config: &DataPlaneConfiguration, _bootstrap_config: &GenericConfiguration, cmd: DogstatsdCommand,
+) {
+    let mut api_client = match DataPlaneAPIClient::from_data_plane_config(data_plane_config) {
         Ok(client) => client,
         Err(e) => {
             error!("Failed to create data plane API client: {:#}", e);
@@ -192,7 +195,7 @@ pub async fn handle_dogstatsd_command(bootstrap_config: &GenericConfiguration, c
         DogstatsdSubcommand::Replay(config) => {
             #[cfg(target_os = "linux")]
             {
-                if let Err(e) = handle_dogstatsd_replay(&mut api_client, bootstrap_config, config).await {
+                if let Err(e) = handle_dogstatsd_replay(&mut api_client, _bootstrap_config, config).await {
                     error!("Failed to replay DogStatsD traffic: {:#}", e);
                     std::process::exit(1);
                 }

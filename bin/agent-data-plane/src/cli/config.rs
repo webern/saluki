@@ -1,6 +1,6 @@
+use agent_data_plane_config::DataPlaneConfiguration;
 use argh::FromArgs;
 use saluki_common::scrubber;
-use saluki_config::GenericConfiguration;
 use tracing::{error, info};
 
 use crate::cli::utils::DataPlaneAPIClient;
@@ -11,8 +11,8 @@ use crate::cli::utils::DataPlaneAPIClient;
 pub struct ConfigCommand {}
 
 /// Entrypoint for the `config` command.
-pub async fn handle_config_command(bootstrap_config: &GenericConfiguration) {
-    let mut api_client = match DataPlaneAPIClient::from_config(bootstrap_config) {
+pub async fn handle_config_command(data_plane_config: &DataPlaneConfiguration) {
+    let mut api_client = match DataPlaneAPIClient::from_data_plane_config(data_plane_config) {
         Ok(client) => client,
         Err(e) => {
             error!("Failed to create data plane API client: {:#}", e);

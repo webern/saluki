@@ -10,6 +10,7 @@ use std::time::Instant;
 // Pull in the Antithesis coverage-instrumentation runtime shim only when
 // building for antithesis. Load-baring: equired to avoid the shim being dropped
 // as unused.
+use agent_data_plane_config::DataPlaneConfiguration;
 use agent_data_plane_config_system::{BootstrapInputs, ConfigurationSystem, LoggingConfigurationTranslator};
 #[cfg(feature = "antithesis")]
 use antithesis_instrumentation as _;
@@ -79,6 +80,8 @@ async fn main() -> Result<(), GenericError> {
 
     let typed_bootstrap_config = ConfigurationSystem::translate_local_datadog_bootstrap(&bootstrap_config)
         .error_context("Failed to translate bootstrap configuration.")?;
+    let bootstrap_data_plane_config = ConfigurationSystem::translate_local_datadog_data_plane(&bootstrap_config)
+        .error_context("Failed to translate bootstrap data-plane configuration.")?;
     let metrics_default_level = parse_metrics_level(typed_bootstrap_config.telemetry.metrics_level.as_deref())?;
 
     // Proceed with bootstrapping.
@@ -109,6 +112,7 @@ async fn main() -> Result<(), GenericError> {
         cli.action,
         started,
         bootstrap_config,
+        &bootstrap_data_plane_config,
         bootstrap_inputs,
         &mut bootstrap_guard,
         bootstrap_supervisor,
@@ -134,7 +138,8 @@ fn parse_metrics_level(raw: Option<&str>) -> Result<Level, GenericError> {
 }
 
 async fn run_inner(
-    action: Action, started: Instant, bootstrap_config: GenericConfiguration, bootstrap_inputs: BootstrapInputs,
+    action: Action, started: Instant, bootstrap_config: GenericConfiguration,
+    bootstrap_data_plane_config: &DataPlaneConfiguration, bootstrap_inputs: BootstrapInputs,
     bootstrap_guard: &mut BootstrapGuard, bootstrap_supervisor: Supervisor,
 ) -> Result<Option<i32>, GenericError> {
     match action {
@@ -178,9 +183,9 @@ async fn run_inner(
                 return Ok(Some(exit_code));
             }
         }
-        Action::Debug(cmd) => handle_debug_command(&bootstrap_config, cmd).await,
-        Action::Config(_) => handle_config_command(&bootstrap_config).await,
-        Action::Dogstatsd(cmd) => handle_dogstatsd_command(&bootstrap_config, cmd).await,
+        Action::Debug(cmd) => handle_debug_command(bootstrap_data_plane_config, cmd).await,
+        Action::Config(_) => handle_config_command(bootstrap_data_plane_config).await,
+        Action::Dogstatsd(cmd) => handle_dogstatsd_command(bootstrap_data_plane_config, &bootstrap_config, cmd).await,
         Action::Version(v) => handle_version_command(v.json).await,
     }
 

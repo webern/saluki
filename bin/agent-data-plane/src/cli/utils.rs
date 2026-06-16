@@ -1,5 +1,4 @@
 use agent_data_plane_config::DataPlaneConfiguration;
-use agent_data_plane_config_system::ConfigurationSystem;
 use futures::TryFutureExt as _;
 use http::{header::CONTENT_TYPE, uri::PathAndQuery, Request, Response, StatusCode, Uri};
 use http_body_util::BodyExt as _;
@@ -10,7 +9,6 @@ use hyper::body::Bytes;
 use hyper::body::Incoming;
 #[cfg(target_os = "linux")]
 use prost::Message as _;
-use saluki_config::GenericConfiguration;
 use saluki_error::{generic_error, ErrorContext as _, GenericError};
 use saluki_io::net::{client::http::HttpClient, ListenAddress};
 use serde::{Deserialize, Serialize};
@@ -41,17 +39,6 @@ struct DogStatsDReplaySessionResponseBody {
 }
 
 impl DataPlaneAPIClient {
-    /// Creates a new `DataPlaneAPIClient` from the given generic configuration.
-    ///
-    /// # Errors
-    ///
-    /// If the data plane configuration can't be deserialized, or the data plane API endpoints can't be
-    /// determined, an error will be returned.
-    pub fn from_config(config: &GenericConfiguration) -> Result<Self, GenericError> {
-        let data_plane_config = ConfigurationSystem::translate_local_datadog_data_plane(config)?;
-        Self::from_data_plane_config(&data_plane_config)
-    }
-
     /// Creates a new `DataPlaneAPIClient` from native data-plane configuration.
     ///
     /// # Errors

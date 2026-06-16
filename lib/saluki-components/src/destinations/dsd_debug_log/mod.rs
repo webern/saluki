@@ -102,7 +102,7 @@ struct DogStatsDDebugLog {
     log_file_max_rolls: usize,
     writer: Option<DebugLogWriter>,
     metrics_stats_enabled: bool,
-    configuration: GenericConfiguration,
+    configuration: Option<GenericConfiguration>,
     stats: FastHashMap<ContextNoOrigin, MetricSample>,
 }
 
@@ -148,6 +148,37 @@ impl DogStatsDDebugLogConfiguration {
         Ok(cfg)
     }
 
+    /// Creates a new `DogStatsDDebugLogConfiguration` from native configuration.
+    ///
+    /// No `GenericConfiguration` is retained; the `dogstatsd_metrics_stats_enable` runtime toggle is
+    /// delivered through the configuration system's typed, scoped handles instead of a string-key
+    /// watcher. If the native `log_file` is empty, `default_log_file_path` is used.
+    pub fn from_native(
+        native: &saluki_component_config::DogStatsDDebugLogConfig, default_log_file_path: PathBuf,
+    ) -> Result<Self, GenericError> {
+        let log_file = if native.log_file.as_os_str().is_empty() {
+            default_log_file_path
+        } else {
+            native.log_file.clone()
+        };
+
+        if log_file.to_str().is_none() {
+            return Err(generic_error!(
+                "dogstatsd_log_file must be valid UTF-8, got '{}'",
+                log_file.display()
+            ));
+        }
+
+        Ok(Self {
+            metrics_stats_enabled: native.metrics_stats_enabled,
+            configuration: None,
+            logging_enabled: native.logging_enabled,
+            log_file,
+            log_file_max_size: native.log_file_max_size,
+            log_file_max_rolls: native.log_file_max_rolls,
+        })
+    }
+
     /// Returns `true` if the debug log destination should be added to the topology.
     pub const fn enabled(&self) -> bool {
         self.logging_enabled
@@ -177,10 +208,7 @@ impl DogStatsDDebugLog {
             log_file_max_rolls: config.log_file_max_rolls,
             writer: None,
             metrics_stats_enabled: config.metrics_stats_enabled,
-            configuration: config
-                .configuration
-                .clone()
-                .expect("configuration must be set via from_configuration"),
+            configuration: config.configuration.clone(),
             stats: FastHashMap::default(),
         };
 
@@ -262,8 +290,12 @@ impl Destination for DogStatsDDebugLog {
         let mut health = context.take_health_handle();
         health.mark_ready();
 
-        let mut metrics_stats_enabled_watcher =
-            self.configuration.watch_for_updates(DOGSTATSD_METRICS_STATS_ENABLE_KEY);
+        // The string-key watcher exists only on the legacy raw-map path; on the native path the
+        // configuration system delivers the `metrics_stats_enable` toggle via a typed scoped handle.
+        let mut metrics_stats_enabled_watcher = self
+            .configuration
+            .as_ref()
+            .map(|c| c.watch_for_updates(DOGSTATSD_METRICS_STATS_ENABLE_KEY));
 
         loop {
             select! {
@@ -280,7 +312,7 @@ impl Destination for DogStatsDDebugLog {
                     },
                     None => break,
                 },
-                (_, maybe_metrics_stats_enabled) = metrics_stats_enabled_watcher.changed::<bool>() => {
+                (_, maybe_metrics_stats_enabled) = async { metrics_stats_enabled_watcher.as_mut().unwrap().changed::<bool>().await }, if metrics_stats_enabled_watcher.is_some() => {
                     if let Some(metrics_stats_enabled) = maybe_metrics_stats_enabled {
                         self.metrics_stats_enabled = metrics_stats_enabled;
                         debug!(metrics_stats_enabled, "Updated DogStatsD metrics stats debug logging gate.");

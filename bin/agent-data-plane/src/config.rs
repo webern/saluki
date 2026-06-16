@@ -301,6 +301,9 @@ impl DataPlaneOtlpProxyConfiguration {
     }
 
     /// Returns the OTLP gRPC endpoint on the Core Agent to proxy signals to.
+    ///
+    /// Transitional: superseded by the OTLP proxy config read by the configuration system.
+    #[allow(dead_code)]
     pub fn core_agent_otlp_grpc_endpoint(&self) -> &str {
         &self.core_agent_otlp_grpc_endpoint
     }
@@ -311,11 +314,17 @@ impl DataPlaneOtlpProxyConfiguration {
     }
 
     /// Returns `true` if the OTLP metrics should be proxied to the Core Agent.
+    ///
+    /// Transitional: superseded by the OTLP proxy config read by the configuration system.
+    #[allow(dead_code)]
     pub const fn proxy_metrics(&self) -> bool {
         self.proxy_metrics
     }
 
     /// Returns `true` if the OTLP logs should be proxied to the Core Agent.
+    ///
+    /// Transitional: superseded by the OTLP proxy config read by the configuration system.
+    #[allow(dead_code)]
     pub const fn proxy_logs(&self) -> bool {
         self.proxy_logs
     }

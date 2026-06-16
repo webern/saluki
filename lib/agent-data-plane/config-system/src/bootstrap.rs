@@ -127,6 +127,42 @@ pub(crate) fn read_pipeline_gates_value(snapshot: &serde_json::Value) -> Pipelin
     }
 }
 
+/// Read the OTLP proxy control inputs (`data_plane.otlp.proxy.*`), which are ADP control keys
+/// outside the witnessed schema surface. Returns `None` when proxy mode is disabled.
+pub(crate) fn read_otlp_proxy(config: &GenericConfiguration) -> Option<saluki_component_config::OtlpProxyConfig> {
+    let enabled = config
+        .try_get_typed::<bool>("data_plane.otlp.proxy.enabled")
+        .ok()
+        .flatten()
+        .unwrap_or(false);
+    if !enabled {
+        return None;
+    }
+
+    let grpc_endpoint = config
+        .try_get_typed::<String>("data_plane.otlp.proxy.receiver.protocols.grpc.endpoint")
+        .ok()
+        .flatten()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "http://localhost:4319".to_string());
+    let traces_internal_port = config
+        .try_get_typed::<i64>("otlp_config.traces.internal_port")
+        .ok()
+        .flatten()
+        .unwrap_or(0)
+        .clamp(0, u16::MAX as i64) as u16;
+
+    let flag = |key: &str| config.try_get_typed::<bool>(key).ok().flatten().unwrap_or(true);
+
+    Some(saluki_component_config::OtlpProxyConfig {
+        core_agent_otlp_grpc_endpoint: stringtheory::MetaString::from(grpc_endpoint),
+        proxy_metrics: flag("data_plane.otlp.proxy.metrics.enabled"),
+        proxy_logs: flag("data_plane.otlp.proxy.logs.enabled"),
+        proxy_traces: flag("data_plane.otlp.proxy.traces.enabled"),
+        core_agent_traces_internal_port: traces_internal_port,
+    })
+}
+
 /// Read the ADP memory-bounds control inputs (outside the witnessed schema surface).
 pub(crate) fn read_memory_config(config: &GenericConfiguration) -> agent_data_plane_config::MemoryConfig {
     agent_data_plane_config::MemoryConfig {

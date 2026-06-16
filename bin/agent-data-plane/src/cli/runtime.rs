@@ -172,7 +172,7 @@ pub async fn handle_run_command(
 
     // Create the blueprint for our primary topology.
     let (mut blueprint, control_surfaces) =
-        create_topology(&config, &saluki_config, &dp_config, &env_provider, &component_registry).await?;
+        create_topology(&saluki_config, &dp_config, &env_provider, &component_registry).await?;
 
     // Create the internal supervisor which drives our control plane and internal observability.
     let mut internal_supervisor = create_internal_supervisor(
@@ -263,8 +263,8 @@ async fn wait_for_sigint() {
 }
 
 async fn create_topology(
-    config: &GenericConfiguration, saluki_config: &SalukiConfiguration, dp_config: &DataPlaneConfiguration,
-    env_provider: &ADPEnvironmentProvider, component_registry: &ComponentRegistry,
+    saluki_config: &SalukiConfiguration, dp_config: &DataPlaneConfiguration, env_provider: &ADPEnvironmentProvider,
+    component_registry: &ComponentRegistry,
 ) -> Result<(TopologyBlueprint, TopologyControlSurfaces), GenericError> {
     let mut blueprint = TopologyBlueprint::new("primary", component_registry);
     let mut control_surfaces = TopologyControlSurfaces::default();
@@ -320,13 +320,12 @@ async fn create_topology(
     }
 
     if dp_config.dogstatsd().enabled() {
-        let dsd_control_surface =
-            add_dsd_pipeline_to_blueprint(&mut blueprint, config, saluki_config, env_provider).await?;
+        let dsd_control_surface = add_dsd_pipeline_to_blueprint(&mut blueprint, saluki_config, env_provider).await?;
         control_surfaces.attach_dogstatsd(dsd_control_surface);
     }
 
     if dp_config.otlp().enabled() {
-        add_otlp_pipeline_to_blueprint(&mut blueprint, config, saluki_config, dp_config, env_provider)?;
+        add_otlp_pipeline_to_blueprint(&mut blueprint, saluki_config, env_provider)?;
     }
 
     Ok((blueprint, control_surfaces))
@@ -514,8 +513,7 @@ async fn add_baseline_traces_pipeline_to_blueprint(
 }
 
 async fn add_dsd_pipeline_to_blueprint(
-    blueprint: &mut TopologyBlueprint, config: &GenericConfiguration, saluki_config: &SalukiConfiguration,
-    env_provider: &ADPEnvironmentProvider,
+    blueprint: &mut TopologyBlueprint, saluki_config: &SalukiConfiguration, env_provider: &ADPEnvironmentProvider,
 ) -> Result<DogStatsDControlSurface, GenericError> {
     // We're creating the "front half" of the DogStatsD pipeline, which deals solely with accepting DogStatsD payloads,
     // and enriching/processing them in DSD-specific ways, relevant to how the Datadog Agent is expected to behave.
@@ -576,11 +574,6 @@ async fn add_dsd_pipeline_to_blueprint(
         "host_enrichment",
         HostEnrichmentConfiguration::from_environment_provider(env_provider.clone()),
     );
-    let dsd_debug_log_config = DogStatsDDebugLogConfiguration::from_configuration(
-        config,
-        PlatformSettings::get_default_dogstatsd_log_file_path(),
-    )
-    .error_context("Failed to configure DogStatsD debug log destination.")?;
     let dsd_stats_config = DogStatsDStatisticsConfiguration::new();
 
     let stats_api_handler = dsd_stats_config.api_handler();
@@ -619,11 +612,18 @@ async fn add_dsd_pipeline_to_blueprint(
         // DogStatsD Stats.
         .connect_components("dsd_in.metrics", "dsd_stats_out")?;
 
-    if dsd_debug_log_config.enabled() {
-        blueprint
-            // DogStatsD debug log.
-            .add_destination("dsd_debug_log_out", dsd_debug_log_config)?
-            .connect_components("dsd_in.metrics", "dsd_debug_log_out")?;
+    if let Some(debug_log) = &saluki_config.dogstatsd.debug_log {
+        let dsd_debug_log_config = DogStatsDDebugLogConfiguration::from_native(
+            debug_log,
+            PlatformSettings::get_default_dogstatsd_log_file_path(),
+        )
+        .error_context("Failed to configure DogStatsD debug log destination.")?;
+        if dsd_debug_log_config.enabled() {
+            blueprint
+                // DogStatsD debug log.
+                .add_destination("dsd_debug_log_out", dsd_debug_log_config)?
+                .connect_components("dsd_in.metrics", "dsd_debug_log_out")?;
+        }
     }
     Ok(DogStatsDControlSurface {
         stats_api_handler,
@@ -633,28 +633,21 @@ async fn add_dsd_pipeline_to_blueprint(
 }
 
 fn add_otlp_pipeline_to_blueprint(
-    blueprint: &mut TopologyBlueprint, config: &GenericConfiguration, saluki_config: &SalukiConfiguration,
-    dp_config: &DataPlaneConfiguration, env_provider: &ADPEnvironmentProvider,
+    blueprint: &mut TopologyBlueprint, saluki_config: &SalukiConfiguration, env_provider: &ADPEnvironmentProvider,
 ) -> Result<(), GenericError> {
-    if dp_config.otlp().proxy().enabled() {
-        let core_agent_otlp_grpc_endpoint = dp_config.otlp().proxy().core_agent_otlp_grpc_endpoint().to_string();
-        let proxy_metrics = dp_config.otlp().proxy().proxy_metrics();
-        let proxy_logs = dp_config.otlp().proxy().proxy_logs();
-        let proxy_traces = dp_config.otlp().proxy().proxy_traces();
-
+    if let Some(proxy) = &saluki_config.otlp.config.proxy {
         info!(
-            proxy_grpc_endpoint = %core_agent_otlp_grpc_endpoint,
-            proxy_metrics,
-            proxy_logs,
-            proxy_traces,
+            proxy_grpc_endpoint = %proxy.core_agent_otlp_grpc_endpoint,
+            proxy_metrics = proxy.proxy_metrics,
+            proxy_logs = proxy.proxy_logs,
+            proxy_traces = proxy.proxy_traces,
             "OTLP proxy mode enabled. Select OTLP payloads will be proxied to the Core Agent."
         );
 
-        let otlp_relay_config = OtlpRelayConfiguration::from_configuration(config)?;
-        let otlp_decoder_config = OtlpDecoderConfiguration::from_configuration(config)?;
+        let otlp_relay_config = OtlpRelayConfiguration::from_native(&saluki_config.otlp.config)?;
+        let otlp_decoder_config = OtlpDecoderConfiguration::from_native(&saluki_config.otlp.config)?;
 
-        let local_agent_otlp_forwarder_config =
-            OtlpForwarderConfiguration::from_configuration(config, core_agent_otlp_grpc_endpoint)?;
+        let local_agent_otlp_forwarder_config = OtlpForwarderConfiguration::from_native(proxy)?;
 
         blueprint
             // Components.
@@ -663,7 +656,7 @@ fn add_otlp_pipeline_to_blueprint(
             // Metrics and logs directly to the forwarders.
             .connect_components(["otlp_relay_in.metrics", "otlp_relay_in.logs"], "local_agent_otlp_out")?;
 
-        if dp_config.otlp().proxy().proxy_traces() {
+        if proxy.proxy_traces {
             blueprint.connect_components("otlp_relay_in.traces", "local_agent_otlp_out")?;
         } else {
             blueprint

@@ -110,6 +110,11 @@ pub fn translate_from_generic(
     let private = SalukiPrivateConfiguration::for_language(language);
     let mut saluki = translate_datadog(&dd_config, &private, gates);
     saluki.memory = crate::bootstrap::read_memory_config(config);
+    if let Some(proxy) = crate::bootstrap::read_otlp_proxy(config) {
+        saluki.data_plane.otlp_proxy_enabled = true;
+        saluki.data_plane.otlp_proxy_traces = proxy.proxy_traces;
+        saluki.otlp.config.proxy = Some(proxy);
+    }
     Ok(saluki)
 }
 

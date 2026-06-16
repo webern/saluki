@@ -5,11 +5,12 @@ use std::{path::PathBuf, time::Duration};
 use saluki_component_config::{
     AggregateConfiguration, ApmStatsTransformConfiguration, ChecksIpcConfiguration,
     DatadogApmStatsEncoderConfiguration, DatadogEventsEncoderConfiguration, DatadogLogsEncoderConfiguration,
-    DatadogMetricsEncoderConfiguration, DatadogServiceChecksEncoderConfiguration, DogStatsDDebugLogConfiguration,
-    DogStatsDMapperConfiguration, DogStatsDPostAggregateFilterConfiguration, DogStatsDPrefixFilterConfiguration,
-    MultiRegionFailoverConfiguration, OtlpForwarderConfiguration, OtlpPipelineConfiguration, OtlpReceiverConfiguration,
-    OtlpSourceConfiguration, OtlpTracesConfiguration, OttlFilterConfiguration, OttlTransformConfiguration,
-    PipelineConfiguration, TagFilterlistConfiguration, TraceSamplerConfiguration,
+    DatadogMetricsEncoderConfiguration, DatadogServiceChecksEncoderConfiguration, DatadogTraceEncoderConfiguration,
+    DogStatsDDebugLogConfiguration, DogStatsDMapperConfiguration, DogStatsDPostAggregateFilterConfiguration,
+    DogStatsDPrefixFilterConfiguration, MultiRegionFailoverConfiguration, OtlpForwarderConfiguration,
+    OtlpPipelineConfiguration, OtlpReceiverConfiguration, OtlpSourceConfiguration, OtlpTracesConfiguration,
+    OttlFilterConfiguration, OttlTransformConfiguration, PipelineConfiguration, TagFilterlistConfiguration,
+    TraceSamplerConfiguration,
 };
 use saluki_io::net::ListenAddress;
 
@@ -42,6 +43,9 @@ pub struct SalukiConfiguration {
 
     /// Datadog service-checks encoder settings.
     pub datadog_service_checks_encoder: DatadogServiceChecksEncoderConfiguration,
+
+    /// Datadog trace encoder settings.
+    pub datadog_trace_encoder: DatadogTraceEncoderConfiguration,
 
     /// Datadog APM stats encoder settings.
     pub datadog_apm_stats_encoder: DatadogApmStatsEncoderConfiguration,

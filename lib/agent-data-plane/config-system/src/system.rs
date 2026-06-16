@@ -13,8 +13,8 @@ use agent_data_plane_config::{
     BootstrapTelemetryConfiguration, ChecksIpcConfiguration, ConfigStreamAuthority, ControlPlaneConfiguration,
     DataPlaneConfiguration, DatadogApmStatsEncoderConfiguration, DatadogEventsEncoderConfiguration,
     DatadogLogsEncoderConfiguration, DatadogMetricsEncoderConfiguration, DatadogServiceChecksEncoderConfiguration,
-    DogStatsDCliConfiguration, DogStatsDDebugLogConfiguration, DogStatsDMapperConfiguration,
-    DogStatsDMapperProfileConfiguration, DogStatsDMetricMappingConfiguration,
+    DatadogTraceEncoderConfiguration, DogStatsDCliConfiguration, DogStatsDDebugLogConfiguration,
+    DogStatsDMapperConfiguration, DogStatsDMapperProfileConfiguration, DogStatsDMetricMappingConfiguration,
     DogStatsDPostAggregateFilterConfiguration, DogStatsDPrefixFilterConfiguration, DynamicValue,
     EnvironmentConfiguration, MetricTagFilterAction, MetricTagFilterEntry, MultiRegionFailoverConfiguration,
     OtlpForwarderConfiguration, OtlpPipelineConfiguration, OtlpProxyConfiguration, OtlpReceiverConfiguration,
@@ -1025,6 +1025,34 @@ fn translate_multi_region_failover_configuration(
     ))
 }
 
+fn translate_datadog_trace_encoder_configuration(
+    config: &GenericConfiguration, source: &DatadogConfiguration,
+) -> Result<DatadogTraceEncoderConfiguration, GenericError> {
+    let apm_source = config
+        .as_typed::<SourceApmConfiguration>()
+        .error_context("Failed to parse Datadog trace encoder APM configuration.")?;
+    Ok(DatadogTraceEncoderConfiguration::new(
+        source.serializer_compressor_kind.clone(),
+        source.serializer_zstd_compressor_level as i32,
+        config
+            .try_get_typed("flush_timeout_secs")
+            .error_context("Failed to read `flush_timeout_secs`.")?
+            .unwrap_or(2),
+        config
+            .try_get_typed("env")
+            .error_context("Failed to read `env`.")?
+            .unwrap_or_else(|| "none".to_string()),
+        apm_source.apm_config.target_traces_per_second,
+        apm_source.apm_config.errors_per_second,
+        apm_source.error_tracking_standalone_enabled,
+        config
+            .try_get_typed("otlp_config.traces.ignore_missing_datadog_fields")
+            .error_context("Failed to read `otlp_config.traces.ignore_missing_datadog_fields`.")?
+            .unwrap_or(false),
+        read_otlp_trace_sampling_percentage(config)?,
+    ))
+}
+
 fn translate_apm_stats_transform_configuration(
     config: &GenericConfiguration,
 ) -> Result<ApmStatsTransformConfiguration, GenericError> {
@@ -1244,10 +1272,11 @@ fn translate_datadog_snapshot(config: &GenericConfiguration) -> Result<SalukiCon
     let datadog_service_checks_encoder = DatadogServiceChecksEncoderConfiguration::new(
         source.serializer_max_payload_size as usize,
         source.serializer_max_uncompressed_payload_size as usize,
-        source.serializer_compressor_kind,
+        source.serializer_compressor_kind.clone(),
         source.serializer_zstd_compressor_level as i32,
         source.log_payloads,
     );
+    let datadog_trace_encoder = translate_datadog_trace_encoder_configuration(config, &source)?;
     let datadog_apm_stats_encoder = translate_datadog_apm_stats_encoder_configuration(config)?;
     let apm_stats_transform = translate_apm_stats_transform_configuration(config)?;
     let trace_sampler = translate_trace_sampler_configuration(config)?;
@@ -1287,6 +1316,7 @@ fn translate_datadog_snapshot(config: &GenericConfiguration) -> Result<SalukiCon
         datadog_metrics_encoder,
         datadog_events_encoder,
         datadog_service_checks_encoder,
+        datadog_trace_encoder,
         datadog_apm_stats_encoder,
         apm_stats_transform,
         trace_sampler,

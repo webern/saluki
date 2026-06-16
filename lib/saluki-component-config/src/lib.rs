@@ -1036,6 +1036,87 @@ impl MultiRegionFailoverConfiguration {
     }
 }
 
+/// Native Datadog trace encoder settings.
+#[derive(Clone, Debug)]
+pub struct DatadogTraceEncoderConfiguration {
+    compressor_kind: String,
+    zstd_compressor_level: i32,
+    flush_timeout_secs: u64,
+    env: String,
+    target_traces_per_second: f64,
+    errors_per_second: f64,
+    error_tracking_standalone_enabled: bool,
+    otlp_ignore_missing_datadog_fields: bool,
+    otlp_sampling_percentage: f64,
+}
+
+impl DatadogTraceEncoderConfiguration {
+    /// Creates native Datadog trace encoder settings.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        compressor_kind: String, zstd_compressor_level: i32, flush_timeout_secs: u64, env: String,
+        target_traces_per_second: f64, errors_per_second: f64, error_tracking_standalone_enabled: bool,
+        otlp_ignore_missing_datadog_fields: bool, otlp_sampling_percentage: f64,
+    ) -> Self {
+        Self {
+            compressor_kind,
+            zstd_compressor_level,
+            flush_timeout_secs,
+            env,
+            target_traces_per_second,
+            errors_per_second,
+            error_tracking_standalone_enabled,
+            otlp_ignore_missing_datadog_fields,
+            otlp_sampling_percentage,
+        }
+    }
+
+    /// Returns serializer compressor kind.
+    pub fn compressor_kind(&self) -> &str {
+        &self.compressor_kind
+    }
+
+    /// Returns zstd compressor level.
+    pub const fn zstd_compressor_level(&self) -> i32 {
+        self.zstd_compressor_level
+    }
+
+    /// Returns flush timeout in seconds.
+    pub const fn flush_timeout_secs(&self) -> u64 {
+        self.flush_timeout_secs
+    }
+
+    /// Returns the default trace environment.
+    pub fn env(&self) -> &str {
+        &self.env
+    }
+
+    /// Returns target traces per second.
+    pub const fn target_traces_per_second(&self) -> f64 {
+        self.target_traces_per_second
+    }
+
+    /// Returns error traces per second.
+    pub const fn errors_per_second(&self) -> f64 {
+        self.errors_per_second
+    }
+
+    /// Returns whether error tracking standalone mode is enabled.
+    pub const fn error_tracking_standalone_enabled(&self) -> bool {
+        self.error_tracking_standalone_enabled
+    }
+
+    /// Returns whether missing Datadog OTLP fields are ignored.
+    pub const fn otlp_ignore_missing_datadog_fields(&self) -> bool {
+        self.otlp_ignore_missing_datadog_fields
+    }
+
+    /// Returns OTLP sampling percentage.
+    pub const fn otlp_sampling_percentage(&self) -> f64 {
+        self.otlp_sampling_percentage
+    }
+}
+
 /// Native APM stats transform settings.
 #[derive(Clone, Debug)]
 pub struct ApmStatsTransformConfiguration {

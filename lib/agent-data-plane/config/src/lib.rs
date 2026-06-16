@@ -24,13 +24,13 @@ pub use saluki::{ControlPlaneConfiguration, DataPlaneConfiguration, EnvironmentC
 pub use saluki_component_config::{
     AggregateConfiguration, ApmStatsTransformConfiguration, ChecksIpcConfiguration,
     DatadogApmStatsEncoderConfiguration, DatadogEventsEncoderConfiguration, DatadogLogsEncoderConfiguration,
-    DatadogMetricsEncoderConfiguration, DatadogServiceChecksEncoderConfiguration, DogStatsDDebugLogConfiguration,
-    DogStatsDMapperConfiguration, DogStatsDMapperProfileConfiguration, DogStatsDMetricMappingConfiguration,
-    DogStatsDPostAggregateFilterConfiguration, DogStatsDPrefixFilterConfiguration, DynamicValue, MetricTagFilterAction,
-    MetricTagFilterEntry, MultiRegionFailoverConfiguration, OtlpForwarderConfiguration, OtlpPipelineConfiguration,
-    OtlpProxyConfiguration, OtlpReceiverConfiguration, OtlpSourceConfiguration, OtlpTracesConfiguration, OttlErrorMode,
-    OttlFilterConfiguration, OttlTransformConfiguration, PipelineConfiguration, TagFilterlistConfiguration,
-    TraceSamplerConfiguration,
+    DatadogMetricsEncoderConfiguration, DatadogServiceChecksEncoderConfiguration, DatadogTraceEncoderConfiguration,
+    DogStatsDDebugLogConfiguration, DogStatsDMapperConfiguration, DogStatsDMapperProfileConfiguration,
+    DogStatsDMetricMappingConfiguration, DogStatsDPostAggregateFilterConfiguration, DogStatsDPrefixFilterConfiguration,
+    DynamicValue, MetricTagFilterAction, MetricTagFilterEntry, MultiRegionFailoverConfiguration,
+    OtlpForwarderConfiguration, OtlpPipelineConfiguration, OtlpProxyConfiguration, OtlpReceiverConfiguration,
+    OtlpSourceConfiguration, OtlpTracesConfiguration, OttlErrorMode, OttlFilterConfiguration,
+    OttlTransformConfiguration, PipelineConfiguration, TagFilterlistConfiguration, TraceSamplerConfiguration,
 };
 
 #[cfg(test)]

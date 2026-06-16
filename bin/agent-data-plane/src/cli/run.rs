@@ -17,6 +17,7 @@ use saluki_components::{
     encoders::{
         BufferedIncrementalConfiguration, DatadogApmStatsEncoderConfiguration, DatadogEventsConfiguration,
         DatadogLogsConfiguration, DatadogMetricsConfiguration, DatadogServiceChecksConfiguration,
+        DatadogTraceConfiguration,
     },
     forwarders::OtlpForwarderConfiguration,
     relays::otlp::OtlpRelayConfiguration,
@@ -410,8 +411,7 @@ async fn add_baseline_traces_pipeline_to_blueprint(
     blueprint: &mut TopologyBlueprint, runtime_config: &RuntimeComponentConfiguration,
     saluki_config: &SalukiConfiguration, env_provider: &ADPEnvironmentProvider,
 ) -> Result<(), GenericError> {
-    let dd_traces_config = runtime_config
-        .datadog_trace_configuration()?
+    let dd_traces_config = DatadogTraceConfiguration::from_native(&saluki_config.datadog_trace_encoder)
         .with_environment_provider(env_provider.clone())
         .await?;
     let trace_obfuscation_config = runtime_config.trace_obfuscation_configuration()?;

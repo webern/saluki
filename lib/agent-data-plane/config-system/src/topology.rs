@@ -1,7 +1,7 @@
 //! Temporary runtime component configuration adapters.
 
 use saluki_components::{
-    encoders::DatadogTraceConfiguration, forwarders::DatadogForwarderConfiguration, sources::DogStatsDConfiguration,
+    forwarders::DatadogForwarderConfiguration, sources::DogStatsDConfiguration,
     transforms::TraceObfuscationConfiguration,
 };
 use saluki_config::GenericConfiguration;
@@ -37,12 +37,6 @@ impl RuntimeComponentConfiguration {
                 )
             })
             .error_context("Failed to configure Multi-Region Failover Datadog forwarder.")
-    }
-
-    /// Builds Datadog traces encoder configuration.
-    pub fn datadog_trace_configuration(&self) -> Result<DatadogTraceConfiguration, GenericError> {
-        DatadogTraceConfiguration::from_configuration(&self.config)
-            .error_context("Failed to configure Datadog Traces encoder.")
     }
 
     /// Builds trace obfuscation transform configuration.

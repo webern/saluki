@@ -14,6 +14,7 @@ use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
 use saluki_common::collections::FastHashMap;
 use saluki_common::strings::StringBuilder;
 use saluki_common::task::HandleExt as _;
+use saluki_component_config::DatadogTraceEncoderConfiguration as NativeDatadogTraceEncoderConfiguration;
 use saluki_config::GenericConfiguration;
 use saluki_context::tags::TagSet;
 use saluki_core::data_model::event::trace::AttributeValue;
@@ -115,12 +116,19 @@ pub struct DatadogTraceConfiguration {
     version: String,
 
     #[serde(skip)]
-    #[facet(opaque)]
-    apm_config: ApmConfig,
+    target_traces_per_second: f64,
 
     #[serde(skip)]
-    #[facet(opaque)]
-    otlp_traces: TracesConfig,
+    errors_per_second: f64,
+
+    #[serde(skip)]
+    error_tracking_standalone_enabled: bool,
+
+    #[serde(skip)]
+    otlp_ignore_missing_datadog_fields: bool,
+
+    #[serde(skip)]
+    otlp_sampling_percentage: f64,
 
     #[serde(default = "default_env")]
     env: String,
@@ -134,10 +142,33 @@ impl DatadogTraceConfiguration {
         let app_details = saluki_metadata::get_app_details();
         trace_config.version = format!("agent-data-plane/{}", app_details.version().raw());
 
-        trace_config.apm_config = ApmConfig::from_configuration(config)?;
-        trace_config.otlp_traces = config.try_get_typed("otlp_config.traces")?.unwrap_or_default();
+        let apm_config = ApmConfig::from_configuration(config)?;
+        let otlp_traces: TracesConfig = config.try_get_typed("otlp_config.traces")?.unwrap_or_default();
+        trace_config.target_traces_per_second = apm_config.target_traces_per_second();
+        trace_config.errors_per_second = apm_config.errors_per_second();
+        trace_config.error_tracking_standalone_enabled = apm_config.error_tracking_standalone_enabled();
+        trace_config.otlp_ignore_missing_datadog_fields = otlp_traces.ignore_missing_datadog_fields;
+        trace_config.otlp_sampling_percentage = otlp_traces.probabilistic_sampler.sampling_percentage;
 
         Ok(trace_config)
+    }
+
+    /// Creates a new `DatadogTraceConfiguration` from native settings.
+    pub fn from_native(config: &NativeDatadogTraceEncoderConfiguration) -> Self {
+        let app_details = saluki_metadata::get_app_details();
+        Self {
+            compressor_kind: config.compressor_kind().to_string(),
+            zstd_compressor_level: config.zstd_compressor_level(),
+            flush_timeout_secs: config.flush_timeout_secs(),
+            default_hostname: None,
+            version: format!("agent-data-plane/{}", app_details.version().raw()),
+            target_traces_per_second: config.target_traces_per_second(),
+            errors_per_second: config.errors_per_second(),
+            error_tracking_standalone_enabled: config.error_tracking_standalone_enabled(),
+            otlp_ignore_missing_datadog_fields: config.otlp_ignore_missing_datadog_fields(),
+            otlp_sampling_percentage: config.otlp_sampling_percentage(),
+            env: config.env().to_string(),
+        }
     }
 }
 
@@ -179,8 +210,11 @@ impl EncoderBuilder for DatadogTraceConfiguration {
                 default_hostname,
                 self.version.clone(),
                 self.env.clone(),
-                self.apm_config.clone(),
-                self.otlp_traces.clone(),
+                self.target_traces_per_second,
+                self.errors_per_second,
+                self.error_tracking_standalone_enabled,
+                self.otlp_ignore_missing_datadog_fields,
+                self.otlp_sampling_percentage,
             ),
             compression_scheme,
             RB_BUFFER_CHUNK_SIZE,
@@ -407,8 +441,10 @@ struct TraceEndpointEncoder {
     agent_hostname: String,
     version: String,
     env: String,
-    apm_config: ApmConfig,
-    otlp_traces: TracesConfig,
+    target_traces_per_second: f64,
+    errors_per_second: f64,
+    otlp_ignore_missing_datadog_fields: bool,
+    otlp_sampling_percentage: f64,
     string_builder: StringBuilder,
     error_tracking_standalone: bool,
     extra_headers: Vec<(HeaderName, HeaderValue)>,
@@ -416,9 +452,10 @@ struct TraceEndpointEncoder {
 
 impl TraceEndpointEncoder {
     fn new(
-        default_hostname: MetaString, version: String, env: String, apm_config: ApmConfig, otlp_traces: TracesConfig,
+        default_hostname: MetaString, version: String, env: String, target_traces_per_second: f64,
+        errors_per_second: f64, error_tracking_standalone: bool, otlp_ignore_missing_datadog_fields: bool,
+        otlp_sampling_percentage: f64,
     ) -> Self {
-        let error_tracking_standalone = apm_config.error_tracking_standalone_enabled();
         let extra_headers = if error_tracking_standalone {
             vec![(
                 HeaderName::from_static("x-datadog-error-tracking-standalone"),
@@ -433,8 +470,10 @@ impl TraceEndpointEncoder {
             default_hostname,
             version,
             env,
-            apm_config,
-            otlp_traces,
+            target_traces_per_second,
+            errors_per_second,
+            otlp_ignore_missing_datadog_fields,
+            otlp_sampling_percentage,
             string_builder: StringBuilder::new(),
             error_tracking_standalone,
             extra_headers,
@@ -460,11 +499,11 @@ impl TraceEndpointEncoder {
         let container_tags = resolve_container_tags_from_attrs(
             &trace.attributes,
             source.as_ref(),
-            self.otlp_traces.ignore_missing_datadog_fields,
+            self.otlp_ignore_missing_datadog_fields,
         );
         let env = if !trace.payload.env.is_empty() {
             Some(trace.payload.env.as_ref())
-        } else if self.otlp_traces.ignore_missing_datadog_fields {
+        } else if self.otlp_ignore_missing_datadog_fields {
             Some("")
         } else {
             None
@@ -473,7 +512,7 @@ impl TraceEndpointEncoder {
             trace.payload.hostname.as_ref(),
             source.as_ref(),
             Some(self.default_hostname.as_ref()),
-            self.otlp_traces.ignore_missing_datadog_fields,
+            self.otlp_ignore_missing_datadog_fields,
         );
         let app_version = if !trace.payload.app_version.is_empty() {
             Some(trace.payload.app_version.as_ref())
@@ -494,8 +533,8 @@ impl TraceEndpointEncoder {
             .host_name(&self.agent_hostname)?
             .env(&self.env)?
             .agent_version(&self.version)?
-            .target_tps(self.apm_config.target_traces_per_second())?
-            .error_tps(self.apm_config.errors_per_second())?;
+            .target_tps(self.target_traces_per_second)?
+            .error_tps(self.errors_per_second)?;
 
         ap_builder.add_tracer_payloads(|tp| {
             if let Some(cid) = container_id {
@@ -658,7 +697,7 @@ impl TraceEndpointEncoder {
     }
 
     fn sampling_rate(&self) -> f64 {
-        let rate = self.otlp_traces.probabilistic_sampler.sampling_percentage / 100.0;
+        let rate = self.otlp_sampling_percentage / 100.0;
         if rate <= 0.0 || rate >= 1.0 {
             return 1.0;
         }
@@ -860,12 +899,16 @@ mod tests {
         )
         .await;
         let apm_config = ApmConfig::from_configuration(&cfg).expect("ApmConfig should deserialize");
+        let traces_config = TracesConfig::default();
         TraceEndpointEncoder::new(
             MetaString::from("test-host"),
             "0.0.0".to_string(),
             "none".to_string(),
-            apm_config,
-            TracesConfig::default(),
+            apm_config.target_traces_per_second(),
+            apm_config.errors_per_second(),
+            apm_config.error_tracking_standalone_enabled(),
+            traces_config.ignore_missing_datadog_fields,
+            traces_config.probabilistic_sampler.sampling_percentage,
         )
     }
 

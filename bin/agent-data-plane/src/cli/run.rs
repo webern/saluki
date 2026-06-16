@@ -597,7 +597,7 @@ fn add_otlp_pipeline_to_blueprint(
             "OTLP proxy mode enabled. Select OTLP payloads will be proxied to the Core Agent."
         );
 
-        let otlp_relay_config = OtlpRelayConfiguration::from_configuration(config)?;
+        let otlp_relay_config = OtlpRelayConfiguration::from_native(&saluki_config.otlp_receiver);
         let otlp_decoder_config = OtlpDecoderConfiguration::from_configuration(config)?;
 
         let local_agent_otlp_forwarder_config = OtlpForwarderConfiguration::from_native(&saluki_config.otlp_forwarder);

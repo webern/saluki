@@ -5,7 +5,7 @@ use std::time::Duration;
 use saluki_component_config::{
     ChecksIpcConfiguration, DatadogEventsEncoderConfiguration, DatadogLogsEncoderConfiguration,
     DatadogServiceChecksEncoderConfiguration, OtlpForwarderConfiguration, OtlpPipelineConfiguration,
-    PipelineConfiguration,
+    OtlpReceiverConfiguration, PipelineConfiguration,
 };
 use saluki_io::net::ListenAddress;
 
@@ -26,6 +26,9 @@ pub struct SalukiConfiguration {
 
     /// Datadog service-checks encoder settings.
     pub datadog_service_checks_encoder: DatadogServiceChecksEncoderConfiguration,
+
+    /// OTLP receiver settings.
+    pub otlp_receiver: OtlpReceiverConfiguration,
 
     /// OTLP forwarder settings.
     pub otlp_forwarder: OtlpForwarderConfiguration,

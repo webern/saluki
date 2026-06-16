@@ -5,6 +5,7 @@ use axum::body::Bytes;
 use facet::Facet;
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
 use saluki_common::buf::FrozenChunkedBytesBuffer;
+use saluki_component_config::OtlpReceiverConfiguration;
 use saluki_config::GenericConfiguration;
 use saluki_core::components::relays::{Relay, RelayBuilder, RelayContext};
 use saluki_core::components::ComponentContext;
@@ -41,6 +42,27 @@ pub struct OtlpRelayConfig {
 }
 
 impl OtlpRelayConfiguration {
+    /// Creates a new `OtlpRelayConfiguration` from native receiver configuration.
+    pub fn from_native(config: &OtlpReceiverConfiguration) -> Self {
+        Self {
+            otlp_config: OtlpRelayConfig {
+                receiver: Receiver {
+                    protocols: crate::common::otlp::config::Protocols {
+                        grpc: crate::common::otlp::config::GrpcConfig {
+                            endpoint: endpoint_without_transport(config.grpc_endpoint()),
+                            transport: transport_name(config.grpc_endpoint()).to_string(),
+                            max_recv_msg_size_mib: (config.grpc_max_recv_msg_size_bytes() / 1024 / 1024) as u64,
+                        },
+                        http: crate::common::otlp::config::HttpConfig {
+                            endpoint: endpoint_without_transport(config.http_endpoint()),
+                            transport: transport_name(config.http_endpoint()).to_string(),
+                        },
+                    },
+                },
+            },
+        }
+    }
+
     /// Creates a new `OtlpRelayConfiguration` from the given generic configuration.
     pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
         config.as_typed().map_err(Into::into)
@@ -166,6 +188,17 @@ impl Relay for OtlpRelay {
         debug!("OTLP relay stopped.");
 
         Ok(())
+    }
+}
+
+fn transport_name(address: &ListenAddress) -> &'static str {
+    address.listener_type()
+}
+
+fn endpoint_without_transport(address: &ListenAddress) -> String {
+    match address {
+        ListenAddress::Tcp(addr) | ListenAddress::Udp(addr) => addr.to_string(),
+        ListenAddress::Unix(path) | ListenAddress::Unixgram(path) => path.display().to_string(),
     }
 }
 

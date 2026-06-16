@@ -6,8 +6,8 @@ use agent_data_plane_config::{
     BootstrapConfiguration, BootstrapStartupConfiguration, BootstrapTelemetryConfiguration, ChecksIpcConfiguration,
     ConfigStreamAuthority, DataPlaneConfiguration, DatadogEventsEncoderConfiguration, DatadogLogsEncoderConfiguration,
     DatadogServiceChecksEncoderConfiguration, EnvironmentConfiguration, OtlpForwarderConfiguration,
-    OtlpPipelineConfiguration, OtlpProxyConfiguration, PipelineConfiguration, RuntimeConfigAuthority,
-    RuntimeConfigLanguage, SalukiConfiguration,
+    OtlpPipelineConfiguration, OtlpProxyConfiguration, OtlpReceiverConfiguration, PipelineConfiguration,
+    RuntimeConfigAuthority, RuntimeConfigLanguage, SalukiConfiguration,
 };
 use datadog_agent_commons::ipc::config::RemoteAgentClientConfiguration;
 use datadog_agent_config::{
@@ -229,6 +229,32 @@ fn translate_datadog_snapshot(config: &GenericConfiguration) -> Result<SalukiCon
             .error_context("Failed to read `checks_ipc_endpoint`.")?
             .unwrap_or_else(|| ListenAddress::any_tcp(5105)),
     );
+    let otlp_grpc_max_recv_msg_size_mib = config
+        .try_get_typed::<u64>("otlp_config.receiver.protocols.grpc.max_recv_msg_size_mib")
+        .error_context("Failed to read `otlp_config.receiver.protocols.grpc.max_recv_msg_size_mib`.")?
+        .unwrap_or(4);
+    let otlp_grpc_max_recv_msg_size_mib = if otlp_grpc_max_recv_msg_size_mib == 0 {
+        4
+    } else {
+        otlp_grpc_max_recv_msg_size_mib
+    };
+    let otlp_receiver = OtlpReceiverConfiguration::new(
+        read_otlp_listen_address(
+            config,
+            "otlp_config.receiver.protocols.http.endpoint",
+            "otlp_config.receiver.protocols.http.transport",
+            "0.0.0.0:4318",
+            "tcp",
+        )?,
+        read_otlp_listen_address(
+            config,
+            "otlp_config.receiver.protocols.grpc.endpoint",
+            "otlp_config.receiver.protocols.grpc.transport",
+            "0.0.0.0:4317",
+            "tcp",
+        )?,
+        (otlp_grpc_max_recv_msg_size_mib * 1024 * 1024) as usize,
+    );
     let datadog_logs_encoder = DatadogLogsEncoderConfiguration::new(
         source.serializer_compressor_kind.clone(),
         source.serializer_zstd_compressor_level as i32,
@@ -286,6 +312,7 @@ fn translate_datadog_snapshot(config: &GenericConfiguration) -> Result<SalukiCon
         datadog_logs_encoder,
         datadog_events_encoder,
         datadog_service_checks_encoder,
+        otlp_receiver,
         otlp_forwarder,
         environment,
     };
@@ -294,6 +321,31 @@ fn translate_datadog_snapshot(config: &GenericConfiguration) -> Result<SalukiCon
     check_and_warn_config(config, &active_pipelines).error_context("Incompatible configuration detected.")?;
 
     Ok(saluki)
+}
+
+fn read_otlp_listen_address(
+    config: &GenericConfiguration, endpoint_key: &'static str, transport_key: &'static str,
+    default_endpoint: &'static str, default_transport: &'static str,
+) -> Result<ListenAddress, GenericError> {
+    let endpoint = config
+        .try_get_typed::<String>(endpoint_key)
+        .error_context(format!("Failed to read `{}`.", endpoint_key))?
+        .unwrap_or_else(|| default_endpoint.to_string());
+    let transport = config
+        .try_get_typed::<String>(transport_key)
+        .error_context(format!("Failed to read `{}`.", transport_key))?
+        .unwrap_or_else(|| default_transport.to_string());
+    let address = format!("{}://{}", transport, endpoint);
+
+    ListenAddress::try_from(address.as_str()).map_err(|e| {
+        generic_error!(
+            "Failed to parse OTLP listen address from `{}`/`{}` ({}): {}",
+            transport_key,
+            endpoint_key,
+            address,
+            e
+        )
+    })
 }
 
 fn active_pipelines(dp_config: &DataPlaneConfiguration) -> HashSet<Pipeline> {

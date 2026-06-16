@@ -94,6 +94,42 @@ impl OtlpProxyConfiguration {
     }
 }
 
+/// Native OTLP receiver settings.
+#[derive(Clone, Debug)]
+pub struct OtlpReceiverConfiguration {
+    http_endpoint: ListenAddress,
+    grpc_endpoint: ListenAddress,
+    grpc_max_recv_msg_size_bytes: usize,
+}
+
+impl OtlpReceiverConfiguration {
+    /// Creates OTLP receiver settings.
+    pub const fn new(
+        http_endpoint: ListenAddress, grpc_endpoint: ListenAddress, grpc_max_recv_msg_size_bytes: usize,
+    ) -> Self {
+        Self {
+            http_endpoint,
+            grpc_endpoint,
+            grpc_max_recv_msg_size_bytes,
+        }
+    }
+
+    /// Returns the HTTP listen endpoint.
+    pub const fn http_endpoint(&self) -> &ListenAddress {
+        &self.http_endpoint
+    }
+
+    /// Returns the gRPC listen endpoint.
+    pub const fn grpc_endpoint(&self) -> &ListenAddress {
+        &self.grpc_endpoint
+    }
+
+    /// Returns the maximum accepted gRPC message size in bytes.
+    pub const fn grpc_max_recv_msg_size_bytes(&self) -> usize {
+        self.grpc_max_recv_msg_size_bytes
+    }
+}
+
 /// Native OTLP forwarder settings.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OtlpForwarderConfiguration {

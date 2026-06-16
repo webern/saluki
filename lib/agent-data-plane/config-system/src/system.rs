@@ -18,6 +18,7 @@ use datadog_agent_config::{
     DatadogConfiguration, DatadogRemapper, KEY_ALIASES,
 };
 use saluki_app::{
+    accounting::MemoryBoundsConfiguration,
     config::ConfigView,
     logging::{LoggingConfiguration, LoggingOverrideController},
 };
@@ -660,6 +661,11 @@ impl StartedConfigurationSystem {
     /// Creates the dynamic log-level worker for the resolved configuration source.
     pub fn dynamic_log_level_worker(&self, controller: LoggingOverrideController) -> DynamicLogLevelWorker {
         DynamicLogLevelWorker::new(&self.compat_datadog_source, controller)
+    }
+
+    /// Returns the resolved memory bounds configuration.
+    pub fn memory_bounds_configuration(&self) -> Result<MemoryBoundsConfiguration, GenericError> {
+        MemoryBoundsConfiguration::try_from_config(&self.compat_datadog_source)
     }
 
     /// Returns the provider attachments created during startup.

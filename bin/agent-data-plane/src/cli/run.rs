@@ -8,11 +8,7 @@ use agent_data_plane_config_system::{BootstrapInputs, ConfigurationSystem, Start
 use argh::FromArgs;
 use datadog_agent_commons::platform::PlatformSettings;
 use resource_accounting::{ComponentBounds, ComponentRegistry};
-use saluki_app::{
-    accounting::{initialize_memory_bounds, MemoryBoundsConfiguration},
-    bootstrap::BootstrapGuard,
-    metrics::emit_startup_metrics,
-};
+use saluki_app::{accounting::initialize_memory_bounds, bootstrap::BootstrapGuard, metrics::emit_startup_metrics};
 use saluki_components::{
     config::MrfConfiguration,
     decoders::otlp::OtlpDecoderConfiguration,
@@ -138,7 +134,7 @@ pub async fn handle_run_command(
     .error_context("Failed to create internal supervisor.")?;
 
     // Run memory bounds validation to ensure that we can launch the topology with our configured memory limit, if any.
-    let bounds_config = MemoryBoundsConfiguration::try_from_config(config)?;
+    let bounds_config = started_config.memory_bounds_configuration()?;
     let memory_limiter = initialize_memory_bounds(bounds_config, component_registry.root())?;
 
     if let Ok(val) = std::env::var("DD_ADP_WRITE_SIZING_GUIDE") {

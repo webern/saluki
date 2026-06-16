@@ -3,7 +3,8 @@
 use std::{path::PathBuf, time::Duration};
 
 use saluki_component_config::{
-    AggregateConfiguration, ChecksIpcConfiguration, DatadogEventsEncoderConfiguration, DatadogLogsEncoderConfiguration,
+    AggregateConfiguration, ChecksIpcConfiguration, DatadogApmStatsEncoderConfiguration,
+    DatadogEventsEncoderConfiguration, DatadogLogsEncoderConfiguration, DatadogMetricsEncoderConfiguration,
     DatadogServiceChecksEncoderConfiguration, DogStatsDDebugLogConfiguration, DogStatsDMapperConfiguration,
     DogStatsDPostAggregateFilterConfiguration, DogStatsDPrefixFilterConfiguration, OtlpForwarderConfiguration,
     OtlpPipelineConfiguration, OtlpReceiverConfiguration, OtlpSourceConfiguration, OtlpTracesConfiguration,
@@ -32,11 +33,17 @@ pub struct SalukiConfiguration {
     /// Datadog logs encoder settings.
     pub datadog_logs_encoder: DatadogLogsEncoderConfiguration,
 
+    /// Datadog metrics encoder settings.
+    pub datadog_metrics_encoder: DatadogMetricsEncoderConfiguration,
+
     /// Datadog events encoder settings.
     pub datadog_events_encoder: DatadogEventsEncoderConfiguration,
 
     /// Datadog service-checks encoder settings.
     pub datadog_service_checks_encoder: DatadogServiceChecksEncoderConfiguration,
+
+    /// Datadog APM stats encoder settings.
+    pub datadog_apm_stats_encoder: DatadogApmStatsEncoderConfiguration,
 
     /// DogStatsD listener prefix/filter settings.
     pub dogstatsd_prefix_filter: DogStatsDPrefixFilterConfiguration,

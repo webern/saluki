@@ -2,7 +2,7 @@
 
 use saluki_components::{
     config::MrfConfiguration,
-    encoders::{DatadogApmStatsEncoderConfiguration, DatadogMetricsConfiguration, DatadogTraceConfiguration},
+    encoders::DatadogTraceConfiguration,
     forwarders::DatadogForwarderConfiguration,
     sources::DogStatsDConfiguration,
     transforms::{
@@ -30,12 +30,6 @@ impl RuntimeComponentConfiguration {
             .error_context("Failed to configure Datadog forwarder.")
     }
 
-    /// Builds Datadog metrics encoder configuration.
-    pub fn datadog_metrics_configuration(&self) -> Result<DatadogMetricsConfiguration, GenericError> {
-        DatadogMetricsConfiguration::from_configuration(&self.config)
-            .error_context("Failed to configure Datadog Metrics encoder.")
-    }
-
     /// Builds MRF configuration.
     pub fn mrf_configuration(&self) -> Result<MrfConfiguration, GenericError> {
         MrfConfiguration::from_configuration(&self.config)
@@ -45,12 +39,6 @@ impl RuntimeComponentConfiguration {
     /// Builds MRF metrics gateway configuration.
     pub fn mrf_metrics_gateway_configuration(&self, mrf_config: MrfConfiguration) -> MrfMetricsGatewayConfiguration {
         MrfMetricsGatewayConfiguration::new(mrf_config, self.config.clone())
-    }
-
-    /// Builds MRF Datadog metrics encoder configuration.
-    pub fn mrf_datadog_metrics_configuration(&self) -> Result<DatadogMetricsConfiguration, GenericError> {
-        DatadogMetricsConfiguration::from_configuration(&self.config)
-            .error_context("Failed to configure Multi-Region Failover Datadog Metrics encoder.")
     }
 
     /// Builds MRF Datadog forwarder configuration.
@@ -89,12 +77,6 @@ impl RuntimeComponentConfiguration {
     pub fn apm_stats_transform_configuration(&self) -> Result<ApmStatsTransformConfiguration, GenericError> {
         ApmStatsTransformConfiguration::from_configuration(&self.config)
             .error_context("Failed to configure APM Stats transform.")
-    }
-
-    /// Builds Datadog APM stats encoder configuration.
-    pub fn datadog_apm_stats_encoder_configuration(&self) -> Result<DatadogApmStatsEncoderConfiguration, GenericError> {
-        DatadogApmStatsEncoderConfiguration::from_configuration(&self.config)
-            .error_context("Failed to configure Datadog APM Stats encoder.")
     }
 
     /// Builds DogStatsD source configuration.

@@ -11,11 +11,11 @@ use std::{
 use agent_data_plane_config::{
     AggregateConfiguration, BootstrapConfiguration, BootstrapStartupConfiguration, BootstrapTelemetryConfiguration,
     ChecksIpcConfiguration, ConfigStreamAuthority, ControlPlaneConfiguration, DataPlaneConfiguration,
-    DatadogEventsEncoderConfiguration, DatadogLogsEncoderConfiguration, DatadogServiceChecksEncoderConfiguration,
-    DogStatsDCliConfiguration, DogStatsDDebugLogConfiguration, DogStatsDMapperConfiguration,
-    DogStatsDMapperProfileConfiguration, DogStatsDMetricMappingConfiguration,
-    DogStatsDPostAggregateFilterConfiguration, DogStatsDPrefixFilterConfiguration, DynamicValue,
-    EnvironmentConfiguration, MetricTagFilterAction, MetricTagFilterEntry, OtlpForwarderConfiguration,
+    DatadogApmStatsEncoderConfiguration, DatadogEventsEncoderConfiguration, DatadogLogsEncoderConfiguration,
+    DatadogMetricsEncoderConfiguration, DatadogServiceChecksEncoderConfiguration, DogStatsDCliConfiguration,
+    DogStatsDDebugLogConfiguration, DogStatsDMapperConfiguration, DogStatsDMapperProfileConfiguration,
+    DogStatsDMetricMappingConfiguration, DogStatsDPostAggregateFilterConfiguration, DogStatsDPrefixFilterConfiguration,
+    DynamicValue, EnvironmentConfiguration, MetricTagFilterAction, MetricTagFilterEntry, OtlpForwarderConfiguration,
     OtlpPipelineConfiguration, OtlpProxyConfiguration, OtlpReceiverConfiguration, OtlpSourceConfiguration,
     OtlpTracesConfiguration, OttlErrorMode, OttlFilterConfiguration, OttlTransformConfiguration, PipelineConfiguration,
     RuntimeConfigAuthority, RuntimeConfigLanguage, SalukiConfiguration, TagFilterlistConfiguration,
@@ -857,6 +857,45 @@ fn translate_dogstatsd_mapper_configuration(
     ))
 }
 
+fn translate_datadog_apm_stats_encoder_configuration(
+    config: &GenericConfiguration,
+) -> Result<DatadogApmStatsEncoderConfiguration, GenericError> {
+    Ok(DatadogApmStatsEncoderConfiguration::new(
+        config
+            .try_get_typed("flush_timeout_secs")
+            .error_context("Failed to read `flush_timeout_secs`.")?
+            .unwrap_or(2),
+        config
+            .try_get_typed("env")
+            .error_context("Failed to read `env`.")?
+            .unwrap_or_else(|| "none".to_string()),
+    ))
+}
+
+fn translate_datadog_metrics_encoder_configuration(
+    config: &GenericConfiguration, source: &DatadogConfiguration,
+) -> Result<DatadogMetricsEncoderConfiguration, GenericError> {
+    Ok(DatadogMetricsEncoderConfiguration::new(
+        config
+            .try_get_typed("serializer_max_metrics_per_payload")
+            .error_context("Failed to read `serializer_max_metrics_per_payload`.")?
+            .unwrap_or(10_000),
+        source.serializer_max_payload_size as usize,
+        source.serializer_max_uncompressed_payload_size as usize,
+        source.serializer_max_series_payload_size as usize,
+        source.serializer_max_series_uncompressed_payload_size as usize,
+        source.serializer_max_series_points_per_payload as usize,
+        config
+            .try_get_typed("flush_timeout_secs")
+            .error_context("Failed to read `flush_timeout_secs`.")?
+            .unwrap_or(2),
+        source.serializer_compressor_kind.clone(),
+        source.serializer_zstd_compressor_level as i32,
+        source.use_v2_api.clone().unwrap_or_default().series,
+        source.log_payloads,
+    ))
+}
+
 fn translate_dogstatsd_debug_log_configuration(
     config: &GenericConfiguration,
 ) -> Result<DogStatsDDebugLogConfiguration, GenericError> {
@@ -987,6 +1026,7 @@ fn translate_datadog_snapshot(config: &GenericConfiguration) -> Result<SalukiCon
         source.serializer_compressor_kind.clone(),
         source.serializer_zstd_compressor_level as i32,
     );
+    let datadog_metrics_encoder = translate_datadog_metrics_encoder_configuration(config, &source)?;
     let datadog_events_encoder = DatadogEventsEncoderConfiguration::new(
         source.serializer_max_payload_size as usize,
         source.serializer_max_uncompressed_payload_size as usize,
@@ -1001,6 +1041,7 @@ fn translate_datadog_snapshot(config: &GenericConfiguration) -> Result<SalukiCon
         source.serializer_zstd_compressor_level as i32,
         source.log_payloads,
     );
+    let datadog_apm_stats_encoder = translate_datadog_apm_stats_encoder_configuration(config)?;
     let dogstatsd_prefix_filter = translate_dogstatsd_prefix_filter_configuration(config)?;
     let dogstatsd_mapper = translate_dogstatsd_mapper_configuration(config)?;
     let aggregate = translate_aggregate_configuration(config)?;
@@ -1033,8 +1074,10 @@ fn translate_datadog_snapshot(config: &GenericConfiguration) -> Result<SalukiCon
         ottl_filter,
         ottl_transform,
         datadog_logs_encoder,
+        datadog_metrics_encoder,
         datadog_events_encoder,
         datadog_service_checks_encoder,
+        datadog_apm_stats_encoder,
         dogstatsd_prefix_filter,
         dogstatsd_mapper,
         aggregate,

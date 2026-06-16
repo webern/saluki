@@ -953,6 +953,129 @@ impl DogStatsDMetricMappingConfiguration {
     }
 }
 
+/// Native Datadog APM stats encoder settings.
+#[derive(Clone, Debug)]
+pub struct DatadogApmStatsEncoderConfiguration {
+    flush_timeout_secs: u64,
+    env: String,
+}
+
+impl DatadogApmStatsEncoderConfiguration {
+    /// Creates native Datadog APM stats encoder settings.
+    pub fn new(flush_timeout_secs: u64, env: String) -> Self {
+        Self {
+            flush_timeout_secs,
+            env,
+        }
+    }
+
+    /// Returns the flush timeout in seconds.
+    pub const fn flush_timeout_secs(&self) -> u64 {
+        self.flush_timeout_secs
+    }
+
+    /// Returns the default stats environment.
+    pub fn env(&self) -> &str {
+        &self.env
+    }
+}
+
+/// Native Datadog metrics encoder settings.
+#[derive(Clone, Debug)]
+pub struct DatadogMetricsEncoderConfiguration {
+    max_metrics_per_payload: usize,
+    max_payload_size: usize,
+    max_uncompressed_payload_size: usize,
+    max_series_payload_size: usize,
+    max_series_uncompressed_payload_size: usize,
+    max_series_points_per_payload: usize,
+    flush_timeout_secs: u64,
+    compressor_kind: String,
+    zstd_compressor_level: i32,
+    use_v2_api_series: bool,
+    log_payloads: bool,
+}
+
+impl DatadogMetricsEncoderConfiguration {
+    /// Creates native Datadog metrics encoder settings.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        max_metrics_per_payload: usize, max_payload_size: usize, max_uncompressed_payload_size: usize,
+        max_series_payload_size: usize, max_series_uncompressed_payload_size: usize,
+        max_series_points_per_payload: usize, flush_timeout_secs: u64, compressor_kind: String,
+        zstd_compressor_level: i32, use_v2_api_series: bool, log_payloads: bool,
+    ) -> Self {
+        Self {
+            max_metrics_per_payload,
+            max_payload_size,
+            max_uncompressed_payload_size,
+            max_series_payload_size,
+            max_series_uncompressed_payload_size,
+            max_series_points_per_payload,
+            flush_timeout_secs,
+            compressor_kind,
+            zstd_compressor_level,
+            use_v2_api_series,
+            log_payloads,
+        }
+    }
+
+    /// Returns the maximum number of metrics per payload.
+    pub const fn max_metrics_per_payload(&self) -> usize {
+        self.max_metrics_per_payload
+    }
+
+    /// Returns the generic compressed payload limit in bytes.
+    pub const fn max_payload_size(&self) -> usize {
+        self.max_payload_size
+    }
+
+    /// Returns the generic uncompressed payload limit in bytes.
+    pub const fn max_uncompressed_payload_size(&self) -> usize {
+        self.max_uncompressed_payload_size
+    }
+
+    /// Returns the V2 series compressed payload limit in bytes.
+    pub const fn max_series_payload_size(&self) -> usize {
+        self.max_series_payload_size
+    }
+
+    /// Returns the V2 series uncompressed payload limit in bytes.
+    pub const fn max_series_uncompressed_payload_size(&self) -> usize {
+        self.max_series_uncompressed_payload_size
+    }
+
+    /// Returns the maximum number of V2 series points per payload.
+    pub const fn max_series_points_per_payload(&self) -> usize {
+        self.max_series_points_per_payload
+    }
+
+    /// Returns the flush timeout in seconds.
+    pub const fn flush_timeout_secs(&self) -> u64 {
+        self.flush_timeout_secs
+    }
+
+    /// Returns the serializer compressor kind.
+    pub fn compressor_kind(&self) -> &str {
+        &self.compressor_kind
+    }
+
+    /// Returns the zstd compression level.
+    pub const fn zstd_compressor_level(&self) -> i32 {
+        self.zstd_compressor_level
+    }
+
+    /// Returns whether to use the V2 series API.
+    pub const fn use_v2_api_series(&self) -> bool {
+        self.use_v2_api_series
+    }
+
+    /// Returns whether encoded metrics should be logged.
+    pub const fn log_payloads(&self) -> bool {
+        self.log_payloads
+    }
+}
+
 /// Native DogStatsD debug-log destination settings.
 #[derive(Clone, Debug)]
 pub struct DogStatsDDebugLogConfiguration {

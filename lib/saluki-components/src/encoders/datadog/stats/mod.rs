@@ -11,6 +11,7 @@ use facet::Facet;
 use http::{uri::PathAndQuery, HeaderValue, Method, Uri};
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
 use saluki_common::task::HandleExt as _;
+use saluki_component_config::DatadogApmStatsEncoderConfiguration as NativeDatadogApmStatsEncoderConfiguration;
 use saluki_config::GenericConfiguration;
 use saluki_core::{
     components::{encoders::*, ComponentContext},
@@ -87,6 +88,17 @@ impl DatadogApmStatsEncoderConfiguration {
         stats_config.agent_version = format!("agent-data-plane/{}", app_details.version().raw());
 
         Ok(stats_config)
+    }
+
+    /// Creates a new `DatadogApmStatsEncoderConfiguration` from native settings.
+    pub fn from_native(config: &NativeDatadogApmStatsEncoderConfiguration) -> Self {
+        let app_details = saluki_metadata::get_app_details();
+        Self {
+            flush_timeout_secs: config.flush_timeout_secs(),
+            agent_hostname: None,
+            agent_version: format!("agent-data-plane/{}", app_details.version().raw()),
+            env: config.env().to_string(),
+        }
     }
 
     /// Sets the agent hostname using the environment provider.

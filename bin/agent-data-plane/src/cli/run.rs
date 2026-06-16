@@ -14,8 +14,8 @@ use saluki_components::{
     decoders::otlp::OtlpDecoderConfiguration,
     destinations::{DogStatsDDebugLogConfiguration, DogStatsDStatisticsConfiguration},
     encoders::{
-        BufferedIncrementalConfiguration, DatadogEventsConfiguration, DatadogLogsConfiguration,
-        DatadogServiceChecksConfiguration,
+        BufferedIncrementalConfiguration, DatadogApmStatsEncoderConfiguration, DatadogEventsConfiguration,
+        DatadogLogsConfiguration, DatadogMetricsConfiguration, DatadogServiceChecksConfiguration,
     },
     forwarders::OtlpForwarderConfiguration,
     relays::otlp::OtlpRelayConfiguration,
@@ -307,7 +307,7 @@ async fn add_baseline_metrics_pipeline_to_blueprint(
         metrics_enrich_config = metrics_enrich_config.with_transform_builder("host_tags", host_tags_config);
     }
 
-    let dd_metrics_config = runtime_config.datadog_metrics_configuration()?;
+    let dd_metrics_config = DatadogMetricsConfiguration::from_native(&saluki_config.datadog_metrics_encoder);
 
     blueprint
         // Components.
@@ -316,13 +316,14 @@ async fn add_baseline_metrics_pipeline_to_blueprint(
         // Metrics, then forwarding.
         .connect_components_in_order(["metrics_enrich", "dd_metrics_encode", "dd_out"])?;
 
-    add_mrf_metrics_pipeline_to_blueprint(blueprint, runtime_config)?;
+    add_mrf_metrics_pipeline_to_blueprint(blueprint, runtime_config, saluki_config)?;
 
     Ok(())
 }
 
 fn add_mrf_metrics_pipeline_to_blueprint(
     blueprint: &mut TopologyBlueprint, runtime_config: &RuntimeComponentConfiguration,
+    saluki_config: &SalukiConfiguration,
 ) -> Result<(), GenericError> {
     let mrf_config = runtime_config.mrf_configuration()?;
 
@@ -340,7 +341,7 @@ fn add_mrf_metrics_pipeline_to_blueprint(
     };
 
     let mrf_gateway_config = runtime_config.mrf_metrics_gateway_configuration(mrf_config.clone());
-    let mrf_metrics_config = runtime_config.mrf_datadog_metrics_configuration()?;
+    let mrf_metrics_config = DatadogMetricsConfiguration::from_native(&saluki_config.datadog_metrics_encoder);
     let mrf_forwarder_config =
         runtime_config.mrf_datadog_forwarder_configuration(mrf_dd_url, mrf_api_key, "multi_region_failover.api_key")?;
 
@@ -425,10 +426,10 @@ async fn add_baseline_traces_pipeline_to_blueprint(
         .apm_stats_transform_configuration()?
         .with_environment_provider(env_provider.clone())
         .await?;
-    let dd_apm_stats_encoder = runtime_config
-        .datadog_apm_stats_encoder_configuration()?
-        .with_environment_provider(env_provider.clone())
-        .await?;
+    let dd_apm_stats_encoder =
+        DatadogApmStatsEncoderConfiguration::from_native(&saluki_config.datadog_apm_stats_encoder)
+            .with_environment_provider(env_provider.clone())
+            .await?;
 
     blueprint
         .add_transform("traces_enrich", dd_traces_enrich_config)?

@@ -8,6 +8,7 @@ use http::{uri::PathAndQuery, HeaderValue, Method, Uri};
 use protobuf::{rt::WireType, CodedOutputStream, Enum as _};
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
 use saluki_common::{iter::ReusableDeduplicator, task::HandleExt as _};
+use saluki_component_config::DatadogMetricsEncoderConfiguration as NativeDatadogMetricsEncoderConfiguration;
 use saluki_config::GenericConfiguration;
 use saluki_context::tags::{SharedTagSet, Tag};
 use saluki_core::{
@@ -287,6 +288,24 @@ impl DatadogMetricsConfiguration {
     /// Creates a new `DatadogMetricsConfiguration` from the given configuration.
     pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
         Ok(config.as_typed()?)
+    }
+
+    /// Creates a new `DatadogMetricsConfiguration` from native settings.
+    pub fn from_native(config: &NativeDatadogMetricsEncoderConfiguration) -> Self {
+        Self {
+            max_metrics_per_payload: config.max_metrics_per_payload(),
+            max_payload_size: config.max_payload_size(),
+            max_uncompressed_payload_size: config.max_uncompressed_payload_size(),
+            max_series_payload_size: config.max_series_payload_size(),
+            max_series_uncompressed_payload_size: config.max_series_uncompressed_payload_size(),
+            max_series_points_per_payload: config.max_series_points_per_payload(),
+            flush_timeout_secs: config.flush_timeout_secs(),
+            compressor_kind: config.compressor_kind().to_string(),
+            zstd_compressor_level: config.zstd_compressor_level(),
+            use_v2_api_series: config.use_v2_api_series(),
+            log_payloads: config.log_payloads(),
+            additional_tags: None,
+        }
     }
 
     /// Sets additional tags to be applied uniformly to all metrics forwarded by this destination.

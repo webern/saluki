@@ -22,7 +22,8 @@ pub use cli::DogStatsDCliConfiguration;
 pub use private::SalukiPrivateConfiguration;
 pub use saluki::{ControlPlaneConfiguration, DataPlaneConfiguration, EnvironmentConfiguration, SalukiConfiguration};
 pub use saluki_component_config::{
-    AggregateConfiguration, ChecksIpcConfiguration, DatadogEventsEncoderConfiguration, DatadogLogsEncoderConfiguration,
+    AggregateConfiguration, ChecksIpcConfiguration, DatadogApmStatsEncoderConfiguration,
+    DatadogEventsEncoderConfiguration, DatadogLogsEncoderConfiguration, DatadogMetricsEncoderConfiguration,
     DatadogServiceChecksEncoderConfiguration, DogStatsDDebugLogConfiguration, DogStatsDMapperConfiguration,
     DogStatsDMapperProfileConfiguration, DogStatsDMetricMappingConfiguration,
     DogStatsDPostAggregateFilterConfiguration, DogStatsDPrefixFilterConfiguration, DynamicValue, MetricTagFilterAction,

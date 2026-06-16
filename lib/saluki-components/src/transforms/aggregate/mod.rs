@@ -9,7 +9,6 @@ use hashbrown::{hash_map::Entry, HashMap};
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder, UsageExpr};
 use saluki_common::time::get_unix_timestamp;
 use saluki_component_config::AggregateConfig;
-use saluki_config::GenericConfiguration;
 use saluki_context::Context;
 use saluki_core::{
     components::{transforms::*, ComponentContext},
@@ -189,11 +188,6 @@ pub struct AggregateConfiguration {
 }
 
 impl AggregateConfiguration {
-    /// Creates a new `AggregateConfiguration` from the given configuration.
-    pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
-        Ok(config.as_typed()?)
-    }
-
     /// Creates a new `AggregateConfiguration` from the given native configuration.
     pub fn from_native(native: &AggregateConfig) -> Result<Self, GenericError> {
         let window_duration_seconds = NonZeroU64::new(native.window_duration.as_secs())

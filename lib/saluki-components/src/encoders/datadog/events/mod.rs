@@ -5,7 +5,6 @@ use http::{uri::PathAndQuery, HeaderValue, Method, Uri};
 use protobuf::{rt::WireType, CodedOutputStream};
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
 use saluki_common::iter::ReusableDeduplicator;
-use saluki_config::GenericConfiguration;
 use saluki_context::tags::Tag;
 use saluki_core::{
     components::{encoders::*, ComponentContext},
@@ -122,11 +121,6 @@ pub struct DatadogEventsConfiguration {
 }
 
 impl DatadogEventsConfiguration {
-    /// Creates a new `DatadogEventsConfiguration` from the given configuration.
-    pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
-        Ok(config.as_typed()?)
-    }
-
     /// Creates a new `DatadogEventsConfiguration` from the given native configuration.
     pub fn from_native(native: &saluki_component_config::DatadogEventsEncoderConfig) -> Result<Self, GenericError> {
         Ok(Self {

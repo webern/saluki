@@ -309,12 +309,6 @@ impl RoutableEndpoint {
         self.route
     }
 
-    /// Returns the resolved endpoint.
-    #[cfg(test)]
-    pub(crate) const fn endpoint(&self) -> &ResolvedEndpoint {
-        &self.endpoint
-    }
-
     /// Returns the resolved endpoint mutably.
     pub(crate) const fn endpoint_mut(&mut self) -> &mut ResolvedEndpoint {
         &mut self.endpoint
@@ -442,18 +436,6 @@ impl ResolvedEndpoint {
             (Some(raw_url), Some(index)) => Some((raw_url, index)),
             _ => None,
         }
-    }
-
-    /// Returns whether this endpoint can refresh its API key from dynamic configuration.
-    #[cfg(test)]
-    pub(crate) fn has_configuration(&self) -> bool {
-        self.config.is_some()
-    }
-
-    /// Returns whether this endpoint has an `api_key_index` (that is, is an additional endpoint).
-    #[cfg(test)]
-    pub(crate) fn has_api_key_index(&self) -> bool {
-        self.api_key_index.is_some()
     }
 
     /// Returns the pre-computed logs intake authority, if available.

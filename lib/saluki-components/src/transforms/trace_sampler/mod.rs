@@ -15,7 +15,6 @@
 use async_trait::async_trait;
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
 use saluki_common::collections::FastHashMap;
-use saluki_config::GenericConfiguration;
 use saluki_core::{
     components::{transforms::*, ComponentContext},
     data_model::event::{
@@ -42,7 +41,6 @@ use crate::common::datadog::{
     apm::ApmConfig, sample_by_rate, DECISION_MAKER_MANUAL, DECISION_MAKER_PROBABILISTIC, OTEL_TRACE_ID_META_KEY,
     SAMPLING_PRIORITY_METRIC_KEY, TAG_DECISION_MAKER,
 };
-use crate::common::otlp::config::TracesConfig;
 
 // Sampling priority constants (matching datadog-agent)
 const PRIORITY_AUTO_DROP: i32 = 0;
@@ -73,17 +71,6 @@ pub struct TraceSamplerConfiguration {
 }
 
 impl TraceSamplerConfiguration {
-    /// Creates a new `TraceSamplerConfiguration` from the given configuration.
-    pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
-        let apm_config = ApmConfig::from_configuration(config)?;
-        let otlp_traces: TracesConfig = config.try_get_typed("otlp_config.traces")?.unwrap_or_default();
-        let otlp_sampling_rate = normalize_sampling_rate(otlp_traces.probabilistic_sampler.sampling_percentage / 100.0);
-        Ok(Self {
-            apm_config,
-            otlp_sampling_rate,
-        })
-    }
-
     /// Creates a new `TraceSamplerConfiguration` from native configuration.
     ///
     /// The APM sampler parameters are carried by the default `ApmConfig`; the native OTLP sampling

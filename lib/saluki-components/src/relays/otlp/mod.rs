@@ -5,7 +5,6 @@ use axum::body::Bytes;
 use facet::Facet;
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
 use saluki_common::buf::FrozenChunkedBytesBuffer;
-use saluki_config::GenericConfiguration;
 use saluki_core::components::relays::{Relay, RelayBuilder, RelayContext};
 use saluki_core::components::ComponentContext;
 use saluki_core::data_model::payload::{GrpcPayload, Payload, PayloadMetadata, PayloadType};
@@ -41,11 +40,6 @@ pub struct OtlpRelayConfig {
 }
 
 impl OtlpRelayConfiguration {
-    /// Creates a new `OtlpRelayConfiguration` from the given generic configuration.
-    pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
-        config.as_typed().map_err(Into::into)
-    }
-
     /// Creates a new `OtlpRelayConfiguration` from native configuration.
     ///
     /// Only the gRPC/HTTP receiver endpoints are sourced from native configuration; the rest of the

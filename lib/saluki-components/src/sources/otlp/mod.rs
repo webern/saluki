@@ -15,7 +15,6 @@ use prost::Message;
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
 use saluki_common::sync::shutdown::{ShutdownCoordinator, ShutdownHandle};
 use saluki_common::task::HandleExt as _;
-use saluki_config::GenericConfiguration;
 use saluki_context::ContextResolver;
 use saluki_core::topology::interconnect::BufferedDispatcher;
 use saluki_core::{
@@ -125,13 +124,6 @@ pub struct OtlpConfiguration {
 }
 
 impl OtlpConfiguration {
-    /// Creates a new `OTLPConfiguration` from the given configuration.
-    pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
-        let mut cfg: Self = config.as_typed()?;
-        cfg.otlp_config.traces.apply_env_overrides(config)?;
-        Ok(cfg)
-    }
-
     /// Creates a new `OtlpConfiguration` from native configuration.
     ///
     /// The receiver sub-config is built from the native gRPC/HTTP endpoints when present, falling
@@ -517,25 +509,3 @@ async fn run_converter(
     debug!("OTLP resource converter task stopped.");
 }
 
-#[cfg(test)]
-mod config_smoke {
-    use datadog_agent_config_testing::config_registry::structs;
-    use datadog_agent_config_testing::run_config_smoke_tests;
-    use serde_json::json;
-
-    use super::OtlpConfiguration;
-    use crate::config::{DatadogRemapper, KEY_ALIASES};
-
-    #[tokio::test]
-    async fn smoke_test() {
-        run_config_smoke_tests(
-            structs::OTLP_CONFIGURATION,
-            &[],
-            json!({ "otlp_config": {} }),
-            |cfg| OtlpConfiguration::from_configuration(&cfg).expect("OtlpConfiguration should deserialize"),
-            KEY_ALIASES,
-            DatadogRemapper::new,
-        )
-        .await
-    }
-}

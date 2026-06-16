@@ -64,6 +64,15 @@ and constructs these components via native `from_native(&slice)` (no `GenericCon
 Each migrated component grew a `from_native` constructor in `saluki-components` (or the bin); the
 old `from_configuration` is retained behind `#[allow(dead_code)]` during the transition.
 
+### `run.rs` is GenericConfiguration-free; the shell is relocated to `cli/runtime.rs`
+
+`bin/agent-data-plane/src/cli/run.rs` now contains only the `RunCommand` definition (zero
+`GenericConfiguration` references). The runtime orchestration moved to `cli/runtime.rs`, which builds
+the data topology from the native `SalukiConfiguration` but still consumes `GenericConfiguration` for
+the runtime shell (below). This relocation keeps the command surface typed; it does not by itself
+make the shell native — that is the remaining work, and `runtime.rs` documents it inline. Decisions
+are logged in `datadog/projects/confra/design/spike-2c-claude.md`.
+
 ### Transitional remainders (still consume the raw configuration)
 
 These are the honest gaps to a *no-concessions* GenericConfiguration-free binary:

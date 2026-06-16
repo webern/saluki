@@ -73,21 +73,33 @@ the runtime shell (below). This relocation keeps the command surface typed; it d
 make the shell native — that is the remaining work, and `runtime.rs` documents it inline. Decisions
 are logged in `datadog/projects/confra/design/spike-2c-claude.md`.
 
-### Transitional remainders (still consume the raw configuration)
+### Now native (no longer raw-config) — added after the initial cutover
 
-These are the honest gaps to a *no-concessions* GenericConfiguration-free binary:
+- **Overlay classifier validation** moved into `config-system` (`validate_against_overlay`, run by
+  `translate_from_generic`), per the design. `runtime.rs` no longer flattens/classifies source keys.
+- **Memory bounds** are native: `SalukiConfiguration::memory` (`MemoryConfig`) is populated by the
+  config system, and `runtime.rs` builds `MemoryBoundsConfiguration::from_parts(...)` from it.
+- **Trace transforms** (sampler, obfuscation, APM stats) and the **traces encoder** are now built via
+  `from_native` (Default + native fields — a documented fidelity reduction for the heavy
+  `ApmConfig`/`ObfuscationConfig` rule sets).
 
-- **Environment provider, internal supervisor, memory bounds, overlay classifier** still take
-  `&GenericConfiguration`. The env/host/workload providers each construct their own IPC client from
-  the raw map; routing them through the shared `DatadogAgentConnection` is an explicit open design
-  question, so `run.rs` still resolves a `GenericConfiguration` and threads it to these subsystems.
-- **Host tags** stays on `from_configuration` (it queries the Agent; the native path is a disabled
-  stub pending the shared-connection question).
-- **Trace transforms** (sampler, obfuscation, APM stats) and the **traces encoder** wrap heavy
-  Datadog types (`ApmConfig`, `ObfuscationConfig`) that don't cleanly rebuild from the summarized
-  native types; they remain on `from_configuration`.
-- **MRF** and the **OTLP proxy branch** remain on `from_configuration` (MRF retains a map for
-  runtime watching; the OTLP proxy gRPC endpoint isn't a witnessed key).
+### Transitional remainders (still consume the raw configuration in `runtime.rs`)
+
+These are the honest gaps to a *no-concessions* GenericConfiguration-free binary. `run.rs` itself is
+free of it; these live in `cli/runtime.rs`:
+
+- **Bootstrap/authority resolution** (`DataPlaneConfiguration::from_configuration`, the
+  `RemoteAgentBootstrap` + dynamic-config-stream dance). Replaced in the end state by
+  `ConfigurationSystem::start()`.
+- **Environment provider** (host/workload/autodiscovery) and **internal supervisor** (`ConfigWorker`,
+  `DynamicLogLevelWorker`, `IpcAuthConfiguration` + server TLS). The env/host/workload providers and
+  the workload collectors (tagger/workloadmeta, plus containerd/cgroups/feature-detector/PID-resolver)
+  each construct their own IPC client and read config pervasively — routing them through the shared
+  `DatadogAgentConnection` is the design's open question and a genuine `saluki-env` rewrite.
+- **Host tags** (queries the Agent; native path is a disabled stub pending the shared connection).
+- **MRF** and the **OTLP proxy branch**: MRF's gateway retains a map for runtime watching; the OTLP
+  proxy gRPC endpoint isn't a witnessed key. Both need per-component watcher/translator work to go
+  native (the scoped `ScopedConfigHandle`s from `dynamic.rs` are the replacement for the watchers).
 
 ### To finish (no-concessions end state)
 

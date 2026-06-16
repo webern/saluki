@@ -7,8 +7,9 @@ use agent_data_plane_config::{
     ConfigStreamAuthority, ControlPlaneConfiguration, DataPlaneConfiguration, DatadogEventsEncoderConfiguration,
     DatadogLogsEncoderConfiguration, DatadogServiceChecksEncoderConfiguration, EnvironmentConfiguration,
     OtlpForwarderConfiguration, OtlpPipelineConfiguration, OtlpProxyConfiguration, OtlpReceiverConfiguration,
-    OtlpSourceConfiguration, OtlpTracesConfiguration, PipelineConfiguration, RuntimeConfigAuthority,
-    RuntimeConfigLanguage, SalukiConfiguration,
+    OtlpSourceConfiguration, OtlpTracesConfiguration, OttlErrorMode, OttlFilterConfiguration,
+    OttlTransformConfiguration, PipelineConfiguration, RuntimeConfigAuthority, RuntimeConfigLanguage,
+    SalukiConfiguration,
 };
 use bytesize::ByteSize;
 use datadog_agent_commons::ipc::config::{IpcAuthConfiguration, RemoteAgentClientConfiguration};
@@ -19,6 +20,7 @@ use datadog_agent_config::{
 use saluki_config::{ConfigurationLoader, DurationString, GenericConfiguration};
 use saluki_error::{generic_error, ErrorContext as _, GenericError};
 use saluki_io::net::{GrpcTargetAddress, ListenAddress};
+use serde::Deserialize;
 use tracing::{debug, error, info, trace, warn};
 
 use crate::{
@@ -177,6 +179,50 @@ fn translate_bootstrap_configuration(config: &GenericConfiguration) -> Result<Bo
     })
 }
 
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum SourceOttlErrorMode {
+    Ignore,
+    Silent,
+    #[default]
+    Propagate,
+}
+
+impl From<SourceOttlErrorMode> for OttlErrorMode {
+    fn from(value: SourceOttlErrorMode) -> Self {
+        match value {
+            SourceOttlErrorMode::Ignore => Self::Ignore,
+            SourceOttlErrorMode::Silent => Self::Silent,
+            SourceOttlErrorMode::Propagate => Self::Propagate,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SourceOttlFilterTracesConfiguration {
+    #[serde(default)]
+    span: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SourceOttlFilterConfiguration {
+    #[serde(default)]
+    error_mode: SourceOttlErrorMode,
+    #[serde(default)]
+    traces: SourceOttlFilterTracesConfiguration,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SourceOttlTransformConfiguration {
+    #[serde(default)]
+    error_mode: SourceOttlErrorMode,
+    #[serde(default)]
+    trace_statements: Vec<String>,
+}
+
 fn translate_datadog_snapshot(config: &GenericConfiguration) -> Result<SalukiConfiguration, GenericError> {
     let source = config
         .as_typed::<DatadogConfiguration>()
@@ -232,6 +278,20 @@ fn translate_datadog_snapshot(config: &GenericConfiguration) -> Result<SalukiCon
             .try_get_typed("checks_ipc_endpoint")
             .error_context("Failed to read `checks_ipc_endpoint`.")?
             .unwrap_or_else(|| ListenAddress::any_tcp(5105)),
+    );
+    let ottl_filter_source = config
+        .try_get_typed::<SourceOttlFilterConfiguration>("ottl_filter_config")
+        .error_context("Failed to read `ottl_filter_config`.")?
+        .unwrap_or_default();
+    let ottl_filter =
+        OttlFilterConfiguration::new(ottl_filter_source.error_mode.into(), ottl_filter_source.traces.span);
+    let ottl_transform_source = config
+        .try_get_typed::<SourceOttlTransformConfiguration>("ottl_transform_config")
+        .error_context("Failed to read `ottl_transform_config`.")?
+        .unwrap_or_default();
+    let ottl_transform = OttlTransformConfiguration::new(
+        ottl_transform_source.error_mode.into(),
+        ottl_transform_source.trace_statements,
     );
     let otlp_grpc_max_recv_msg_size_mib = config
         .try_get_typed::<u64>("otlp_config.receiver.protocols.grpc.max_recv_msg_size_mib")
@@ -359,6 +419,8 @@ fn translate_datadog_snapshot(config: &GenericConfiguration) -> Result<SalukiCon
         ),
         control_plane,
         checks_ipc,
+        ottl_filter,
+        ottl_transform,
         datadog_logs_encoder,
         datadog_events_encoder,
         datadog_service_checks_encoder,

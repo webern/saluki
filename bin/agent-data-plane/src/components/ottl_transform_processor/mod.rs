@@ -11,6 +11,8 @@ use async_trait::async_trait;
 use ottl::{CallbackMap, EnumMap, OttlParser};
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
 use saluki_common::collections::FastHashMap;
+use saluki_component_config::{OttlErrorMode, OttlTransformConfiguration as NativeOttlTransformConfiguration};
+#[cfg(test)]
 use saluki_config::GenericConfiguration;
 use saluki_core::{
     components::{transforms::*, ComponentContext},
@@ -34,6 +36,16 @@ pub struct OttlTransformConfiguration {
 }
 
 impl OttlTransformConfiguration {
+    /// Creates an `OttlTransformConfiguration` from native OTTL transform settings.
+    pub fn from_native(config: &NativeOttlTransformConfiguration) -> Self {
+        Self {
+            config: OttlTransformConfig {
+                error_mode: error_mode_from_native(config.error_mode()),
+                trace_statements: config.trace_statements().to_vec(),
+            },
+        }
+    }
+
     /// Creates an `OttlTransformConfiguration` from the given configuration.
     ///
     /// Reads the OTTL Transform config from the `ottl_transform_config` key at the top level of the data-plane
@@ -42,11 +54,20 @@ impl OttlTransformConfiguration {
     /// # Errors
     ///
     /// If a value at `ottl_transform_config` exists but fails to deserialize, an error is returned.
+    #[cfg(test)]
     pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
         let transform_config = config.try_get_typed::<OttlTransformConfig>("ottl_transform_config")?;
         Ok(Self {
             config: transform_config.unwrap_or_default(),
         })
+    }
+}
+
+fn error_mode_from_native(error_mode: OttlErrorMode) -> ErrorMode {
+    match error_mode {
+        OttlErrorMode::Ignore => ErrorMode::Ignore,
+        OttlErrorMode::Silent => ErrorMode::Silent,
+        OttlErrorMode::Propagate => ErrorMode::Propagate,
     }
 }
 

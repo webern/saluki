@@ -8,6 +8,8 @@
 use async_trait::async_trait;
 use ottl::{CallbackMap, EnumMap, OttlParser, Value};
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
+use saluki_component_config::{OttlErrorMode, OttlFilterConfiguration as NativeOttlFilterConfiguration};
+#[cfg(test)]
 use saluki_config::GenericConfiguration;
 use saluki_core::{
     components::{transforms::*, ComponentContext},
@@ -30,6 +32,18 @@ pub struct OttlFilterConfiguration {
 }
 
 impl OttlFilterConfiguration {
+    /// Creates configuration from native OTTL filter settings.
+    pub fn from_native(config: &NativeOttlFilterConfiguration) -> Self {
+        Self {
+            config: OttlFilterConfig {
+                error_mode: error_mode_from_native(config.error_mode()),
+                traces: config::TracesFilterConfig {
+                    span: config.span_conditions().to_vec(),
+                },
+            },
+        }
+    }
+
     /// Creates configuration from the given generic configuration.
     ///
     /// Reads the OTTL filter config from the `ottl_filter_config` key at the top level of the
@@ -39,11 +53,20 @@ impl OttlFilterConfiguration {
     /// # Errors
     ///
     /// Returns an error if a value at `ottl_filter_config` exists but fails to deserialize.
+    #[cfg(test)]
     pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
         let filter_config = config.try_get_typed::<OttlFilterConfig>("ottl_filter_config")?;
         Ok(Self {
             config: filter_config.unwrap_or_default(),
         })
+    }
+}
+
+fn error_mode_from_native(error_mode: OttlErrorMode) -> ErrorMode {
+    match error_mode {
+        OttlErrorMode::Ignore => ErrorMode::Ignore,
+        OttlErrorMode::Silent => ErrorMode::Silent,
+        OttlErrorMode::Propagate => ErrorMode::Propagate,
     }
 }
 

@@ -2,6 +2,72 @@
 
 use saluki_io::net::ListenAddress;
 
+/// OTTL condition/statement error handling mode.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum OttlErrorMode {
+    /// Ignore errors and log them.
+    Ignore,
+    /// Ignore errors without logging.
+    Silent,
+    /// Treat errors as payload drops.
+    #[default]
+    Propagate,
+}
+
+/// Native OTTL filter settings.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct OttlFilterConfiguration {
+    error_mode: OttlErrorMode,
+    span_conditions: Vec<String>,
+}
+
+impl OttlFilterConfiguration {
+    /// Creates OTTL filter settings.
+    pub fn new(error_mode: OttlErrorMode, span_conditions: Vec<String>) -> Self {
+        Self {
+            error_mode,
+            span_conditions,
+        }
+    }
+
+    /// Returns the configured error mode.
+    pub const fn error_mode(&self) -> OttlErrorMode {
+        self.error_mode
+    }
+
+    /// Returns configured span filter conditions.
+    pub fn span_conditions(&self) -> &[String] {
+        &self.span_conditions
+    }
+}
+
+/// Native OTTL transform settings.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct OttlTransformConfiguration {
+    error_mode: OttlErrorMode,
+    trace_statements: Vec<String>,
+}
+
+impl OttlTransformConfiguration {
+    /// Creates OTTL transform settings.
+    pub fn new(error_mode: OttlErrorMode, trace_statements: Vec<String>) -> Self {
+        Self {
+            error_mode,
+            trace_statements,
+        }
+    }
+
+    /// Returns the configured error mode.
+    pub const fn error_mode(&self) -> OttlErrorMode {
+        self.error_mode
+    }
+
+    /// Returns configured trace transform statements.
+    pub fn trace_statements(&self) -> &[String] {
+        &self.trace_statements
+    }
+}
+
 /// Native enablement for a simple component pipeline.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PipelineConfiguration {

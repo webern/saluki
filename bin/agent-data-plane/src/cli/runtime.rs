@@ -9,14 +9,10 @@
 //! (notably the workload-collector layer and the shared `DatadogAgentConnection` question, recorded
 //! in `design/spike-2c-claude.md`).
 
-use std::{
-    collections::HashSet,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 use agent_data_plane_config::SalukiConfiguration;
 use datadog_agent_commons::platform::PlatformSettings;
-use datadog_agent_config::classifier::{ConfigClassifier, Pipeline, PipelineAffinity, Severity, SupportLevel};
 use resource_accounting::{ComponentBounds, ComponentRegistry};
 use saluki_app::{
     accounting::{initialize_memory_bounds, MemoryBoundsConfiguration},
@@ -47,7 +43,7 @@ use saluki_core::runtime::{RestartMode, RestartStrategy, Supervisor};
 use saluki_core::topology::TopologyBlueprint;
 use saluki_env::EnvironmentProvider as _;
 use saluki_error::{generic_error, ErrorContext as _, GenericError};
-use tracing::{debug, error, info, trace, warn};
+use tracing::{info, warn};
 
 use crate::{
     components::{
@@ -153,8 +149,8 @@ pub async fn handle_run_command(
         return Ok(());
     }
 
-    let active_pipelines = active_pipelines(&dp_config);
-    check_and_warn_config(&config, &active_pipelines).error_context("Incompatible configuration detected.")?;
+    // Overlay/classifier validation happens inside the configuration system (`translate_from_generic`)
+    // before `SalukiConfiguration` is produced, so it is not repeated here.
 
     // Translate the resolved configuration into the ADP-native model. Topology components are built
     // from these native slices rather than the raw map.
@@ -258,114 +254,6 @@ async fn wait_for_sigint() {
     let _ = tokio::signal::ctrl_c().await;
 
     info!("Received SIGINT, shutting down...");
-}
-
-/// Returns the set of [`Pipeline`] variants that are active based on our configuration.
-fn active_pipelines(dp_config: &DataPlaneConfiguration) -> HashSet<Pipeline> {
-    let mut s = HashSet::new();
-    if dp_config.dogstatsd().enabled() {
-        s.insert(Pipeline::DogStatsD);
-    }
-    if dp_config.checks().enabled() {
-        s.insert(Pipeline::Checks);
-    }
-    if dp_config.otlp().enabled() {
-        s.insert(Pipeline::Otlp);
-    }
-    if dp_config.traces_pipeline_required() {
-        s.insert(Pipeline::Traces);
-    }
-    s
-}
-
-/// Check the resolved configuration against the config registry for incompatibilities.
-///
-/// Classifies each flattened key in `config` with the config registry `Classifier`. Returns an
-/// `Error` if one or more high severity incompatibility is discovered. Emits warnings for less
-/// severe incompatibilities. Keys are only considered incompatible when they have non-default
-/// values and the pipelines they affect are active.
-///
-/// # Input
-///
-/// - `config`: the state of our configuration which we will flatten and consider all keys from.
-/// - `active_pipelines`: the list of pipelines that are enabled based on the configuration.
-///
-/// # Error
-///
-/// To provide a better debugging experience in the presence of multiple high-severity incompatible
-/// keys, all keys are checked before returning. The error reports the count of incompatible keys;
-/// individual keys are logged at error level during iteration.
-///
-fn check_and_warn_config(
-    config: &GenericConfiguration, active_pipelines: &HashSet<Pipeline>,
-) -> Result<(), GenericError> {
-    let classifier = ConfigClassifier::new();
-    let mut high_severity_incompatibilities = 0u32;
-    debug!("Analyzing configuration.");
-    for (key, val) in config
-        .flattened_keys()
-        .error_context("Unable to flatten configuration into a list of dot-separated keys.")?
-    {
-        // Get the classification. The classifier returns None if the config key is invalid or not-applicable to ADP.
-        let Some(classification) = classifier.classify(&key, &val) else {
-            continue;
-        };
-
-        // Ignore it if none of the affected pipelines are active.
-        if !is_a_pipeline_affected(active_pipelines, &classification.pipeline_affinity) {
-            continue;
-        }
-
-        // The Agent populates default values into the config, so we do not consider keys with default values.
-        if classification.is_default {
-            trace!(key = %key, "Configuration key has a default value.");
-            continue;
-        }
-
-        match classification.support_level {
-            SupportLevel::Incompatible(Severity::Low) => debug!("Low-severity incompatible key detected. Proceeding."),
-            SupportLevel::Partial => {
-                warn!(key = %key, "Partially supported configuration key. See documentation for details. Proceeding.")
-            }
-            SupportLevel::Incompatible(Severity::Medium) => {
-                warn!(key = %key, "Unsupported configuration key. Proceeding.")
-            }
-            SupportLevel::Incompatible(Severity::High) => {
-                error!(key = %key, "Unsupported configuration key with non-default value. ADP cannot run safely with \
-                this setting.");
-                high_severity_incompatibilities += 1;
-            }
-            SupportLevel::Ignored | SupportLevel::Unrecognized => {
-                trace!(key = %key, "Configuration key not-applicable. Silently ignoring.")
-            }
-        }
-    }
-
-    if high_severity_incompatibilities > 0 {
-        return Err(generic_error!(
-            "{high_severity_incompatibilities} incompatible configuration detected. ADP cannot start. Review error \
-            logs for details."
-        ));
-    }
-
-    Ok(())
-}
-
-/// Returns `true` if at least one of the `active_pipelines` is affected based on `pipeline_affinity`.
-fn is_a_pipeline_affected(active_pipelines: &HashSet<Pipeline>, pipeline_affinity: &PipelineAffinity) -> bool {
-    match pipeline_affinity {
-        PipelineAffinity::Pipelines(affected_pipelines) => {
-            for affected_pipeline in *affected_pipelines {
-                if active_pipelines.contains(affected_pipeline) {
-                    // We found an active pipeline that is in the affected list. Early return true.
-                    return true;
-                }
-            }
-            // We checked all affected pipelines against those that are active and none matched.
-            false
-        }
-        PipelineAffinity::CrossCutting => true,
-    }
 }
 
 async fn create_topology(

@@ -18,6 +18,7 @@ pub mod dynamic;
 pub mod stream;
 pub mod system;
 pub mod translate;
+mod validate;
 
 pub use bootstrap::BootstrapInputs;
 pub use datadog_agent::DatadogAgentConnection;

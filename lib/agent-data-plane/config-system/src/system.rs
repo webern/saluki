@@ -106,6 +106,7 @@ pub fn translate_from_generic(
         .as_typed()
         .error_context("Failed to parse Datadog configuration for translation.")?;
     let gates = crate::bootstrap::read_pipeline_gates(config);
+    crate::validate::validate_against_overlay(config, gates)?;
     let private = SalukiPrivateConfiguration::for_language(language);
     Ok(translate_datadog(&dd_config, &private, gates))
 }

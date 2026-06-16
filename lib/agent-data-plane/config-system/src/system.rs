@@ -5,8 +5,8 @@ use std::collections::HashSet;
 use agent_data_plane_config::{
     BootstrapConfiguration, BootstrapStartupConfiguration, BootstrapTelemetryConfiguration, ChecksIpcConfiguration,
     ConfigStreamAuthority, DataPlaneConfiguration, DatadogEventsEncoderConfiguration, DatadogLogsEncoderConfiguration,
-    DatadogServiceChecksEncoderConfiguration, OtlpPipelineConfiguration, OtlpProxyConfiguration, PipelineConfiguration,
-    RuntimeConfigAuthority, RuntimeConfigLanguage, SalukiConfiguration,
+    DatadogServiceChecksEncoderConfiguration, EnvironmentConfiguration, OtlpPipelineConfiguration,
+    OtlpProxyConfiguration, PipelineConfiguration, RuntimeConfigAuthority, RuntimeConfigLanguage, SalukiConfiguration,
 };
 use datadog_agent_commons::ipc::config::RemoteAgentClientConfiguration;
 use datadog_agent_config::{
@@ -37,6 +37,13 @@ impl ConfigurationSystem {
         let local = load_local_datadog_sources(&self.inputs).await?;
         start_from_local_datadog_sources(local, &self.inputs).await
     }
+
+    /// Starts the configuration system from an already loaded local Datadog-shaped bootstrap snapshot.
+    pub async fn start_from_local_datadog_sources(
+        self, local: GenericConfiguration,
+    ) -> Result<StartedConfigurationSystem, GenericError> {
+        start_from_local_datadog_sources(local, &self.inputs).await
+    }
 }
 
 async fn load_local_datadog_sources(inputs: &BootstrapInputs) -> Result<GenericConfiguration, GenericError> {
@@ -62,6 +69,7 @@ async fn start_from_local_datadog_sources(
                 bootstrap,
                 saluki,
                 attachments: StartedAttachments::None,
+                compat_datadog_source: config,
             })
         }
         RuntimeConfigAuthority::LocalSnapshot(language) => Err(generic_error!(
@@ -108,6 +116,7 @@ async fn start_from_local_datadog_sources(
                     connection,
                     stream: stream.with_initial_snapshot_received(true),
                 },
+                compat_datadog_source: dynamic_config,
             })
         }
     }
@@ -124,6 +133,7 @@ async fn start_from_local_datadog_snapshot(
         bootstrap,
         saluki,
         attachments: StartedAttachments::None,
+        compat_datadog_source: config,
     })
 }
 
@@ -229,12 +239,22 @@ fn translate_datadog_snapshot(config: &GenericConfiguration) -> Result<SalukiCon
         source.serializer_zstd_compressor_level as i32,
         source.log_payloads,
     );
+    let environment = EnvironmentConfiguration::new(
+        config
+            .try_get_typed("hostname")
+            .error_context("Failed to read `hostname`.")?
+            .unwrap_or_default(),
+    );
 
     let saluki = SalukiConfiguration {
         data_plane: DataPlaneConfiguration::new(
             config
                 .try_get_typed("data_plane.enabled")
                 .error_context("Failed to read `data_plane.enabled`.")?
+                .unwrap_or(false),
+            config
+                .try_get_typed("data_plane.standalone_mode")
+                .error_context("Failed to read `data_plane.standalone_mode`.")?
                 .unwrap_or(false),
             api_listen_address,
             secure_api_listen_address,
@@ -246,6 +266,7 @@ fn translate_datadog_snapshot(config: &GenericConfiguration) -> Result<SalukiCon
         datadog_logs_encoder,
         datadog_events_encoder,
         datadog_service_checks_encoder,
+        environment,
     };
 
     let active_pipelines = active_pipelines(&saluki.data_plane);
@@ -341,6 +362,7 @@ pub struct StartedConfigurationSystem {
     bootstrap: BootstrapConfiguration,
     saluki: SalukiConfiguration,
     attachments: StartedAttachments,
+    compat_datadog_source: GenericConfiguration,
 }
 
 impl StartedConfigurationSystem {
@@ -357,6 +379,11 @@ impl StartedConfigurationSystem {
     /// Returns the provider attachments created during startup.
     pub const fn attachments(&self) -> &StartedAttachments {
         &self.attachments
+    }
+
+    /// Returns the Datadog-shaped source snapshot for runtime paths that have not yet been cut over.
+    pub const fn compat_datadog_source(&self) -> &GenericConfiguration {
+        &self.compat_datadog_source
     }
 }
 

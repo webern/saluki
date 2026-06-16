@@ -36,6 +36,7 @@ impl RemoteAgentAutodiscoveryProvider {
     /// # Errors
     ///
     /// If the remote agent client couldn't be created, an error is returned.
+    #[allow(dead_code)]
     pub async fn from_configuration(config: &GenericConfiguration) -> Result<(Self, Supervisor), GenericError> {
         let client = RemoteAgentClient::from_configuration(config).await?;
         Self::from_client(client)

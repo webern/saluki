@@ -23,12 +23,34 @@ pub struct SalukiConfiguration {
 
     /// Datadog service-checks encoder settings.
     pub datadog_service_checks_encoder: DatadogServiceChecksEncoderConfiguration,
+
+    /// Runtime environment provider settings.
+    pub environment: EnvironmentConfiguration,
+}
+
+/// Native runtime environment settings.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EnvironmentConfiguration {
+    hostname: String,
+}
+
+impl EnvironmentConfiguration {
+    /// Creates native runtime environment settings.
+    pub fn new(hostname: String) -> Self {
+        Self { hostname }
+    }
+
+    /// Returns the configured fixed hostname.
+    pub fn hostname(&self) -> &str {
+        &self.hostname
+    }
 }
 
 /// Native ADP data-plane runtime decisions.
 #[derive(Clone, Debug)]
 pub struct DataPlaneConfiguration {
     enabled: bool,
+    standalone_mode: bool,
     api_listen_address: ListenAddress,
     secure_api_listen_address: ListenAddress,
     checks: PipelineConfiguration,
@@ -39,11 +61,13 @@ pub struct DataPlaneConfiguration {
 impl DataPlaneConfiguration {
     /// Creates native data-plane runtime decisions.
     pub const fn new(
-        enabled: bool, api_listen_address: ListenAddress, secure_api_listen_address: ListenAddress,
-        checks: PipelineConfiguration, dogstatsd: PipelineConfiguration, otlp: OtlpPipelineConfiguration,
+        enabled: bool, standalone_mode: bool, api_listen_address: ListenAddress,
+        secure_api_listen_address: ListenAddress, checks: PipelineConfiguration, dogstatsd: PipelineConfiguration,
+        otlp: OtlpPipelineConfiguration,
     ) -> Self {
         Self {
             enabled,
+            standalone_mode,
             api_listen_address,
             secure_api_listen_address,
             checks,
@@ -55,6 +79,11 @@ impl DataPlaneConfiguration {
     /// Returns whether ADP should run.
     pub const fn enabled(&self) -> bool {
         self.enabled
+    }
+
+    /// Returns whether ADP is running without Datadog Agent attachment requirements.
+    pub const fn standalone_mode(&self) -> bool {
+        self.standalone_mode
     }
 
     /// Returns the unprivileged API listen address.

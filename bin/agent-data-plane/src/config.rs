@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use saluki_config::GenericConfiguration;
 use saluki_error::GenericError;
 use saluki_io::net::ListenAddress;

@@ -12,6 +12,11 @@ pub struct FixedHostProvider {
 }
 
 impl FixedHostProvider {
+    /// Creates a new `FixedHostProvider` from a fixed hostname.
+    pub fn new(hostname: String) -> Self {
+        Self { hostname }
+    }
+
     /// Creates a new `FixedHostProvider` from the given configuration.
     ///
     /// Depends on the hostname existing in the given configuration under the `hostname` key.
@@ -22,7 +27,7 @@ impl FixedHostProvider {
     pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
         let hostname = config.get_typed::<String>("hostname")?;
 
-        Ok(Self { hostname })
+        Ok(Self::new(hostname))
     }
 }
 

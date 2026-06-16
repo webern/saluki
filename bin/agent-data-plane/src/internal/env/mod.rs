@@ -1,5 +1,7 @@
 use std::future::Future;
 
+use agent_data_plane_config::SalukiConfiguration;
+use agent_data_plane_config_system::StartedAttachments;
 use resource_accounting::ComponentRegistry;
 use saluki_config::GenericConfiguration;
 use saluki_core::health::HealthRegistry;
@@ -50,6 +52,7 @@ impl ADPEnvironmentProvider {
     ///
     /// In standalone mode, no supervisor is returned as all behavior/functionality is either provided via
     /// fixed configuration or operates in a no-op fashion.
+    #[allow(dead_code)]
     pub async fn from_configuration(
         config: &GenericConfiguration, dp_config: &DataPlaneConfiguration, component_registry: &ComponentRegistry,
         health_registry: &HealthRegistry,
@@ -86,6 +89,55 @@ impl ADPEnvironmentProvider {
 
         let (autodiscovery_provider, autodiscovery_supervisor) =
             RemoteAgentAutodiscoveryProvider::from_configuration(config).await?;
+        env_supervisor.add_worker(autodiscovery_supervisor);
+
+        let env = Self {
+            host_provider: BoxedHostProvider::from_provider(host_provider),
+            workload_provider: Some(workload_provider),
+            autodiscovery_provider: Some(BoxedAutodiscoveryProvider::from_provider(autodiscovery_provider)),
+            health_registry: health_registry.clone(),
+        };
+
+        Ok((env, Some(env_supervisor)))
+    }
+
+    /// Creates an `ADPEnvironmentProvider` from native ADP configuration and configuration-system attachments.
+    pub async fn from_saluki_configuration(
+        config: &SalukiConfiguration, attachments: &StartedAttachments, component_registry: &ComponentRegistry,
+        health_registry: &HealthRegistry,
+    ) -> Result<(Self, Option<Supervisor>), GenericError> {
+        let StartedAttachments::DatadogAgentConfigStream { connection, .. } = attachments else {
+            warn!("Running without a Datadog Agent attachment. Origin detection/enrichment and other features dependent upon the Datadog Agent will not be available.");
+
+            let env = Self {
+                host_provider: BoxedHostProvider::from_provider(FixedHostProvider::new(
+                    config.environment.hostname().to_string(),
+                )),
+                workload_provider: None,
+                autodiscovery_provider: None,
+                health_registry: health_registry.clone(),
+            };
+            return Ok((env, None));
+        };
+
+        let client = connection.client();
+        let mut provider_component = component_registry.get_or_create("env_provider");
+        let mut env_supervisor = Supervisor::new("env-provider")?;
+
+        let host_provider = RemoteAgentHostProvider::from_client(client.clone());
+        provider_component
+            .bounds_builder()
+            .with_subcomponent("host", &host_provider);
+
+        let (workload_provider, workload_supervisor) = RemoteAgentWorkloadProvider::from_datadog_client(
+            client.clone(),
+            component_registry.get_or_create("workload"),
+            health_registry,
+        )
+        .await?;
+        env_supervisor.add_worker(workload_supervisor);
+
+        let (autodiscovery_provider, autodiscovery_supervisor) = RemoteAgentAutodiscoveryProvider::from_client(client)?;
         env_supervisor.add_worker(autodiscovery_supervisor);
 
         let env = Self {

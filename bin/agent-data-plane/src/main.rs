@@ -10,6 +10,7 @@ use std::time::Instant;
 // Pull in the Antithesis coverage-instrumentation runtime shim only when
 // building for antithesis. Load-baring: equired to avoid the shim being dropped
 // as unused.
+use agent_data_plane_config_system::BootstrapInputs;
 #[cfg(feature = "antithesis")]
 use antithesis_instrumentation as _;
 use datadog_agent_commons::platform::PlatformSettings;
@@ -61,12 +62,14 @@ async fn main() -> Result<(), GenericError> {
     // Load our "bootstrap" configuration -- static configuration on disk or from environment variables -- so we can
     // initialize basic subsystems before executing the given subcommand.
     let bootstrap_config_path = cli.config_file.unwrap_or_else(PlatformSettings::get_config_file_path);
+    let env_var_prefix = PlatformSettings::get_env_var_prefix();
+    let bootstrap_inputs = BootstrapInputs::new(bootstrap_config_path.clone(), env_var_prefix);
     let bootstrap_config = ConfigurationLoader::default()
         .with_key_aliases(KEY_ALIASES)
         .from_yaml(&bootstrap_config_path)
         .error_context("Failed to load Datadog Agent configuration file during bootstrap.")?
         .add_providers([DatadogRemapper::new()])
-        .from_environment(PlatformSettings::get_env_var_prefix())
+        .from_environment(env_var_prefix)
         .error_context("Environment variable prefix should not be empty.")?
         .bootstrap_generic();
 
@@ -105,6 +108,7 @@ async fn main() -> Result<(), GenericError> {
         cli.action,
         started,
         bootstrap_config,
+        bootstrap_inputs,
         &mut bootstrap_guard,
         bootstrap_supervisor,
     )
@@ -134,8 +138,8 @@ fn parse_metrics_level(config: &GenericConfiguration) -> Result<Level, GenericEr
 }
 
 async fn run_inner(
-    action: Action, started: Instant, bootstrap_config: GenericConfiguration, bootstrap_guard: &mut BootstrapGuard,
-    bootstrap_supervisor: Supervisor,
+    action: Action, started: Instant, bootstrap_config: GenericConfiguration, bootstrap_inputs: BootstrapInputs,
+    bootstrap_guard: &mut BootstrapGuard, bootstrap_supervisor: Supervisor,
 ) -> Result<Option<i32>, GenericError> {
     match action {
         Action::Run(cmd) => {
@@ -148,17 +152,24 @@ async fn run_inner(
                 }
             }
 
-            let exit_code =
-                match handle_run_command(started, bootstrap_config, bootstrap_guard, bootstrap_supervisor).await {
-                    Ok(()) => {
-                        info!("Agent Data Plane stopped.");
-                        None
-                    }
-                    Err(e) => {
-                        error!("{:?}", e);
-                        Some(1)
-                    }
-                };
+            let exit_code = match handle_run_command(
+                started,
+                bootstrap_config,
+                bootstrap_inputs,
+                bootstrap_guard,
+                bootstrap_supervisor,
+            )
+            .await
+            {
+                Ok(()) => {
+                    info!("Agent Data Plane stopped.");
+                    None
+                }
+                Err(e) => {
+                    error!("{:?}", e);
+                    Some(1)
+                }
+            };
 
             // Remove the PID file, if configured.
             if let Some(pid_file) = &cmd.pid_file {

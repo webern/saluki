@@ -1,11 +1,10 @@
+use agent_data_plane_config::DataPlaneConfiguration;
 use resource_accounting::ComponentRegistry;
 use saluki_app::logging::LoggingOverrideController;
 use saluki_config::GenericConfiguration;
 use saluki_core::health::HealthRegistry;
 use saluki_core::runtime::Supervisor;
 use saluki_error::GenericError;
-
-use crate::config::DataPlaneConfiguration;
 
 mod control_plane;
 pub use self::control_plane::create_control_plane_supervisor;

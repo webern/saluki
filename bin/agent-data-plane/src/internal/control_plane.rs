@@ -1,3 +1,4 @@
+use agent_data_plane_config::DataPlaneConfiguration;
 use datadog_agent_commons::ipc::{config::IpcAuthConfiguration, tls::build_ipc_server_tls_config};
 use resource_accounting::ComponentRegistry;
 use saluki_api::EndpointType;
@@ -12,12 +13,9 @@ use saluki_core::{
 };
 use saluki_error::GenericError;
 
-use crate::{
-    config::DataPlaneConfiguration,
-    internal::{
-        logging::DynamicLogLevelWorker, remote_agent::RemoteAgentBootstrap, telemetry::InternalTelemetryAPIWorker,
-        TopologyControlSurfaces,
-    },
+use crate::internal::{
+    logging::DynamicLogLevelWorker, remote_agent::RemoteAgentBootstrap, telemetry::InternalTelemetryAPIWorker,
+    TopologyControlSurfaces,
 };
 
 /// Creates the control plane supervisor.

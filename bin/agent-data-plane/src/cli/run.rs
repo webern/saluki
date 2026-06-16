@@ -4,7 +4,9 @@ use std::{
 };
 
 use agent_data_plane_config::SalukiConfiguration;
-use agent_data_plane_config_system::{BootstrapInputs, ConfigurationSystem, StartedAttachments};
+use agent_data_plane_config_system::{
+    BootstrapInputs, ConfigurationSystem, LoggingConfigurationTranslator, StartedAttachments,
+};
 use argh::FromArgs;
 use datadog_agent_commons::platform::PlatformSettings;
 use resource_accounting::{ComponentBounds, ComponentRegistry};
@@ -49,8 +51,8 @@ use crate::{
         tag_filterlist::TagFilterlistConfiguration,
     },
     internal::{
-        create_internal_supervisor, logging::LoggingConfigurationTranslator, remote_agent::RemoteAgentBootstrap,
-        DogStatsDControlSurface, TopologyControlSurfaces,
+        create_internal_supervisor, remote_agent::RemoteAgentBootstrap, DogStatsDControlSurface,
+        TopologyControlSurfaces,
     },
 };
 

@@ -10,7 +10,7 @@ use std::time::Instant;
 // Pull in the Antithesis coverage-instrumentation runtime shim only when
 // building for antithesis. Load-baring: equired to avoid the shim being dropped
 // as unused.
-use agent_data_plane_config_system::{BootstrapInputs, ConfigurationSystem};
+use agent_data_plane_config_system::{BootstrapInputs, ConfigurationSystem, LoggingConfigurationTranslator};
 #[cfg(feature = "antithesis")]
 use antithesis_instrumentation as _;
 use datadog_agent_commons::platform::PlatformSettings;
@@ -24,8 +24,6 @@ use tracing::{error, info, warn};
 
 mod cli;
 use self::cli::*;
-use crate::internal::logging::LoggingConfigurationTranslator;
-
 mod components;
 mod internal;
 

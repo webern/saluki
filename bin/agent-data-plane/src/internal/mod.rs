@@ -14,8 +14,6 @@ pub use self::control_surfaces::{DogStatsDControlSurface, TopologyControlSurface
 
 pub mod env;
 
-pub mod logging;
-
 pub mod remote_agent;
 use self::remote_agent::RemoteAgentBootstrap;
 

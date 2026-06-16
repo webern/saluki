@@ -64,6 +64,13 @@ impl ConfigurationSystem {
         translate_bootstrap_configuration(config)
     }
 
+    /// Translates logging settings from an already loaded local Datadog-shaped snapshot.
+    pub fn translate_local_datadog_logging(
+        config: &GenericConfiguration,
+    ) -> Result<LoggingConfiguration, GenericError> {
+        LoggingConfigurationTranslator::translate(config)
+    }
+
     /// Translates DogStatsD CLI/debug settings from an already loaded local Datadog-shaped snapshot.
     pub fn translate_local_datadog_dogstatsd_cli(
         config: &GenericConfiguration,

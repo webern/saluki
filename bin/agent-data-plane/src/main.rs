@@ -11,7 +11,7 @@ use std::time::Instant;
 // building for antithesis. Load-baring: equired to avoid the shim being dropped
 // as unused.
 use agent_data_plane_config::{DataPlaneConfiguration, DogStatsDCliConfiguration};
-use agent_data_plane_config_system::{BootstrapInputs, ConfigurationSystem, LoggingConfigurationTranslator};
+use agent_data_plane_config_system::{BootstrapInputs, ConfigurationSystem};
 #[cfg(feature = "antithesis")]
 use antithesis_instrumentation as _;
 use datadog_agent_commons::platform::PlatformSettings;
@@ -69,7 +69,7 @@ async fn main() -> Result<(), GenericError> {
 
     // Translate the bootstrap configuration into ADP's logging configuration, applying ADP-specific rules
     // (per-subagent log file key, never sharing a file with the Core Agent).
-    let bootstrap_logging_config = LoggingConfigurationTranslator::translate(&bootstrap_config)
+    let bootstrap_logging_config = ConfigurationSystem::translate_local_datadog_logging(&bootstrap_config)
         .error_context("Failed to translate logging configuration during bootstrap phase.")?;
 
     let typed_bootstrap_config = ConfigurationSystem::translate_local_datadog_bootstrap(&bootstrap_config)

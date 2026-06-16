@@ -17,10 +17,14 @@ use datadog_agent_config::{
     classifier::{ConfigClassifier, Pipeline, PipelineAffinity, Severity, SupportLevel},
     DatadogConfiguration, DatadogRemapper, KEY_ALIASES,
 };
+use saluki_app::config::ConfigView;
+use saluki_common::task::spawn_traced_named;
 use saluki_config::{ConfigurationLoader, DurationString, GenericConfiguration};
 use saluki_error::{generic_error, ErrorContext as _, GenericError};
 use saluki_io::net::{GrpcTargetAddress, ListenAddress};
 use serde::Deserialize;
+use serde_json::Value;
+use tokio::sync::watch;
 use tracing::{debug, error, info, trace, warn};
 
 use crate::{
@@ -84,9 +88,11 @@ async fn start_from_local_datadog_sources(
     match bootstrap.startup.runtime_config_authority {
         RuntimeConfigAuthority::LocalSnapshot(RuntimeConfigLanguage::DatadogAgent) => {
             let saluki = translate_datadog_snapshot(&config)?;
+            let config_view = build_config_view(&config)?;
             Ok(StartedConfigurationSystem {
                 bootstrap,
                 saluki,
+                config_view,
                 attachments: StartedAttachments::None,
                 compat_datadog_source: config,
             })
@@ -128,9 +134,11 @@ async fn start_from_local_datadog_sources(
 
             let saluki = translate_datadog_snapshot(&dynamic_config)?;
 
+            let config_view = build_config_view(&dynamic_config)?;
             Ok(StartedConfigurationSystem {
                 bootstrap,
                 saluki,
+                config_view,
                 attachments: StartedAttachments::DatadogAgentConfigStream {
                     connection,
                     stream: stream.with_initial_snapshot_received(true),
@@ -148,12 +156,43 @@ async fn start_from_local_datadog_snapshot(
     let bootstrap = translate_bootstrap_configuration(&config)?;
     let saluki = translate_datadog_snapshot(&config)?;
 
+    let config_view = build_config_view(&config)?;
     Ok(StartedConfigurationSystem {
         bootstrap,
         saluki,
+        config_view,
         attachments: StartedAttachments::None,
         compat_datadog_source: config,
     })
+}
+
+fn build_config_view(config: &GenericConfiguration) -> Result<ConfigView, GenericError> {
+    let initial = config
+        .as_typed::<Value>()
+        .error_context("Failed to serialize runtime configuration for config API view.")?;
+    let (tx, rx) = watch::channel(initial);
+
+    if let Some(mut updates) = config.subscribe_for_updates() {
+        let live_config = config.clone();
+        spawn_traced_named("adp-config-view-task", async move {
+            loop {
+                if updates.recv().await.is_err() {
+                    return;
+                }
+
+                match live_config.as_typed::<Value>() {
+                    Ok(value) => {
+                        if tx.send(value).is_err() {
+                            return;
+                        }
+                    }
+                    Err(e) => warn!(error = %e, "Failed to refresh config API view after configuration update."),
+                }
+            }
+        });
+    }
+
+    Ok(ConfigView::new(rx))
 }
 
 fn translate_bootstrap_configuration(config: &GenericConfiguration) -> Result<BootstrapConfiguration, GenericError> {
@@ -588,6 +627,7 @@ fn is_a_pipeline_affected(active_pipelines: &HashSet<Pipeline>, pipeline_affinit
 pub struct StartedConfigurationSystem {
     bootstrap: BootstrapConfiguration,
     saluki: SalukiConfiguration,
+    config_view: ConfigView,
     attachments: StartedAttachments,
     compat_datadog_source: GenericConfiguration,
 }
@@ -601,6 +641,11 @@ impl StartedConfigurationSystem {
     /// Returns the ADP-native runtime configuration.
     pub const fn saluki(&self) -> &SalukiConfiguration {
         &self.saluki
+    }
+
+    /// Returns the runtime configuration view exposed through the config API.
+    pub fn config_view(&self) -> ConfigView {
+        self.config_view.clone()
     }
 
     /// Returns the provider attachments created during startup.

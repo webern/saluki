@@ -1,6 +1,6 @@
 use agent_data_plane_config::{ControlPlaneConfiguration, DataPlaneConfiguration};
 use resource_accounting::ComponentRegistry;
-use saluki_app::logging::LoggingOverrideController;
+use saluki_app::{config::ConfigView, logging::LoggingOverrideController};
 use saluki_config::GenericConfiguration;
 use saluki_core::health::HealthRegistry;
 use saluki_core::runtime::Supervisor;
@@ -32,7 +32,7 @@ mod telemetry;
 ///
 /// If the supervisor can't be created, an error is returned.
 pub async fn create_internal_supervisor(
-    config: &GenericConfiguration, dp_config: &DataPlaneConfiguration,
+    config: &GenericConfiguration, config_view: ConfigView, dp_config: &DataPlaneConfiguration,
     control_plane_config: &ControlPlaneConfiguration, component_registry: &ComponentRegistry,
     health_registry: HealthRegistry, control_surfaces: TopologyControlSurfaces,
     ra_bootstrap: Option<RemoteAgentBootstrap>, logging_controller: LoggingOverrideController,
@@ -46,6 +46,7 @@ pub async fn create_internal_supervisor(
     root.add_worker(
         create_control_plane_supervisor(
             config,
+            config_view,
             dp_config,
             control_plane_config,
             component_registry,

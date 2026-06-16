@@ -9,15 +9,39 @@ use saluki_api::{
     APIHandler, DynamicRoute, EndpointType,
 };
 use saluki_common::sync::shutdown::ShutdownHandle;
-use saluki_config::GenericConfiguration;
 use saluki_core::runtime::{state::DataspaceRegistry, InitializationError, Supervisable, SupervisorFuture};
 use saluki_error::generic_error;
 use serde_json::Value;
+use tokio::sync::watch;
+
+/// Live view of the runtime configuration exposed by the config API.
+#[derive(Clone, Debug)]
+pub struct ConfigView {
+    rx: watch::Receiver<Value>,
+}
+
+impl ConfigView {
+    /// Creates a config view from a watch receiver.
+    pub const fn new(rx: watch::Receiver<Value>) -> Self {
+        Self { rx }
+    }
+
+    /// Creates a fixed config view.
+    pub fn fixed(value: Value) -> Self {
+        let (_tx, rx) = watch::channel(value);
+        Self { rx }
+    }
+
+    /// Returns the current configuration value.
+    pub fn current(&self) -> Value {
+        self.rx.borrow().clone()
+    }
+}
 
 /// State used for the config API handler.
 #[derive(Clone)]
 pub struct ConfigState {
-    config: GenericConfiguration,
+    config: ConfigView,
 }
 
 /// An API handler for returning the current configuration.
@@ -30,18 +54,19 @@ pub struct ConfigAPIHandler {
 }
 
 impl ConfigAPIHandler {
-    fn new(config: GenericConfiguration) -> Self {
+    fn new(config: ConfigView) -> Self {
         Self {
             state: ConfigState { config },
         }
     }
 
     async fn config_handler(State(state): State<ConfigState>) -> impl IntoResponse {
-        match state.config.as_typed::<Value>() {
-            Ok(config) => (StatusCode::OK, serde_json::to_string(&config).unwrap()).into_response(),
+        let config = state.config.current();
+        match serde_json::to_string(&config) {
+            Ok(body) => (StatusCode::OK, body).into_response(),
             Err(e) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to get configuration: {}", e),
+                format!("Failed to serialize configuration: {}", e),
             )
                 .into_response(),
         }
@@ -70,8 +95,8 @@ pub struct ConfigWorker {
 }
 
 impl ConfigWorker {
-    /// Creates a new [`ConfigWorker`] with the given configuration.
-    pub fn new(config: GenericConfiguration) -> Self {
+    /// Creates a new [`ConfigWorker`] with the given configuration view.
+    pub fn new(config: ConfigView) -> Self {
         Self {
             handler: ConfigAPIHandler::new(config),
         }

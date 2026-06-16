@@ -6,7 +6,6 @@ use std::{
 use async_trait::async_trait;
 use datadog_agent_commons::ipc::client::RemoteAgentClient;
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
-use saluki_config::{DurationString, GenericConfiguration};
 use saluki_context::tags::{SharedTagSet, Tag};
 use saluki_core::{components::transforms::*, topology::EventsBuffer};
 use saluki_core::{components::ComponentContext, data_model::event::metric::Metric};
@@ -25,24 +24,6 @@ pub struct HostTagsConfiguration {
 const DEFAULT_EXPECTED_TAGS_DURATION: Duration = Duration::ZERO;
 
 impl HostTagsConfiguration {
-    /// Creates a new `HostTagsConfiguration` from the given configuration.
-    ///
-    /// Transitional: superseded by `from_native` on the native path; retained until host tags are
-    /// sourced through the shared Datadog Agent connection.
-    #[allow(dead_code)]
-    pub async fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
-        let client = RemoteAgentClient::from_configuration(config).await?;
-        let expected_tags_duration = config
-            .try_get_typed::<DurationString>("expected_tags_duration")?
-            .map(|ds| ds.as_duration())
-            .unwrap_or(DEFAULT_EXPECTED_TAGS_DURATION);
-
-        Ok(Self {
-            client: Some(client),
-            expected_tags_duration,
-        })
-    }
-
     /// Creates a disabled `HostTagsConfiguration` from native configuration.
     ///
     /// STUB: host tags are sourced from the Datadog Agent over a shared connection, and how that

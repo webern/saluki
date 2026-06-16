@@ -49,8 +49,8 @@ use crate::components::{
     ottl_filter_processor::OttlFilterConfiguration, ottl_transform_processor::OttlTransformConfiguration,
     tag_filterlist::TagFilterlistConfiguration,
 };
+use crate::internal::env::ADPEnvironmentProvider;
 use crate::internal::{DogStatsDControlSurface, TopologyControlSurfaces};
-use crate::{config::DataPlaneConfiguration, internal::env::ADPEnvironmentProvider};
 
 /// Entrypoint for the `run` command.
 ///
@@ -77,8 +77,7 @@ pub async fn handle_run_command(
     let (env_provider, maybe_env_supervisor) = shell.build_environment(&component_registry, &health_registry).await?;
 
     // Create the blueprint for our primary topology, built entirely from the native configuration.
-    let (mut blueprint, control_surfaces) =
-        create_topology(shell.saluki(), shell.dp_config(), &env_provider, &component_registry).await?;
+    let (mut blueprint, control_surfaces) = create_topology(shell.saluki(), &env_provider, &component_registry).await?;
 
     // Run memory bounds validation to ensure that we can launch the topology with our configured memory limit, if any.
     // Built from the native memory configuration rather than the raw map.
@@ -166,14 +165,14 @@ async fn wait_for_sigint() {
 }
 
 async fn create_topology(
-    saluki_config: &SalukiConfiguration, dp_config: &DataPlaneConfiguration, env_provider: &ADPEnvironmentProvider,
-    component_registry: &ComponentRegistry,
+    saluki_config: &SalukiConfiguration, env_provider: &ADPEnvironmentProvider, component_registry: &ComponentRegistry,
 ) -> Result<(TopologyBlueprint, TopologyControlSurfaces), GenericError> {
     let mut blueprint = TopologyBlueprint::new("primary", component_registry);
     let mut control_surfaces = TopologyControlSurfaces::default();
+    let data_plane = &saluki_config.data_plane;
 
     // If no data pipelines are enabled, then there's nothing for us to do.
-    if !dp_config.data_pipelines_enabled() {
+    if !data_plane.data_pipelines_enabled() {
         return Err(generic_error!("No data pipelines are enabled. Exiting."));
     }
 
@@ -186,48 +185,48 @@ async fn create_topology(
     //
     // Notably, we _don't_ need either of these if all we're doing is running the OTLP pipeline in proxy mode, which
     // is the only reason we're differentiating here.
-    if dp_config.metrics_pipeline_required()
-        || dp_config.logs_pipeline_required()
-        || dp_config.events_pipeline_required()
-        || dp_config.service_checks_pipeline_required()
-        || dp_config.traces_pipeline_required()
+    if data_plane.metrics_pipeline_required()
+        || data_plane.logs_pipeline_required()
+        || data_plane.events_pipeline_required()
+        || data_plane.service_checks_pipeline_required()
+        || data_plane.traces_pipeline_required()
     {
         let dd_forwarder_config = DatadogForwarderConfiguration::from_native(&saluki_config.forwarder.datadog)
             .error_context("Failed to configure Datadog forwarder.")?;
         blueprint.add_forwarder("dd_out", dd_forwarder_config)?;
     }
 
-    if dp_config.metrics_pipeline_required() {
-        add_baseline_metrics_pipeline_to_blueprint(&mut blueprint, saluki_config, dp_config, env_provider).await?;
+    if data_plane.metrics_pipeline_required() {
+        add_baseline_metrics_pipeline_to_blueprint(&mut blueprint, saluki_config, env_provider).await?;
     }
 
-    if dp_config.logs_pipeline_required() {
+    if data_plane.logs_pipeline_required() {
         add_baseline_logs_pipeline_to_blueprint(&mut blueprint, saluki_config).await?;
     }
 
-    if dp_config.events_pipeline_required() {
+    if data_plane.events_pipeline_required() {
         add_baseline_events_pipeline_to_blueprint(&mut blueprint, saluki_config).await?;
     }
 
-    if dp_config.service_checks_pipeline_required() {
+    if data_plane.service_checks_pipeline_required() {
         add_baseline_service_checks_pipeline_to_blueprint(&mut blueprint, saluki_config).await?;
     }
 
-    if dp_config.traces_pipeline_required() {
+    if data_plane.traces_pipeline_required() {
         add_baseline_traces_pipeline_to_blueprint(&mut blueprint, saluki_config, env_provider).await?;
     }
 
     // Now we move on to our actual data pipelines.
-    if dp_config.checks().enabled() {
+    if data_plane.checks.enabled() {
         add_checks_pipeline_to_blueprint(&mut blueprint, saluki_config).await?;
     }
 
-    if dp_config.dogstatsd().enabled() {
+    if data_plane.dogstatsd.enabled() {
         let dsd_control_surface = add_dsd_pipeline_to_blueprint(&mut blueprint, saluki_config, env_provider).await?;
         control_surfaces.attach_dogstatsd(dsd_control_surface);
     }
 
-    if dp_config.otlp().enabled() {
+    if data_plane.otlp.enabled() {
         add_otlp_pipeline_to_blueprint(&mut blueprint, saluki_config, env_provider)?;
     }
 
@@ -250,20 +249,15 @@ async fn add_checks_pipeline_to_blueprint(
 }
 
 async fn add_baseline_metrics_pipeline_to_blueprint(
-    blueprint: &mut TopologyBlueprint, saluki_config: &SalukiConfiguration, dp_config: &DataPlaneConfiguration,
-    env_provider: &ADPEnvironmentProvider,
+    blueprint: &mut TopologyBlueprint, saluki_config: &SalukiConfiguration, env_provider: &ADPEnvironmentProvider,
 ) -> Result<(), GenericError> {
     // Create the back half of the metrics processing pipeline.
     let host_enrichment_config = HostEnrichmentConfiguration::from_environment_provider(env_provider.clone());
-    let mut metrics_enrich_config =
-        ChainedConfiguration::default().with_transform_builder("host_enrichment", host_enrichment_config);
-
-    if !dp_config.standalone_mode() {
-        // Transitional: host-tags-over-the-shared-Datadog-Agent-connection is the design's open
-        // question, so the native path uses a disabled host-tags transform for now.
-        let host_tags_config = HostTagsConfiguration::from_native()?;
-        metrics_enrich_config = metrics_enrich_config.with_transform_builder("host_tags", host_tags_config);
-    }
+    // Transitional: host-tags-over-the-shared-Datadog-Agent-connection is the design's open question,
+    // so the native path uses a disabled host-tags transform (a no-op) for now.
+    let metrics_enrich_config = ChainedConfiguration::default()
+        .with_transform_builder("host_enrichment", host_enrichment_config)
+        .with_transform_builder("host_tags", HostTagsConfiguration::from_native()?);
 
     let dd_metrics_config = DatadogMetricsConfiguration::from_native(&saluki_config.metrics.datadog_encoder)
         .error_context("Failed to configure Datadog Metrics encoder.")?;

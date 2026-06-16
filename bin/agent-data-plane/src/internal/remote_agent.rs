@@ -1,3 +1,8 @@
+// Transitional: the `RemoteAgentBootstrap` connection/registration/config-stream machinery is
+// superseded by the configuration system's `DatadogAgentConnection`. It is retained here (unused)
+// until the legacy path is deleted; `RemoteAgentServices` and `RemoteAgentImpl` remain in use.
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 use std::{collections::hash_map::Entry, time::Duration};
 
@@ -153,6 +158,59 @@ impl RemoteAgentBootstrap {
         tokio::spawn(run_config_stream_event_loop(client, sender, session_id));
 
         receiver
+    }
+}
+
+/// Returns the gRPC service names ADP advertises during remote-agent registration.
+pub fn remote_agent_service_names() -> Vec<String> {
+    vec![
+        <StatusProviderServer<()> as NamedService>::NAME.to_string(),
+        <FlareProviderServer<()> as NamedService>::NAME.to_string(),
+        <TelemetryProviderServer<()> as NamedService>::NAME.to_string(),
+    ]
+}
+
+/// The Remote Agent gRPC services (status, flare, telemetry), decoupled from the connection.
+///
+/// Built from the session handle owned by the configuration system's `DatadogAgentConnection` plus
+/// the shared internal-metrics state, so the control plane can expose these services without owning
+/// config authority itself (the Remote Agent service split).
+pub struct RemoteAgentServices {
+    session_id: SessionIdHandle,
+    internal_metrics: Reflector<AggregatedMetricsProcessor>,
+}
+
+impl RemoteAgentServices {
+    /// Creates the services bound to the given session handle.
+    pub async fn from_session(session_id: SessionIdHandle) -> Self {
+        Self {
+            session_id,
+            internal_metrics: get_shared_metrics_state().await,
+        }
+    }
+
+    fn build_impl(&self) -> RemoteAgentImpl {
+        RemoteAgentImpl {
+            started: Utc::now(),
+            internal_metrics: self.internal_metrics.clone(),
+            processor: Mutex::new(TelemetryProcessor::new().with_remapper_rules(get_datadog_agent_remappings())),
+            session_id: self.session_id.clone(),
+        }
+    }
+
+    /// Creates a new `StatusProviderServer`.
+    pub fn create_status_service(&self) -> StatusProviderServer<RemoteAgentImpl> {
+        StatusProviderServer::new(self.build_impl())
+    }
+
+    /// Creates a new `TelemetryProviderServer`.
+    pub fn create_telemetry_service(&self) -> TelemetryProviderServer<RemoteAgentImpl> {
+        TelemetryProviderServer::new(self.build_impl())
+    }
+
+    /// Creates a new `FlareProviderServer`.
+    pub fn create_flare_service(&self) -> FlareProviderServer<RemoteAgentImpl> {
+        FlareProviderServer::new(self.build_impl())
     }
 }
 

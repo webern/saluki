@@ -1,3 +1,8 @@
+// Transitional: `DataPlaneConfiguration` is superseded by `SalukiConfiguration::data_plane`
+// (the native gating/control-surface model). It is retained for the bootstrap-phase reads in
+// the superseded `RemoteAgentBootstrap` path and removed once that path is deleted.
+#![allow(dead_code)]
+
 use saluki_config::GenericConfiguration;
 use saluki_error::GenericError;
 use saluki_io::net::ListenAddress;

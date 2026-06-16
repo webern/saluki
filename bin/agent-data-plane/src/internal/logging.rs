@@ -136,6 +136,31 @@ impl LoggingConfigurationTranslator {
     }
 }
 
+/// Builds a [`LoggingConfiguration`] from the native [`RuntimeLoggingConfig`].
+///
+/// This is the native-path equivalent of [`LoggingConfigurationTranslator::translate`]: it maps the
+/// already-resolved ADP-native logging configuration into the logging stack's type for a reload.
+pub fn logging_configuration_from_native(
+    cfg: &agent_data_plane_config::RuntimeLoggingConfig,
+) -> Result<LoggingConfiguration, GenericError> {
+    let mut logging = LoggingConfiguration::simple();
+    logging.log_level = parse_optional_log_level_raw(cfg.log_level.clone())?;
+    logging.log_format_json = cfg.log_format_json;
+    logging.log_format_rfc3339 = cfg.log_format_rfc3339;
+    logging.log_to_console = cfg.log_to_console;
+    logging.log_to_syslog = cfg.log_to_syslog;
+    logging.syslog_rfc = cfg.syslog_rfc;
+    logging.syslog_uri = if cfg.log_to_syslog && cfg.syslog_uri.is_empty() {
+        PlatformSettings::get_default_syslog_uri().to_string()
+    } else {
+        cfg.syslog_uri.clone()
+    };
+    logging.log_file = cfg.log_file.clone();
+    logging.log_file_max_size = cfg.log_file_max_size;
+    logging.log_file_max_rolls = cfg.log_file_max_rolls;
+    Ok(logging)
+}
+
 /// Reads a configuration key as a permissive boolean (accepts `true`/`false`, `"true"`/`"false"`, `"1"`/`"0"`, etc.).
 ///
 /// Returns `Ok(None)` if the key is absent.

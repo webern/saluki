@@ -7,12 +7,15 @@
 //! returns typed outputs plus any provider attachments. The binary receives typed outputs and
 //! nothing else.
 
+use std::path::PathBuf;
+
 use agent_data_plane_config::{
     BootstrapConfiguration, ConfigStreamAuthority, RuntimeConfigAuthority, RuntimeConfigLanguage, SalukiConfiguration,
     SalukiPrivateConfiguration,
 };
+use datadog_agent_commons::ipc::config::IpcAuthConfiguration;
 use datadog_agent_config::DatadogConfiguration;
-use saluki_config::dynamic::ConfigUpdate;
+use saluki_config::ConfigurationLoader;
 use saluki_error::{generic_error, ErrorContext as _, GenericError};
 
 use crate::bootstrap::{self, BootstrapInputs};
@@ -38,22 +41,25 @@ impl ConfigurationSystem {
     }
 
     /// Runs the full startup lifecycle and returns the typed configuration boundary.
+    ///
+    /// The raw `GenericConfiguration` is loaded, translated, and dropped entirely within this method;
+    /// the binary receives only typed outputs (`SalukiConfiguration`, the bootstrap config, provider
+    /// attachments, a config snapshot for the `/config` endpoint, and the IPC certificate path).
     pub async fn start(self) -> Result<StartedConfigurationSystem, GenericError> {
         // Local bootstrap sources: the GenericConfiguration lives and dies in this scope.
         let local = bootstrap::load_local_sources(&self.inputs)?;
         let bootstrap = bootstrap::parse_bootstrap(&local)?;
 
         let language = bootstrap.startup.runtime_config_authority.language();
-        let private = SalukiPrivateConfiguration::for_language(language);
 
-        let (saluki, attachments) = match &bootstrap.startup.runtime_config_authority {
+        // The IPC certificate path comes from the bootstrap-phase local configuration.
+        let ipc_cert_path = IpcAuthConfiguration::from_configuration(&local)?.ipc_cert_file_path();
+
+        let (saluki, config_snapshot, attachments) = match &bootstrap.startup.runtime_config_authority {
             RuntimeConfigAuthority::LocalSnapshot(RuntimeConfigLanguage::DatadogAgent) => {
-                let dd_config: DatadogConfiguration = local
-                    .as_typed()
-                    .error_context("Failed to parse local Datadog configuration snapshot.")?;
-                let gates = bootstrap::read_pipeline_gates(&local);
-                let saluki = translate_datadog(&dd_config, &private, gates);
-                (saluki, StartedAttachments::None)
+                let saluki = translate_from_generic(&local, language)?;
+                let snapshot = local.as_typed::<serde_json::Value>().unwrap_or(serde_json::Value::Null);
+                (saluki, snapshot, StartedAttachments::None)
             }
             RuntimeConfigAuthority::ConfigStream(ConfigStreamAuthority::DatadogAgent) => {
                 let connection = DatadogAgentConnection::connect(
@@ -64,17 +70,26 @@ impl ConfigurationSystem {
                 .await
                 .error_context("Failed to establish Datadog Agent connection.")?;
 
-                let mut updates = connection.create_config_stream();
-                let snapshot = wait_for_initial_snapshot(&mut updates).await?;
+                // Build the authoritative configuration from the Agent's config stream, with local
+                // environment variables layered on top for ADP-specific overrides, then translate.
+                let dynamic = ConfigurationLoader::default()
+                    .from_environment(self.inputs.env_var_prefix)?
+                    .with_dynamic_configuration(connection.create_config_stream())
+                    .into_generic()
+                    .await?;
+                dynamic.ready().await;
 
-                let dd_config: DatadogConfiguration = serde_json::from_value(snapshot.clone())
-                    .map_err(|e| generic_error!("Failed to parse authoritative Datadog snapshot: {e}"))?;
-                let gates = bootstrap::read_pipeline_gates_value(&snapshot);
-                let saluki = translate_datadog(&dd_config, &private, gates);
+                let saluki = translate_from_generic(&dynamic, language)?;
+                let snapshot = dynamic
+                    .as_typed::<serde_json::Value>()
+                    .unwrap_or(serde_json::Value::Null);
 
-                let stream = ConfigStreamHandle::new(ConfigStreamAuthority::DatadogAgent, updates);
+                // A separate stream feeds the typed, scoped dynamic-update router.
+                let stream =
+                    ConfigStreamHandle::new(ConfigStreamAuthority::DatadogAgent, connection.create_config_stream());
                 (
                     saluki,
+                    snapshot,
                     StartedAttachments::DatadogAgentConfigStream { connection, stream },
                 )
             }
@@ -89,6 +104,8 @@ impl ConfigurationSystem {
             bootstrap,
             saluki,
             attachments,
+            config_snapshot,
+            ipc_cert_path,
         })
     }
 }
@@ -119,29 +136,14 @@ pub fn translate_from_generic(
     Ok(saluki)
 }
 
-async fn wait_for_initial_snapshot(
-    updates: &mut tokio::sync::mpsc::Receiver<ConfigUpdate>,
-) -> Result<serde_json::Value, GenericError> {
-    loop {
-        match updates.recv().await {
-            Some(ConfigUpdate::Snapshot(snapshot)) => return Ok(snapshot),
-            // Ignore partial updates that arrive before the first full snapshot.
-            Some(ConfigUpdate::Partial { .. }) => continue,
-            None => {
-                return Err(generic_error!(
-                    "Config stream closed before the initial snapshot arrived."
-                ))
-            }
-        }
-    }
-}
-
 /// The typed boundary returned to the binary after startup.
 #[derive(Debug)]
 pub struct StartedConfigurationSystem {
     bootstrap: BootstrapConfiguration,
     saluki: SalukiConfiguration,
     attachments: StartedAttachments,
+    config_snapshot: serde_json::Value,
+    ipc_cert_path: PathBuf,
 }
 
 impl StartedConfigurationSystem {
@@ -160,10 +162,40 @@ impl StartedConfigurationSystem {
         &self.attachments
     }
 
-    /// Consumes the started system, returning ownership of its parts.
-    pub fn into_parts(self) -> (BootstrapConfiguration, SalukiConfiguration, StartedAttachments) {
-        (self.bootstrap, self.saluki, self.attachments)
+    /// Returns the resolved configuration snapshot (served by the control-plane `/config` endpoint).
+    pub fn config_snapshot(&self) -> &serde_json::Value {
+        &self.config_snapshot
     }
+
+    /// Returns the IPC certificate path used to build the privileged API's server TLS.
+    pub fn ipc_cert_path(&self) -> &PathBuf {
+        &self.ipc_cert_path
+    }
+
+    /// Consumes the started system, returning ownership of its parts.
+    pub fn into_parts(self) -> StartedParts {
+        StartedParts {
+            bootstrap: self.bootstrap,
+            saluki: self.saluki,
+            attachments: self.attachments,
+            config_snapshot: self.config_snapshot,
+            ipc_cert_path: self.ipc_cert_path,
+        }
+    }
+}
+
+/// Owned parts of a [`StartedConfigurationSystem`].
+pub struct StartedParts {
+    /// Typed bootstrap configuration.
+    pub bootstrap: BootstrapConfiguration,
+    /// ADP-native runtime configuration.
+    pub saluki: SalukiConfiguration,
+    /// Provider attachments created during startup.
+    pub attachments: StartedAttachments,
+    /// Resolved configuration snapshot for the `/config` endpoint.
+    pub config_snapshot: serde_json::Value,
+    /// IPC certificate path for the privileged API's server TLS.
+    pub ipc_cert_path: PathBuf,
 }
 
 /// Provider attachments created by the selected runtime authority.

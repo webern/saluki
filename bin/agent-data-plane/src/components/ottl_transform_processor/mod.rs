@@ -11,7 +11,6 @@ use async_trait::async_trait;
 use ottl::{CallbackMap, EnumMap, OttlParser};
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
 use saluki_common::collections::FastHashMap;
-use saluki_config::GenericConfiguration;
 use saluki_core::{
     components::{transforms::*, ComponentContext},
     data_model::event::trace::{AttributeValue, Span},
@@ -34,22 +33,6 @@ pub struct OttlTransformConfiguration {
 }
 
 impl OttlTransformConfiguration {
-    /// Creates an `OttlTransformConfiguration` from the given configuration.
-    ///
-    /// Reads the OTTL Transform config from the `ottl_transform_config` key at the top level of the data-plane
-    /// configuration.
-    ///
-    /// # Errors
-    ///
-    /// If a value at `ottl_transform_config` exists but fails to deserialize, an error is returned.
-    #[allow(dead_code)]
-    pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
-        let transform_config = config.try_get_typed::<OttlTransformConfig>("ottl_transform_config")?;
-        Ok(Self {
-            config: transform_config.unwrap_or_default(),
-        })
-    }
-
     /// Creates a native (no-op) OTTL transform configuration.
     ///
     /// OTTL rules are not part of the supported native model; a default (no-op) config is used.
@@ -165,7 +148,6 @@ mod tests {
     use std::sync::Arc;
 
     use saluki_common::collections::FastHashMap;
-    use saluki_config::ConfigurationLoader;
     use saluki_core::{
         components::{transforms::*, ComponentContext},
         data_model::event::{
@@ -221,9 +203,20 @@ mod tests {
             })
     }
 
+    /// Builds an `OttlTransformConfiguration` from a test JSON document shaped like the data-plane
+    /// configuration (the OTTL config lives under the `ottl_transform_config` key). Deserializes the
+    /// typed `OttlTransformConfig` directly, mirroring what the configuration system would translate.
+    fn build_transform_config(full_json: Option<serde_json::Value>) -> Result<OttlTransformConfiguration, GenericError> {
+        let config = match full_json.as_ref().and_then(|v| v.get("ottl_transform_config")) {
+            Some(inner) => serde_json::from_value::<OttlTransformConfig>(inner.clone())
+                .map_err(|e| generic_error!("invalid ottl_transform_config: {e}"))?,
+            None => OttlTransformConfig::default(),
+        };
+        Ok(OttlTransformConfiguration { config })
+    }
+
     async fn build_transform(cfg_json: Option<serde_json::Value>) -> Box<dyn SynchronousTransform + Send> {
-        let (config, _) = ConfigurationLoader::for_tests(cfg_json, None, false).await;
-        let ottl_config = OttlTransformConfiguration::from_configuration(&config).expect("config should parse");
+        let ottl_config = build_transform_config(cfg_json).expect("config should parse");
         let ctx = ComponentContext::transform(ComponentId::try_from("ottl_transform").unwrap());
         ottl_config.build(ctx).await.expect("build should succeed")
     }
@@ -252,8 +245,7 @@ mod tests {
                 "unknown_field": 1
             }
         });
-        let (config, _) = ConfigurationLoader::for_tests(Some(invalid), None, false).await;
-        let result = OttlTransformConfiguration::from_configuration(&config);
+        let result = build_transform_config(Some(invalid));
         assert!(result.is_err(), "unknown fields must cause deserialization error");
     }
 
@@ -264,8 +256,7 @@ mod tests {
                 "trace_statements": ["syntax error !!"]
             }
         });
-        let (config, _) = ConfigurationLoader::for_tests(Some(cfg_json), None, false).await;
-        let ottl_config = OttlTransformConfiguration::from_configuration(&config).expect("config is valid");
+        let ottl_config = build_transform_config(Some(cfg_json)).expect("config is valid");
         let ctx = ComponentContext::transform(ComponentId::try_from("ottl_transform").unwrap());
         let result = ottl_config.build(ctx).await;
         assert!(result.is_err(), "invalid OTTL syntax must make build fail");

@@ -1,15 +1,15 @@
 //! Configuration system lifecycle types.
 
-use std::collections::HashSet;
+use std::{collections::HashSet, path::PathBuf};
 
 use agent_data_plane_config::{
     BootstrapConfiguration, BootstrapStartupConfiguration, BootstrapTelemetryConfiguration, ChecksIpcConfiguration,
     ConfigStreamAuthority, ControlPlaneConfiguration, DataPlaneConfiguration, DatadogEventsEncoderConfiguration,
-    DatadogLogsEncoderConfiguration, DatadogServiceChecksEncoderConfiguration, EnvironmentConfiguration,
-    OtlpForwarderConfiguration, OtlpPipelineConfiguration, OtlpProxyConfiguration, OtlpReceiverConfiguration,
-    OtlpSourceConfiguration, OtlpTracesConfiguration, OttlErrorMode, OttlFilterConfiguration,
-    OttlTransformConfiguration, PipelineConfiguration, RuntimeConfigAuthority, RuntimeConfigLanguage,
-    SalukiConfiguration,
+    DatadogLogsEncoderConfiguration, DatadogServiceChecksEncoderConfiguration, DogStatsDCliConfiguration,
+    EnvironmentConfiguration, OtlpForwarderConfiguration, OtlpPipelineConfiguration, OtlpProxyConfiguration,
+    OtlpReceiverConfiguration, OtlpSourceConfiguration, OtlpTracesConfiguration, OttlErrorMode,
+    OttlFilterConfiguration, OttlTransformConfiguration, PipelineConfiguration, RuntimeConfigAuthority,
+    RuntimeConfigLanguage, SalukiConfiguration,
 };
 use bytesize::ByteSize;
 use datadog_agent_commons::ipc::config::{IpcAuthConfiguration, RemoteAgentClientConfiguration};
@@ -57,6 +57,19 @@ impl ConfigurationSystem {
         config: &GenericConfiguration,
     ) -> Result<BootstrapConfiguration, GenericError> {
         translate_bootstrap_configuration(config)
+    }
+
+    /// Translates DogStatsD CLI/debug settings from an already loaded local Datadog-shaped snapshot.
+    pub fn translate_local_datadog_dogstatsd_cli(
+        config: &GenericConfiguration,
+    ) -> Result<DogStatsDCliConfiguration, GenericError> {
+        let socket_path = config
+            .try_get_typed::<String>("dogstatsd_socket")
+            .error_context("Failed to read `dogstatsd_socket`.")?
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from);
+
+        Ok(DogStatsDCliConfiguration::new(socket_path))
     }
 
     /// Translates data-plane API settings from an already loaded local Datadog-shaped snapshot.

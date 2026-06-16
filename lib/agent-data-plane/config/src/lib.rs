@@ -12,11 +12,13 @@
 
 pub mod authority;
 pub mod bootstrap;
+pub mod cli;
 pub mod private;
 pub mod saluki;
 
 pub use authority::{ConfigStreamAuthority, RuntimeConfigAuthority, RuntimeConfigLanguage};
 pub use bootstrap::{BootstrapConfiguration, BootstrapStartupConfiguration, BootstrapTelemetryConfiguration};
+pub use cli::DogStatsDCliConfiguration;
 pub use private::SalukiPrivateConfiguration;
 pub use saluki::{ControlPlaneConfiguration, DataPlaneConfiguration, EnvironmentConfiguration, SalukiConfiguration};
 pub use saluki_component_config::{

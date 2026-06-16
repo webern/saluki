@@ -7,9 +7,7 @@ use saluki_app::{
     accounting::ResourceTelemetryWorker,
     config::{ConfigView, ConfigWorker},
     dynamic_api::DynamicAPIBuilder,
-    logging::LoggingOverrideController,
 };
-use saluki_config::GenericConfiguration;
 use saluki_core::{
     health::HealthRegistry,
     runtime::{RestartStrategy, RuntimeConfiguration, Supervisor},
@@ -31,10 +29,10 @@ use crate::internal::{
 ///
 /// If the supervisor can't be created, an error is returned.
 pub async fn create_control_plane_supervisor(
-    config: &GenericConfiguration, config_view: ConfigView, dp_config: &DataPlaneConfiguration,
+    dynamic_log_level_worker: DynamicLogLevelWorker, config_view: ConfigView, dp_config: &DataPlaneConfiguration,
     control_plane_config: &ControlPlaneConfiguration, component_registry: &ComponentRegistry,
     health_registry: HealthRegistry, control_surfaces: TopologyControlSurfaces,
-    ra_bootstrap: Option<RemoteAgentBootstrap>, logging_controller: LoggingOverrideController,
+    ra_bootstrap: Option<RemoteAgentBootstrap>,
 ) -> Result<Supervisor, GenericError> {
     let mut supervisor = Supervisor::new("ctrl-pln")?
         .with_dedicated_runtime(RuntimeConfiguration::single_threaded())
@@ -43,7 +41,7 @@ pub async fn create_control_plane_supervisor(
     supervisor.add_worker(health_registry.worker());
     supervisor.add_worker(ResourceTelemetryWorker::new(component_registry));
     supervisor.add_worker(InternalTelemetryAPIWorker::new());
-    supervisor.add_worker(DynamicLogLevelWorker::new(config, logging_controller));
+    supervisor.add_worker(dynamic_log_level_worker);
     supervisor.add_worker(ConfigWorker::new(config_view));
 
     supervisor.add_worker(DynamicAPIBuilder::new(

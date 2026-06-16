@@ -4,9 +4,7 @@ use std::{
 };
 
 use agent_data_plane_config::SalukiConfiguration;
-use agent_data_plane_config_system::{
-    BootstrapInputs, ConfigurationSystem, LoggingConfigurationTranslator, StartedAttachments,
-};
+use agent_data_plane_config_system::{BootstrapInputs, ConfigurationSystem, StartedAttachments};
 use argh::FromArgs;
 use datadog_agent_commons::platform::PlatformSettings;
 use resource_accounting::{ComponentBounds, ComponentRegistry};
@@ -90,7 +88,7 @@ pub async fn handle_run_command(
     let saluki_config = started_config.saluki();
     let dp_config = &saluki_config.data_plane;
 
-    match LoggingConfigurationTranslator::translate(config) {
+    match started_config.logging_configuration() {
         Ok(logging_config) => {
             if let Err(e) = bootstrap_guard.logging_mut().reload(logging_config).await {
                 warn!(
@@ -127,7 +125,7 @@ pub async fn handle_run_command(
 
     // Create the internal supervisor which drives our control plane and internal observability.
     let mut internal_supervisor = create_internal_supervisor(
-        config,
+        started_config.dynamic_log_level_worker(bootstrap_guard.logging().controller()),
         started_config.config_view(),
         dp_config,
         &saluki_config.control_plane,
@@ -135,7 +133,6 @@ pub async fn handle_run_command(
         health_registry.clone(),
         control_surfaces,
         remote_agent_bootstrap_from_attachments(started_config.attachments()).await,
-        bootstrap_guard.logging().controller(),
     )
     .await
     .error_context("Failed to create internal supervisor.")?;

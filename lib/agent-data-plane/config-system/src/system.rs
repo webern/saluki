@@ -17,7 +17,10 @@ use datadog_agent_config::{
     classifier::{ConfigClassifier, Pipeline, PipelineAffinity, Severity, SupportLevel},
     DatadogConfiguration, DatadogRemapper, KEY_ALIASES,
 };
-use saluki_app::config::ConfigView;
+use saluki_app::{
+    config::ConfigView,
+    logging::{LoggingConfiguration, LoggingOverrideController},
+};
 use saluki_common::task::spawn_traced_named;
 use saluki_config::{ConfigurationLoader, DurationString, GenericConfiguration};
 use saluki_error::{generic_error, ErrorContext as _, GenericError};
@@ -30,6 +33,7 @@ use tracing::{debug, error, info, trace, warn};
 use crate::{
     bootstrap::BootstrapInputs,
     datadog_agent::{remote_agent_service_names, DatadogAgentConnection},
+    logging::{DynamicLogLevelWorker, LoggingConfigurationTranslator},
     stream::ConfigStreamHandle,
 };
 
@@ -646,6 +650,16 @@ impl StartedConfigurationSystem {
     /// Returns the runtime configuration view exposed through the config API.
     pub fn config_view(&self) -> ConfigView {
         self.config_view.clone()
+    }
+
+    /// Returns the resolved ADP logging configuration.
+    pub fn logging_configuration(&self) -> Result<LoggingConfiguration, GenericError> {
+        LoggingConfigurationTranslator::translate(&self.compat_datadog_source)
+    }
+
+    /// Creates the dynamic log-level worker for the resolved configuration source.
+    pub fn dynamic_log_level_worker(&self, controller: LoggingOverrideController) -> DynamicLogLevelWorker {
+        DynamicLogLevelWorker::new(&self.compat_datadog_source, controller)
     }
 
     /// Returns the provider attachments created during startup.

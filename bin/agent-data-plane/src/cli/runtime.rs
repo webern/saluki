@@ -1,13 +1,10 @@
 //! Runtime orchestration for the `run` command.
 //!
-//! TRANSITIONAL (spike, build-order step 10): the data topology is built from the native
-//! [`SalukiConfiguration`] (see `create_topology` below), but the surrounding runtime shell — the
-//! bootstrap/authority resolution, environment provider, internal supervisor, memory bounds, and the
-//! overlay classifier check — still consumes `GenericConfiguration`. That shell lives *here* rather
-//! than in `run.rs` so the command surface stays typed; relocating it fully into the configuration
-//! system requires the env/IPC/control-plane subsystem rewrite tracked in `CONFRA_SPIKE_STATUS.md`
-//! (notably the workload-collector layer and the shared `DatadogAgentConnection` question, recorded
-//! in `design/spike-2c-claude.md`).
+//! This builds the data topology entirely from the native [`SalukiConfiguration`] (see
+//! `create_topology`) and assembles the supervision tree. It holds no `GenericConfiguration`: the
+//! resolved configuration and the not-yet-native subsystems (environment provider, internal
+//! supervisor) are owned by [`RuntimeShell`](super::runtime_setup::RuntimeShell), the transitional
+//! shell described in `runtime_setup.rs`.
 
 use std::time::{Duration, Instant};
 
@@ -20,7 +17,7 @@ use saluki_app::{
     metrics::emit_startup_metrics,
 };
 use saluki_components::{
-    config::{DatadogRemapper, MrfConfiguration, KEY_ALIASES},
+    config::MrfConfiguration,
     decoders::otlp::OtlpDecoderConfiguration,
     destinations::{DogStatsDDebugLogConfiguration, DogStatsDStatisticsConfiguration},
     encoders::{
@@ -37,7 +34,6 @@ use saluki_components::{
         TraceSamplerConfiguration,
     },
 };
-use saluki_config::{ConfigurationLoader, GenericConfiguration};
 use saluki_core::health::HealthRegistry;
 use saluki_core::runtime::{RestartMode, RestartStrategy, Supervisor};
 use saluki_core::topology::TopologyBlueprint;
@@ -45,25 +41,25 @@ use saluki_env::EnvironmentProvider as _;
 use saluki_error::{generic_error, ErrorContext as _, GenericError};
 use tracing::{info, warn};
 
-use crate::{
-    components::{
-        apm_onboarding::ApmOnboardingConfiguration,
-        dogstatsd_post_aggregate_filter::DogStatsDPostAggregateFilterConfiguration,
-        dogstatsd_prefix_filter::DogStatsDPrefixFilterConfiguration, host_tags::HostTagsConfiguration,
-        ottl_filter_processor::OttlFilterConfiguration, ottl_transform_processor::OttlTransformConfiguration,
-        tag_filterlist::TagFilterlistConfiguration,
-    },
-    internal::{
-        create_internal_supervisor, logging::LoggingConfigurationTranslator, remote_agent::RemoteAgentBootstrap,
-        DogStatsDControlSurface, TopologyControlSurfaces,
-    },
+use crate::cli::runtime_setup::RuntimeShell;
+use crate::components::{
+    apm_onboarding::ApmOnboardingConfiguration,
+    dogstatsd_post_aggregate_filter::DogStatsDPostAggregateFilterConfiguration,
+    dogstatsd_prefix_filter::DogStatsDPrefixFilterConfiguration, host_tags::HostTagsConfiguration,
+    ottl_filter_processor::OttlFilterConfiguration, ottl_transform_processor::OttlTransformConfiguration,
+    tag_filterlist::TagFilterlistConfiguration,
 };
+use crate::internal::{DogStatsDControlSurface, TopologyControlSurfaces};
 use crate::{config::DataPlaneConfiguration, internal::env::ADPEnvironmentProvider};
 
 /// Entrypoint for the `run` command.
+///
+/// `shell` is the resolved [`RuntimeShell`]: the ADP-native [`SalukiConfiguration`] plus the
+/// transitional raw-config-backed subsystems (environment provider, internal supervisor) that are
+/// not yet native. This function builds the data topology from the native configuration and
+/// assembles the supervision tree; it does not touch `GenericConfiguration`.
 pub async fn handle_run_command(
-    started: Instant, bootstrap_config: GenericConfiguration, bootstrap_guard: &mut BootstrapGuard,
-    bootstrap_supervisor: Supervisor,
+    started: Instant, mut shell: RuntimeShell, bootstrap_guard: &mut BootstrapGuard, bootstrap_supervisor: Supervisor,
 ) -> Result<(), GenericError> {
     let app_details = saluki_metadata::get_app_details();
     info!(
@@ -75,127 +71,34 @@ pub async fn handle_run_command(
         "Agent Data Plane starting..."
     );
 
-    // Load our "bootstrap" configuration.
-    //
-    // If remote agent mode is enabled, we'll register as a remote agent, which will unlock the ability to receive
-    // configuration updates from the Core Agent, which we'll use to build our final, updated configuration. Otherwise,
-    // we keep the bootstrap configuration and use it as-is.
-    let bootstrap_dp_config = DataPlaneConfiguration::from_configuration(&bootstrap_config)
-        .error_context("Failed to load data plane configuration.")?;
-
-    let in_standalone_mode = bootstrap_dp_config.standalone_mode();
-    let remote_agent_enabled = bootstrap_dp_config.remote_agent_enabled();
-    let use_new_config_stream_endpoint = bootstrap_dp_config.use_new_config_stream_endpoint();
-    let should_bootstrap_remote_agent = !in_standalone_mode && (remote_agent_enabled || use_new_config_stream_endpoint);
-
-    let ra_bootstrap = if should_bootstrap_remote_agent {
-        let ra_bootstrap = RemoteAgentBootstrap::from_configuration(&bootstrap_config, &bootstrap_dp_config)
-            .await
-            .error_context("Failed to bootstrap remote agent state.")?;
-
-        Some(ra_bootstrap)
-    } else {
-        None
-    };
-
-    let (config, dp_config) = match &ra_bootstrap {
-        Some(ra_bootstrap) if use_new_config_stream_endpoint => {
-            // Build a new configuration that uses the configuration sent by the control plane as the authoritative
-            // configuration source, but with environment variables on top of that to allow for ADP-specific overriding: log
-            // level, etc.
-            let dynamic_config = ConfigurationLoader::default()
-                .with_key_aliases(KEY_ALIASES)
-                .add_providers([DatadogRemapper::new()])
-                .from_environment(PlatformSettings::get_env_var_prefix())?
-                .with_dynamic_configuration(ra_bootstrap.create_config_stream())
-                .into_generic()
-                .await?;
-
-            info!("Waiting for initial configuration from Datadog Agent...");
-            dynamic_config.ready().await;
-            info!("Initial configuration received.");
-
-            // Now that the Datadog Agent has supplied its authoritative configuration, reload the logging subsystem
-            // so its destinations, format, and level reflect what the Agent specifies rather than the bootstrap-phase
-            // defaults.
-            match LoggingConfigurationTranslator::translate(&dynamic_config) {
-                Ok(logging_config) => {
-                    if let Err(e) = bootstrap_guard.logging_mut().reload(logging_config).await {
-                        warn!(
-                            error = %e,
-                            "Failed to reload logging from Agent configuration; continuing with bootstrap logging settings."
-                        );
-                    }
-                }
-                Err(e) => warn!(
-                    error = %e,
-                    "Failed to translate logging configuration from Agent; continuing with bootstrap logging settings."
-                ),
-            }
-
-            // Reload our data plane configuration based on the dynamic configuration.
-            let dynamic_dp_config = DataPlaneConfiguration::from_configuration(&dynamic_config)
-                .error_context("Failed to load data plane configuration.")?;
-
-            (dynamic_config, dynamic_dp_config)
-        }
-
-        // If dynamic configuration is disabled, the bootstrap configuration is already the complete and final configuration.
-        _ => (bootstrap_config, bootstrap_dp_config),
-    };
-
-    if !in_standalone_mode && !dp_config.enabled() {
-        info!("Agent Data Plane is not enabled. Exiting.");
-        return Ok(());
-    }
-
-    // Overlay/classifier validation happens inside the configuration system (`translate_from_generic`)
-    // before `SalukiConfiguration` is produced, so it is not repeated here.
-
-    // Translate the resolved configuration into the ADP-native model. Topology components are built
-    // from these native slices rather than the raw map.
-    //
-    // Transitional: the environment provider, internal supervisor, memory bounds, and a few trace
-    // transforms still consume the raw configuration, pending the shared Datadog Agent connection
-    // design question and the remaining component cutover. See CONFRA_SPIKE_STATUS.md.
-    let saluki_config = agent_data_plane_config_system::translate_from_generic(
-        &config,
-        agent_data_plane_config::RuntimeConfigLanguage::DatadogAgent,
-    )
-    .error_context("Failed to translate configuration into the ADP-native model.")?;
-
     // Set up all of the building blocks for building our topologies and launching internal processes.
     let component_registry = ComponentRegistry::default();
     let health_registry = HealthRegistry::new();
-    let (env_provider, maybe_env_supervisor) =
-        ADPEnvironmentProvider::from_configuration(&config, &dp_config, &component_registry, &health_registry).await?;
+    let (env_provider, maybe_env_supervisor) = shell.build_environment(&component_registry, &health_registry).await?;
 
-    // Create the blueprint for our primary topology.
+    // Create the blueprint for our primary topology, built entirely from the native configuration.
     let (mut blueprint, control_surfaces) =
-        create_topology(&saluki_config, &dp_config, &env_provider, &component_registry).await?;
-
-    // Create the internal supervisor which drives our control plane and internal observability.
-    let mut internal_supervisor = create_internal_supervisor(
-        &config,
-        &dp_config,
-        &component_registry,
-        health_registry.clone(),
-        control_surfaces,
-        ra_bootstrap,
-        bootstrap_guard.logging().controller(),
-    )
-    .await
-    .error_context("Failed to create internal supervisor.")?;
+        create_topology(shell.saluki(), shell.dp_config(), &env_provider, &component_registry).await?;
 
     // Run memory bounds validation to ensure that we can launch the topology with our configured memory limit, if any.
     // Built from the native memory configuration rather than the raw map.
-    let mem = &saluki_config.memory;
+    let mem = &shell.saluki().memory;
     let bounds_config = MemoryBoundsConfiguration::from_parts(
         mem.memory_limit_bytes.map(bytesize::ByteSize::b),
         mem.slop_factor,
         mem.enable_global_limiter,
     )?;
     let memory_limiter = initialize_memory_bounds(bounds_config, component_registry.root())?;
+
+    // Create the internal supervisor which drives our control plane and internal observability.
+    let mut internal_supervisor = shell
+        .build_internal_supervisor(
+            &component_registry,
+            health_registry.clone(),
+            control_surfaces,
+            bootstrap_guard.logging().controller(),
+        )
+        .await?;
 
     if let Ok(val) = std::env::var("DD_ADP_WRITE_SIZING_GUIDE") {
         if val != "false" {

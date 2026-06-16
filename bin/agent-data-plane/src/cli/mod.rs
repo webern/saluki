@@ -20,6 +20,9 @@ use self::run::RunCommand;
 mod runtime;
 pub use self::runtime::handle_run_command;
 
+mod runtime_setup;
+pub use self::runtime_setup::RuntimeShell;
+
 mod utils;
 
 mod version;

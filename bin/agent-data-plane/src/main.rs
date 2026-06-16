@@ -149,17 +149,31 @@ async fn run_inner(
                 }
             }
 
-            let exit_code =
-                match handle_run_command(started, bootstrap_config, bootstrap_guard, bootstrap_supervisor).await {
-                    Ok(()) => {
-                        info!("Agent Data Plane stopped.");
-                        None
+            // Resolve the runtime configuration (bootstrap/authority resolution + native
+            // translation), then run with typed inputs. The raw `GenericConfiguration` is owned by
+            // the resolved `RuntimeShell`, not by the run command.
+            let exit_code = match RuntimeShell::resolve(bootstrap_config, bootstrap_guard).await {
+                Ok(Some(shell)) => {
+                    match handle_run_command(started, shell, bootstrap_guard, bootstrap_supervisor).await {
+                        Ok(()) => {
+                            info!("Agent Data Plane stopped.");
+                            None
+                        }
+                        Err(e) => {
+                            error!("{:?}", e);
+                            Some(1)
+                        }
                     }
-                    Err(e) => {
-                        error!("{:?}", e);
-                        Some(1)
-                    }
-                };
+                }
+                Ok(None) => {
+                    info!("Agent Data Plane stopped.");
+                    None
+                }
+                Err(e) => {
+                    error!("{:?}", e);
+                    Some(1)
+                }
+            };
 
             // Remove the PID file, if configured.
             if let Some(pid_file) = &cmd.pid_file {

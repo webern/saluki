@@ -12,8 +12,6 @@ use saluki_io::net::ListenAddress;
 pub struct DataPlaneConfiguration {
     enabled: bool,
     standalone_mode: bool,
-    use_new_config_stream_endpoint: bool,
-    remote_agent_enabled: bool,
     api_listen_address: ListenAddress,
     secure_api_listen_address: ListenAddress,
     checks: DataPlaneChecksConfiguration,
@@ -38,10 +36,6 @@ impl DataPlaneConfiguration {
         Ok(Self {
             enabled: config.try_get_typed("data_plane.enabled")?.unwrap_or(false),
             standalone_mode: config.try_get_typed("data_plane.standalone_mode")?.unwrap_or(false),
-            use_new_config_stream_endpoint: config
-                .try_get_typed("data_plane.use_new_config_stream_endpoint")?
-                .unwrap_or(true),
-            remote_agent_enabled: config.try_get_typed("data_plane.remote_agent_enabled")?.unwrap_or(true),
             api_listen_address: config
                 .try_get_typed("data_plane.api_listen_address")?
                 .unwrap_or_else(|| ListenAddress::any_tcp(5100)),
@@ -62,16 +56,6 @@ impl DataPlaneConfiguration {
     /// Returns `true` if the data plane is running in standalone mode.
     pub const fn standalone_mode(&self) -> bool {
         self.standalone_mode
-    }
-
-    /// Returns `true` if the new config stream endpoint should be used.
-    pub const fn use_new_config_stream_endpoint(&self) -> bool {
-        self.use_new_config_stream_endpoint
-    }
-
-    /// Returns `true` if the data plane should register as a remote agent.
-    pub const fn remote_agent_enabled(&self) -> bool {
-        self.remote_agent_enabled
     }
 
     /// Returns a reference to the API listen address

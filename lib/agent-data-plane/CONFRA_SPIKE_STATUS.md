@@ -105,7 +105,21 @@ The env/IPC/control-plane shell was subsequently made native:
 `RuntimeShell` stores **no** `GenericConfiguration`; `build_environment` and
 `build_internal_supervisor` are native.
 
-### The single remaining `GenericConfiguration` use: `RuntimeShell::resolve`
+### The run path is now GenericConfiguration-free (bootstrap restructure done)
+
+`RuntimeShell::resolve` calls `ConfigurationSystem::start()`, which owns all raw loading and returns
+typed outputs (`SalukiConfiguration`, bootstrap config, config snapshot `Value`, IPC cert path, and
+the `DatadogAgentConnection`). The Remote Agent services (status/flare/telemetry) are built from the
+connection's session (`RemoteAgentServices::from_session` — the service split); the control plane and
+internal supervisor take `SalukiConfiguration.data_plane`; `main.rs` passes `BootstrapInputs`.
+
+`run.rs`, `runtime.rs`, and `runtime_setup.rs` contain **zero** `GenericConfiguration`. The only
+remaining binary uses are outside the run path and legitimate: the `main.rs` bootstrap phase
+(`AppBootstrapper`/`parse_metrics_level`, which the design's bootstrap phase permits) and the
+diagnostic `debug`/`config`/`dogstatsd` subcommands. The superseded `RemoteAgentBootstrap` and
+`DataPlaneConfiguration` are retained behind `#[allow(dead_code)]` until deleted.
+
+### (Historical) the previously single remaining use: `RuntimeShell::resolve`
 
 The only remaining use in the run path is the bootstrap loader, `RuntimeShell::resolve` — it loads
 local/stream sources into a `GenericConfiguration`, translates to `SalukiConfiguration`, and extracts

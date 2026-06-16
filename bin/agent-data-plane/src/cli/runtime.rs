@@ -2,9 +2,8 @@
 //!
 //! This builds the data topology entirely from the native [`SalukiConfiguration`] (see
 //! `create_topology`) and assembles the supervision tree. It holds no `GenericConfiguration`: the
-//! resolved configuration and the not-yet-native subsystems (environment provider, internal
-//! supervisor) are owned by [`RuntimeShell`](super::runtime_setup::RuntimeShell), the transitional
-//! shell described in `runtime_setup.rs`.
+//! resolved configuration comes from [`RuntimeShell`](super::runtime_setup::RuntimeShell), which
+//! runs the configuration system's startup seam and returns only typed outputs.
 
 use std::time::{Duration, Instant};
 
@@ -54,10 +53,10 @@ use crate::internal::{DogStatsDControlSurface, TopologyControlSurfaces};
 
 /// Entrypoint for the `run` command.
 ///
-/// `shell` is the resolved [`RuntimeShell`]: the ADP-native [`SalukiConfiguration`] plus the
-/// transitional raw-config-backed subsystems (environment provider, internal supervisor) that are
-/// not yet native. This function builds the data topology from the native configuration and
-/// assembles the supervision tree; it does not touch `GenericConfiguration`.
+/// `shell` is the resolved [`RuntimeShell`]: the ADP-native [`SalukiConfiguration`] plus the typed
+/// capabilities (environment provider, internal supervisor) built from the configuration system's
+/// outputs. This function builds the data topology and assembles the supervision tree; it does not
+/// touch `GenericConfiguration`.
 pub async fn handle_run_command(
     started: Instant, mut shell: RuntimeShell, bootstrap_guard: &mut BootstrapGuard, bootstrap_supervisor: Supervisor,
 ) -> Result<(), GenericError> {

@@ -1,6 +1,6 @@
 //! ADP-native runtime configuration.
 
-use std::time::Duration;
+use std::{path::PathBuf, time::Duration};
 
 use saluki_component_config::{
     ChecksIpcConfiguration, DatadogEventsEncoderConfiguration, DatadogLogsEncoderConfiguration,
@@ -14,6 +14,9 @@ use saluki_io::net::ListenAddress;
 pub struct SalukiConfiguration {
     /// Top-level ADP enablement and pipeline selection.
     pub data_plane: DataPlaneConfiguration,
+
+    /// Control-plane settings.
+    pub control_plane: ControlPlaneConfiguration,
 
     /// Checks IPC source settings.
     pub checks_ipc: ChecksIpcConfiguration,
@@ -35,6 +38,24 @@ pub struct SalukiConfiguration {
 
     /// Runtime environment provider settings.
     pub environment: EnvironmentConfiguration,
+}
+
+/// Native control-plane settings.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ControlPlaneConfiguration {
+    ipc_cert_file_path: PathBuf,
+}
+
+impl ControlPlaneConfiguration {
+    /// Creates native control-plane settings.
+    pub fn new(ipc_cert_file_path: PathBuf) -> Self {
+        Self { ipc_cert_file_path }
+    }
+
+    /// Returns the IPC certificate file path used by the privileged API.
+    pub fn ipc_cert_file_path(&self) -> &PathBuf {
+        &self.ipc_cert_file_path
+    }
 }
 
 /// Native runtime environment settings.

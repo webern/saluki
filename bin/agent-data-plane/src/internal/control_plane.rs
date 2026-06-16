@@ -1,5 +1,5 @@
-use agent_data_plane_config::DataPlaneConfiguration;
-use datadog_agent_commons::ipc::{config::IpcAuthConfiguration, tls::build_ipc_server_tls_config};
+use agent_data_plane_config::{ControlPlaneConfiguration, DataPlaneConfiguration};
+use datadog_agent_commons::ipc::tls::build_ipc_server_tls_config;
 use resource_accounting::ComponentRegistry;
 use saluki_api::EndpointType;
 use saluki_app::{
@@ -29,7 +29,8 @@ use crate::internal::{
 ///
 /// If the supervisor can't be created, an error is returned.
 pub async fn create_control_plane_supervisor(
-    config: &GenericConfiguration, dp_config: &DataPlaneConfiguration, component_registry: &ComponentRegistry,
+    config: &GenericConfiguration, dp_config: &DataPlaneConfiguration,
+    control_plane_config: &ControlPlaneConfiguration, component_registry: &ComponentRegistry,
     health_registry: HealthRegistry, control_surfaces: TopologyControlSurfaces,
     ra_bootstrap: Option<RemoteAgentBootstrap>, logging_controller: LoggingOverrideController,
 ) -> Result<Supervisor, GenericError> {
@@ -47,8 +48,7 @@ pub async fn create_control_plane_supervisor(
         EndpointType::Unprivileged,
         dp_config.api_listen_address().clone(),
     ));
-    let ipc_config = IpcAuthConfiguration::from_configuration(config)?;
-    let tls_config = build_ipc_server_tls_config(ipc_config.ipc_cert_file_path()).await?;
+    let tls_config = build_ipc_server_tls_config(control_plane_config.ipc_cert_file_path()).await?;
 
     let mut privileged_api =
         DynamicAPIBuilder::new(EndpointType::Privileged, dp_config.secure_api_listen_address().clone())

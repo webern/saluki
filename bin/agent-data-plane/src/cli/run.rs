@@ -127,6 +127,7 @@ pub async fn handle_run_command(
     let mut internal_supervisor = create_internal_supervisor(
         config,
         dp_config,
+        &saluki_config.control_plane,
         &component_registry,
         health_registry.clone(),
         control_surfaces,

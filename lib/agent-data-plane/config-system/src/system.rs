@@ -4,12 +4,12 @@ use std::collections::HashSet;
 
 use agent_data_plane_config::{
     BootstrapConfiguration, BootstrapStartupConfiguration, BootstrapTelemetryConfiguration, ChecksIpcConfiguration,
-    ConfigStreamAuthority, DataPlaneConfiguration, DatadogEventsEncoderConfiguration, DatadogLogsEncoderConfiguration,
-    DatadogServiceChecksEncoderConfiguration, EnvironmentConfiguration, OtlpForwarderConfiguration,
-    OtlpPipelineConfiguration, OtlpProxyConfiguration, OtlpReceiverConfiguration, PipelineConfiguration,
-    RuntimeConfigAuthority, RuntimeConfigLanguage, SalukiConfiguration,
+    ConfigStreamAuthority, ControlPlaneConfiguration, DataPlaneConfiguration, DatadogEventsEncoderConfiguration,
+    DatadogLogsEncoderConfiguration, DatadogServiceChecksEncoderConfiguration, EnvironmentConfiguration,
+    OtlpForwarderConfiguration, OtlpPipelineConfiguration, OtlpProxyConfiguration, OtlpReceiverConfiguration,
+    PipelineConfiguration, RuntimeConfigAuthority, RuntimeConfigLanguage, SalukiConfiguration,
 };
-use datadog_agent_commons::ipc::config::RemoteAgentClientConfiguration;
+use datadog_agent_commons::ipc::config::{IpcAuthConfiguration, RemoteAgentClientConfiguration};
 use datadog_agent_config::{
     classifier::{ConfigClassifier, Pipeline, PipelineAffinity, Severity, SupportLevel},
     DatadogConfiguration, DatadogRemapper, KEY_ALIASES,
@@ -223,6 +223,8 @@ fn translate_datadog_snapshot(config: &GenericConfiguration) -> Result<SalukiCon
         .try_get_typed("data_plane.secure_api_listen_address")
         .error_context("Failed to read `data_plane.secure_api_listen_address`.")?
         .unwrap_or_else(|| ListenAddress::any_tcp(5101));
+    let control_plane =
+        ControlPlaneConfiguration::new(IpcAuthConfiguration::from_configuration(config)?.ipc_cert_file_path());
     let checks_ipc = ChecksIpcConfiguration::new(
         config
             .try_get_typed("checks_ipc_endpoint")
@@ -308,6 +310,7 @@ fn translate_datadog_snapshot(config: &GenericConfiguration) -> Result<SalukiCon
             dogstatsd,
             otlp,
         ),
+        control_plane,
         checks_ipc,
         datadog_logs_encoder,
         datadog_events_encoder,

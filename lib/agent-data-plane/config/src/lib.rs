@@ -30,6 +30,6 @@ pub use bootstrap::{
 pub use logging::RuntimeLoggingConfig;
 pub use private::SalukiPrivateConfiguration;
 pub use saluki::{
-    ChecksConfigs, DataPlaneConfig, DogStatsDConfigs, EventsConfigs, ForwarderConfigs, LogsConfigs, MetricsConfigs,
-    OtlpConfigs, PipelineGate, SalukiConfiguration, ServiceChecksConfigs, TracesConfigs,
+    ChecksConfigs, DataPlaneConfig, DogStatsDConfigs, EventsConfigs, ForwarderConfigs, LogsConfigs, MemoryConfig,
+    MetricsConfigs, OtlpConfigs, PipelineGate, SalukiConfiguration, ServiceChecksConfigs, TracesConfigs,
 };

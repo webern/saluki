@@ -108,7 +108,9 @@ pub fn translate_from_generic(
     let gates = crate::bootstrap::read_pipeline_gates(config);
     crate::validate::validate_against_overlay(config, gates)?;
     let private = SalukiPrivateConfiguration::for_language(language);
-    Ok(translate_datadog(&dd_config, &private, gates))
+    let mut saluki = translate_datadog(&dd_config, &private, gates);
+    saluki.memory = crate::bootstrap::read_memory_config(config);
+    Ok(saluki)
 }
 
 async fn wait_for_initial_snapshot(

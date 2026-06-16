@@ -188,7 +188,13 @@ pub async fn handle_run_command(
     .error_context("Failed to create internal supervisor.")?;
 
     // Run memory bounds validation to ensure that we can launch the topology with our configured memory limit, if any.
-    let bounds_config = MemoryBoundsConfiguration::try_from_config(&config)?;
+    // Built from the native memory configuration rather than the raw map.
+    let mem = &saluki_config.memory;
+    let bounds_config = MemoryBoundsConfiguration::from_parts(
+        mem.memory_limit_bytes.map(bytesize::ByteSize::b),
+        mem.slop_factor,
+        mem.enable_global_limiter,
+    )?;
     let memory_limiter = initialize_memory_bounds(bounds_config, component_registry.root())?;
 
     if let Ok(val) = std::env::var("DD_ADP_WRITE_SIZING_GUIDE") {

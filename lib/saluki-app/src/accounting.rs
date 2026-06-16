@@ -99,11 +99,33 @@ impl MemoryBoundsConfiguration {
     ///
     /// If an error occurs during deserialization, an error will be returned.
     pub fn try_from_config(config: &GenericConfiguration) -> Result<Self, GenericError> {
-        let mut config = config
+        let config = config
             .as_typed::<Self>()
             .error_context("Failed to parse memory bounds configuration.")?;
 
-        if config.memory_limit.is_none() {
+        config.validate_and_apply_cgroup_fallback()
+    }
+
+    /// Creates a memory bounds configuration from already-resolved native parts.
+    ///
+    /// Used by the configuration system path, where the limit / slop / limiter values come from the
+    /// ADP-native configuration rather than a raw map. `None` values fall back to the same defaults
+    /// the deserializer uses. The cgroup fallback and smoke-test validation are shared with
+    /// [`try_from_config`](Self::try_from_config).
+    pub fn from_parts(
+        memory_limit: Option<ByteSize>, slop_factor: Option<f64>, enable_global_limiter: Option<bool>,
+    ) -> Result<Self, GenericError> {
+        let config = Self {
+            memory_limit,
+            memory_slop_factor: slop_factor.unwrap_or_else(default_memory_slop_factor),
+            enable_global_limiter: enable_global_limiter.unwrap_or_else(default_enable_global_limiter),
+            memory_mode: MemoryMode::default(),
+        };
+        config.validate_and_apply_cgroup_fallback()
+    }
+
+    fn validate_and_apply_cgroup_fallback(mut self) -> Result<Self, GenericError> {
+        if self.memory_limit.is_none() {
             // Try to pull configured memory limit from Cgroup if running in a containerized environment.
             if let Ok(value) = env::var("DOCKER_DD_AGENT") {
                 if !value.is_empty() {
@@ -113,19 +135,19 @@ impl MemoryBoundsConfiguration {
                             "Setting memory limit to {} based on detected cgroups limit.",
                             memory.display().si()
                         );
-                        config.memory_limit = Some(memory);
+                        self.memory_limit = Some(memory);
                     }
                 }
             }
         }
 
         // Try constructing the initial grant based on the configuration as a smoke test to validate the values.
-        if let Some(limit) = config.memory_limit {
-            let _ = MemoryGrant::with_slop_factor(limit.as_u64() as usize, config.memory_slop_factor)
+        if let Some(limit) = self.memory_limit {
+            let _ = MemoryGrant::with_slop_factor(limit.as_u64() as usize, self.memory_slop_factor)
                 .error_context("Given memory limit and/or slop factor invalid.")?;
         }
 
-        Ok(config)
+        Ok(self)
     }
 
     /// Gets the initial memory grant based on the configuration.

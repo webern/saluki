@@ -241,6 +241,9 @@ impl Translator {
         SalukiConfiguration {
             logging: self.logging,
             data_plane,
+            // Memory bounds are an ADP control input outside the witnessed schema; populated by the
+            // configuration system after translation.
+            memory: agent_data_plane_config::MemoryConfig::default(),
             forwarder: ForwarderConfigs {
                 datadog: self.forwarder,
             },

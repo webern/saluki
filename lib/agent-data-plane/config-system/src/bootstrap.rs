@@ -127,6 +127,19 @@ pub(crate) fn read_pipeline_gates_value(snapshot: &serde_json::Value) -> Pipelin
     }
 }
 
+/// Read the ADP memory-bounds control inputs (outside the witnessed schema surface).
+pub(crate) fn read_memory_config(config: &GenericConfiguration) -> agent_data_plane_config::MemoryConfig {
+    agent_data_plane_config::MemoryConfig {
+        memory_limit_bytes: config
+            .try_get_typed::<ByteSize>("memory_limit")
+            .ok()
+            .flatten()
+            .map(|b| b.as_u64()),
+        slop_factor: config.try_get_typed::<f64>("memory_slop_factor").ok().flatten(),
+        enable_global_limiter: config.try_get_typed::<bool>("enable_global_limiter").ok().flatten(),
+    }
+}
+
 fn parse_bootstrap_logging(config: &GenericConfiguration) -> Result<RuntimeLoggingConfig, GenericError> {
     let mut logging = RuntimeLoggingConfig::default();
     logging.log_level = try_string(config, "log_level")?;

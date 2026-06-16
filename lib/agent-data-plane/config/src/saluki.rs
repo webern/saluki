@@ -25,6 +25,9 @@ pub struct SalukiConfiguration {
     /// Top-level data-plane gating and control-surface addresses.
     pub data_plane: DataPlaneConfig,
 
+    /// Process memory-bounds configuration.
+    pub memory: MemoryConfig,
+
     /// Outbound forwarder configuration.
     pub forwarder: ForwarderConfigs,
 
@@ -51,6 +54,19 @@ pub struct SalukiConfiguration {
 
     /// OTLP ingest configuration.
     pub otlp: OtlpConfigs,
+}
+
+/// Process memory-bounds configuration.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct MemoryConfig {
+    /// Overall process memory limit in bytes, if configured.
+    pub memory_limit_bytes: Option<u64>,
+
+    /// Slop factor (0.0..=1.0) withheld from the limit, or `None` to use the application default.
+    pub slop_factor: Option<f64>,
+
+    /// Whether the global memory limiter is enabled, or `None` to use the application default.
+    pub enable_global_limiter: Option<bool>,
 }
 
 /// A simple enable/disable gate for a pipeline.

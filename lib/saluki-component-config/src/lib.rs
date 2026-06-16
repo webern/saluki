@@ -31,7 +31,10 @@ where
 
     /// Returns the current value.
     pub fn current(&self) -> T {
-        self.current.clone()
+        self.updates
+            .as_ref()
+            .map(|updates| updates.borrow().clone())
+            .unwrap_or_else(|| self.current.clone())
     }
 
     /// Waits for the next update, returning `None` only if the update stream closes.
@@ -60,6 +63,17 @@ where
         Self::fixed(T::default())
     }
 }
+
+impl<T> PartialEq for DynamicValue<T>
+where
+    T: Clone + PartialEq,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.current() == other.current()
+    }
+}
+
+impl<T> Eq for DynamicValue<T> where T: Clone + Eq {}
 
 /// OTTL condition/statement error handling mode.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -1033,6 +1047,773 @@ impl MultiRegionFailoverConfiguration {
         }
 
         Some((self.metrics_endpoint_url()?, self.api_key.clone()?))
+    }
+}
+
+/// Native Datadog forwarder HTTP protocol selection.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum DatadogForwarderHttpProtocol {
+    /// Automatically negotiate HTTP/2 with HTTP/1.1 fallback.
+    #[default]
+    Auto,
+    /// Use HTTP/1.1 only.
+    Http1,
+}
+
+/// Native Datadog forwarder endpoint settings.
+#[derive(Clone, Debug)]
+pub struct DatadogForwarderEndpointConfiguration {
+    api_key: DynamicValue<String>,
+    site: String,
+    dd_url: Option<String>,
+    additional_endpoints: DynamicValue<HashMap<String, Vec<String>>>,
+}
+
+impl DatadogForwarderEndpointConfiguration {
+    /// Creates native Datadog endpoint settings.
+    pub fn new(
+        api_key: DynamicValue<String>, site: String, dd_url: Option<String>,
+        additional_endpoints: DynamicValue<HashMap<String, Vec<String>>>,
+    ) -> Self {
+        Self {
+            api_key,
+            site,
+            dd_url,
+            additional_endpoints,
+        }
+    }
+
+    /// Returns the dynamic primary API key.
+    pub fn api_key(&self) -> DynamicValue<String> {
+        self.api_key.clone()
+    }
+
+    /// Returns the configured Datadog site.
+    pub fn site(&self) -> &str {
+        &self.site
+    }
+
+    /// Returns the configured Datadog URL override.
+    pub fn dd_url(&self) -> Option<&str> {
+        self.dd_url.as_deref()
+    }
+
+    /// Returns the dynamic additional endpoint map.
+    pub fn additional_endpoints(&self) -> DynamicValue<HashMap<String, Vec<String>>> {
+        self.additional_endpoints.clone()
+    }
+
+    /// Returns a clone overriding the primary endpoint and API key and clearing additional endpoints.
+    pub fn with_primary_endpoint_override(&self, dd_url: String, api_key: DynamicValue<String>) -> Self {
+        Self {
+            api_key,
+            site: self.site.clone(),
+            dd_url: Some(dd_url),
+            additional_endpoints: DynamicValue::fixed(HashMap::new()),
+        }
+    }
+}
+
+/// Native Datadog forwarder retry settings.
+#[derive(Clone, Debug)]
+pub struct DatadogForwarderRetryConfiguration {
+    backoff_factor: f64,
+    backoff_base_secs: f64,
+    backoff_max_secs: f64,
+    recovery_error_decrease_factor: u32,
+    recovery_reset: bool,
+    retry_queue_payloads_max_size_bytes: u64,
+    storage_max_size_bytes: u64,
+    storage_path: PathBuf,
+    storage_max_disk_ratio: f64,
+    outdated_file_in_days: u32,
+    capacity_time_interval_secs: u64,
+    retry_forbidden_when_secrets_in_use: DynamicValue<bool>,
+}
+
+impl DatadogForwarderRetryConfiguration {
+    /// Creates native Datadog forwarder retry settings.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        backoff_factor: f64, backoff_base_secs: f64, backoff_max_secs: f64, recovery_error_decrease_factor: u32,
+        recovery_reset: bool, retry_queue_payloads_max_size_bytes: u64, storage_max_size_bytes: u64,
+        storage_path: PathBuf, storage_max_disk_ratio: f64, outdated_file_in_days: u32,
+        capacity_time_interval_secs: u64, retry_forbidden_when_secrets_in_use: DynamicValue<bool>,
+    ) -> Self {
+        Self {
+            backoff_factor,
+            backoff_base_secs,
+            backoff_max_secs,
+            recovery_error_decrease_factor,
+            recovery_reset,
+            retry_queue_payloads_max_size_bytes,
+            storage_max_size_bytes,
+            storage_path,
+            storage_max_disk_ratio,
+            outdated_file_in_days,
+            capacity_time_interval_secs,
+            retry_forbidden_when_secrets_in_use,
+        }
+    }
+
+    pub const fn backoff_factor(&self) -> f64 {
+        self.backoff_factor
+    }
+    pub const fn backoff_base_secs(&self) -> f64 {
+        self.backoff_base_secs
+    }
+    pub const fn backoff_max_secs(&self) -> f64 {
+        self.backoff_max_secs
+    }
+    pub const fn recovery_error_decrease_factor(&self) -> u32 {
+        self.recovery_error_decrease_factor
+    }
+    pub const fn recovery_reset(&self) -> bool {
+        self.recovery_reset
+    }
+    pub const fn retry_queue_payloads_max_size_bytes(&self) -> u64 {
+        self.retry_queue_payloads_max_size_bytes
+    }
+    pub const fn storage_max_size_bytes(&self) -> u64 {
+        self.storage_max_size_bytes
+    }
+    pub fn storage_path(&self) -> &PathBuf {
+        &self.storage_path
+    }
+    pub const fn storage_max_disk_ratio(&self) -> f64 {
+        self.storage_max_disk_ratio
+    }
+    pub const fn outdated_file_in_days(&self) -> u32 {
+        self.outdated_file_in_days
+    }
+    pub const fn capacity_time_interval_secs(&self) -> u64 {
+        self.capacity_time_interval_secs
+    }
+    pub fn retry_forbidden_when_secrets_in_use(&self) -> DynamicValue<bool> {
+        self.retry_forbidden_when_secrets_in_use.clone()
+    }
+}
+
+/// Native Datadog proxy settings.
+#[derive(Clone, Debug, Default)]
+pub struct DatadogProxyConfiguration {
+    http_server: Option<String>,
+    https_server: Option<String>,
+    no_proxy: Vec<String>,
+    no_proxy_nonexact_match: bool,
+    use_proxy_for_cloud_metadata: bool,
+}
+
+impl DatadogProxyConfiguration {
+    /// Creates native Datadog proxy settings.
+    pub fn new(
+        http_server: Option<String>, https_server: Option<String>, no_proxy: Vec<String>,
+        no_proxy_nonexact_match: bool, use_proxy_for_cloud_metadata: bool,
+    ) -> Self {
+        Self {
+            http_server,
+            https_server,
+            no_proxy,
+            no_proxy_nonexact_match,
+            use_proxy_for_cloud_metadata,
+        }
+    }
+
+    pub fn http_server(&self) -> Option<&str> {
+        self.http_server.as_deref()
+    }
+    pub fn https_server(&self) -> Option<&str> {
+        self.https_server.as_deref()
+    }
+    pub fn no_proxy(&self) -> &[String] {
+        &self.no_proxy
+    }
+    pub const fn no_proxy_nonexact_match(&self) -> bool {
+        self.no_proxy_nonexact_match
+    }
+    pub const fn use_proxy_for_cloud_metadata(&self) -> bool {
+        self.use_proxy_for_cloud_metadata
+    }
+}
+
+/// Native OPW/Vector metrics endpoint override settings.
+#[derive(Clone, Debug, Default)]
+pub struct DatadogOpwMetricsConfiguration {
+    observability_pipelines_worker_enabled: bool,
+    observability_pipelines_worker_url: String,
+    vector_enabled: bool,
+    vector_url: String,
+}
+
+impl DatadogOpwMetricsConfiguration {
+    /// Creates native OPW/Vector metrics endpoint override settings.
+    pub fn new(
+        observability_pipelines_worker_enabled: bool, observability_pipelines_worker_url: String, vector_enabled: bool,
+        vector_url: String,
+    ) -> Self {
+        Self {
+            observability_pipelines_worker_enabled,
+            observability_pipelines_worker_url,
+            vector_enabled,
+            vector_url,
+        }
+    }
+
+    pub const fn observability_pipelines_worker_enabled(&self) -> bool {
+        self.observability_pipelines_worker_enabled
+    }
+    pub fn observability_pipelines_worker_url(&self) -> &str {
+        &self.observability_pipelines_worker_url
+    }
+    pub const fn vector_enabled(&self) -> bool {
+        self.vector_enabled
+    }
+    pub fn vector_url(&self) -> &str {
+        &self.vector_url
+    }
+}
+
+/// Native Datadog forwarder settings.
+#[derive(Clone, Debug)]
+pub struct DatadogForwarderConfiguration {
+    endpoint_concurrency: usize,
+    endpoint_concurrency_multiplier: usize,
+    request_timeout_secs: u64,
+    endpoint_buffer_size: usize,
+    endpoint: DatadogForwarderEndpointConfiguration,
+    retry: DatadogForwarderRetryConfiguration,
+    proxy: Option<DatadogProxyConfiguration>,
+    opw_metrics: DatadogOpwMetricsConfiguration,
+    http_protocol: DatadogForwarderHttpProtocol,
+    connection_reset_interval_secs: u64,
+    skip_ssl_validation: bool,
+    ssl_key_log_file_path: Option<String>,
+    min_tls_version: String,
+    allow_arbitrary_tags: bool,
+    api_key_validation_interval_mins: u64,
+}
+
+impl DatadogForwarderConfiguration {
+    /// Creates native Datadog forwarder settings.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        endpoint_concurrency: usize, endpoint_concurrency_multiplier: usize, request_timeout_secs: u64,
+        endpoint_buffer_size: usize, endpoint: DatadogForwarderEndpointConfiguration,
+        retry: DatadogForwarderRetryConfiguration, proxy: Option<DatadogProxyConfiguration>,
+        opw_metrics: DatadogOpwMetricsConfiguration, http_protocol: DatadogForwarderHttpProtocol,
+        connection_reset_interval_secs: u64, skip_ssl_validation: bool, ssl_key_log_file_path: Option<String>,
+        min_tls_version: String, allow_arbitrary_tags: bool, api_key_validation_interval_mins: u64,
+    ) -> Self {
+        Self {
+            endpoint_concurrency,
+            endpoint_concurrency_multiplier,
+            request_timeout_secs,
+            endpoint_buffer_size,
+            endpoint,
+            retry,
+            proxy,
+            opw_metrics,
+            http_protocol,
+            connection_reset_interval_secs,
+            skip_ssl_validation,
+            ssl_key_log_file_path,
+            min_tls_version,
+            allow_arbitrary_tags,
+            api_key_validation_interval_mins,
+        }
+    }
+
+    pub const fn endpoint_concurrency(&self) -> usize {
+        self.endpoint_concurrency
+    }
+    pub const fn endpoint_concurrency_multiplier(&self) -> usize {
+        self.endpoint_concurrency_multiplier
+    }
+    pub const fn request_timeout_secs(&self) -> u64 {
+        self.request_timeout_secs
+    }
+    pub const fn endpoint_buffer_size(&self) -> usize {
+        self.endpoint_buffer_size
+    }
+    pub const fn endpoint(&self) -> &DatadogForwarderEndpointConfiguration {
+        &self.endpoint
+    }
+    pub const fn retry(&self) -> &DatadogForwarderRetryConfiguration {
+        &self.retry
+    }
+    pub const fn proxy(&self) -> Option<&DatadogProxyConfiguration> {
+        self.proxy.as_ref()
+    }
+    pub const fn opw_metrics(&self) -> &DatadogOpwMetricsConfiguration {
+        &self.opw_metrics
+    }
+    pub const fn http_protocol(&self) -> DatadogForwarderHttpProtocol {
+        self.http_protocol
+    }
+    pub const fn connection_reset_interval_secs(&self) -> u64 {
+        self.connection_reset_interval_secs
+    }
+    pub const fn skip_ssl_validation(&self) -> bool {
+        self.skip_ssl_validation
+    }
+    pub fn ssl_key_log_file_path(&self) -> Option<&str> {
+        self.ssl_key_log_file_path.as_deref()
+    }
+    pub fn min_tls_version(&self) -> &str {
+        &self.min_tls_version
+    }
+    pub const fn allow_arbitrary_tags(&self) -> bool {
+        self.allow_arbitrary_tags
+    }
+    pub const fn api_key_validation_interval_mins(&self) -> u64 {
+        self.api_key_validation_interval_mins
+    }
+
+    /// Returns a clone with a primary endpoint override and no OPW/additional endpoint routing.
+    pub fn with_primary_endpoint_override(&self, dd_url: String, api_key: DynamicValue<String>) -> Self {
+        let mut clone = self.clone();
+        clone.endpoint = self.endpoint.with_primary_endpoint_override(dd_url, api_key);
+        clone.opw_metrics = DatadogOpwMetricsConfiguration::default();
+        clone
+    }
+}
+
+/// Native trace obfuscation settings.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct TraceObfuscationConfiguration {
+    credit_cards_enabled: bool,
+    credit_cards_luhn: bool,
+    credit_cards_keep_values: Vec<String>,
+    http_remove_query_string: bool,
+    http_remove_paths_with_digits: bool,
+    memcached_enabled: bool,
+    memcached_keep_command: bool,
+    redis_enabled: bool,
+    redis_remove_all_args: bool,
+    valkey_enabled: bool,
+    valkey_remove_all_args: bool,
+    sql_dbms: String,
+    sql_table_names: bool,
+    sql_replace_digits: bool,
+    sql_keep_sql_alias: bool,
+    sql_dollar_quoted_func: bool,
+    mongodb_enabled: bool,
+    mongodb_keep_values: Vec<String>,
+    mongodb_obfuscate_sql_values: Vec<String>,
+    elasticsearch_enabled: bool,
+    elasticsearch_keep_values: Vec<String>,
+    elasticsearch_obfuscate_sql_values: Vec<String>,
+    opensearch_enabled: bool,
+    opensearch_keep_values: Vec<String>,
+    opensearch_obfuscate_sql_values: Vec<String>,
+}
+
+impl TraceObfuscationConfiguration {
+    /// Creates native trace obfuscation settings.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        credit_cards_enabled: bool, credit_cards_luhn: bool, credit_cards_keep_values: Vec<String>,
+        http_remove_query_string: bool, http_remove_paths_with_digits: bool, memcached_enabled: bool,
+        memcached_keep_command: bool, redis_enabled: bool, redis_remove_all_args: bool, valkey_enabled: bool,
+        valkey_remove_all_args: bool, sql_dbms: String, sql_table_names: bool, sql_replace_digits: bool,
+        sql_keep_sql_alias: bool, sql_dollar_quoted_func: bool, mongodb_enabled: bool,
+        mongodb_keep_values: Vec<String>, mongodb_obfuscate_sql_values: Vec<String>, elasticsearch_enabled: bool,
+        elasticsearch_keep_values: Vec<String>, elasticsearch_obfuscate_sql_values: Vec<String>,
+        opensearch_enabled: bool, opensearch_keep_values: Vec<String>, opensearch_obfuscate_sql_values: Vec<String>,
+    ) -> Self {
+        Self {
+            credit_cards_enabled,
+            credit_cards_luhn,
+            credit_cards_keep_values,
+            http_remove_query_string,
+            http_remove_paths_with_digits,
+            memcached_enabled,
+            memcached_keep_command,
+            redis_enabled,
+            redis_remove_all_args,
+            valkey_enabled,
+            valkey_remove_all_args,
+            sql_dbms,
+            sql_table_names,
+            sql_replace_digits,
+            sql_keep_sql_alias,
+            sql_dollar_quoted_func,
+            mongodb_enabled,
+            mongodb_keep_values,
+            mongodb_obfuscate_sql_values,
+            elasticsearch_enabled,
+            elasticsearch_keep_values,
+            elasticsearch_obfuscate_sql_values,
+            opensearch_enabled,
+            opensearch_keep_values,
+            opensearch_obfuscate_sql_values,
+        }
+    }
+
+    pub const fn credit_cards_enabled(&self) -> bool {
+        self.credit_cards_enabled
+    }
+    pub const fn credit_cards_luhn(&self) -> bool {
+        self.credit_cards_luhn
+    }
+    pub fn credit_cards_keep_values(&self) -> &[String] {
+        &self.credit_cards_keep_values
+    }
+    pub const fn http_remove_query_string(&self) -> bool {
+        self.http_remove_query_string
+    }
+    pub const fn http_remove_paths_with_digits(&self) -> bool {
+        self.http_remove_paths_with_digits
+    }
+    pub const fn memcached_enabled(&self) -> bool {
+        self.memcached_enabled
+    }
+    pub const fn memcached_keep_command(&self) -> bool {
+        self.memcached_keep_command
+    }
+    pub const fn redis_enabled(&self) -> bool {
+        self.redis_enabled
+    }
+    pub const fn redis_remove_all_args(&self) -> bool {
+        self.redis_remove_all_args
+    }
+    pub const fn valkey_enabled(&self) -> bool {
+        self.valkey_enabled
+    }
+    pub const fn valkey_remove_all_args(&self) -> bool {
+        self.valkey_remove_all_args
+    }
+    pub fn sql_dbms(&self) -> &str {
+        &self.sql_dbms
+    }
+    pub const fn sql_table_names(&self) -> bool {
+        self.sql_table_names
+    }
+    pub const fn sql_replace_digits(&self) -> bool {
+        self.sql_replace_digits
+    }
+    pub const fn sql_keep_sql_alias(&self) -> bool {
+        self.sql_keep_sql_alias
+    }
+    pub const fn sql_dollar_quoted_func(&self) -> bool {
+        self.sql_dollar_quoted_func
+    }
+    pub const fn mongodb_enabled(&self) -> bool {
+        self.mongodb_enabled
+    }
+    pub fn mongodb_keep_values(&self) -> &[String] {
+        &self.mongodb_keep_values
+    }
+    pub fn mongodb_obfuscate_sql_values(&self) -> &[String] {
+        &self.mongodb_obfuscate_sql_values
+    }
+    pub const fn elasticsearch_enabled(&self) -> bool {
+        self.elasticsearch_enabled
+    }
+    pub fn elasticsearch_keep_values(&self) -> &[String] {
+        &self.elasticsearch_keep_values
+    }
+    pub fn elasticsearch_obfuscate_sql_values(&self) -> &[String] {
+        &self.elasticsearch_obfuscate_sql_values
+    }
+    pub const fn opensearch_enabled(&self) -> bool {
+        self.opensearch_enabled
+    }
+    pub fn opensearch_keep_values(&self) -> &[String] {
+        &self.opensearch_keep_values
+    }
+    pub fn opensearch_obfuscate_sql_values(&self) -> &[String] {
+        &self.opensearch_obfuscate_sql_values
+    }
+}
+
+/// Native DogStatsD origin tag cardinality.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum DogStatsDOriginTagCardinality {
+    /// No origin tags.
+    None,
+    /// Low-cardinality origin tags.
+    #[default]
+    Low,
+    /// Orchestrator-cardinality origin tags.
+    Orchestrator,
+    /// High-cardinality origin tags.
+    High,
+}
+
+/// Native DogStatsD payload enablement settings.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DogStatsDEnablePayloadsConfiguration {
+    series: bool,
+    sketches: bool,
+    events: bool,
+    service_checks: bool,
+}
+
+impl DogStatsDEnablePayloadsConfiguration {
+    /// Creates DogStatsD payload enablement settings.
+    pub const fn new(series: bool, sketches: bool, events: bool, service_checks: bool) -> Self {
+        Self {
+            series,
+            sketches,
+            events,
+            service_checks,
+        }
+    }
+
+    pub const fn series(&self) -> bool {
+        self.series
+    }
+    pub const fn sketches(&self) -> bool {
+        self.sketches
+    }
+    pub const fn events(&self) -> bool {
+        self.events
+    }
+    pub const fn service_checks(&self) -> bool {
+        self.service_checks
+    }
+}
+
+impl Default for DogStatsDEnablePayloadsConfiguration {
+    fn default() -> Self {
+        Self {
+            series: true,
+            sketches: true,
+            events: true,
+            service_checks: true,
+        }
+    }
+}
+
+/// Native DogStatsD origin enrichment settings.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DogStatsDOriginEnrichmentConfiguration {
+    enabled: bool,
+    entity_id_precedence: bool,
+    tag_cardinality: DogStatsDOriginTagCardinality,
+    origin_detection_unified: bool,
+    origin_detection_optout: bool,
+    origin_detection_client: bool,
+}
+
+impl DogStatsDOriginEnrichmentConfiguration {
+    /// Creates DogStatsD origin enrichment settings.
+    pub const fn new(
+        enabled: bool, entity_id_precedence: bool, tag_cardinality: DogStatsDOriginTagCardinality,
+        origin_detection_unified: bool, origin_detection_optout: bool, origin_detection_client: bool,
+    ) -> Self {
+        Self {
+            enabled,
+            entity_id_precedence,
+            tag_cardinality,
+            origin_detection_unified,
+            origin_detection_optout,
+            origin_detection_client,
+        }
+    }
+
+    pub const fn enabled(&self) -> bool {
+        self.enabled
+    }
+    pub const fn entity_id_precedence(&self) -> bool {
+        self.entity_id_precedence
+    }
+    pub const fn tag_cardinality(&self) -> DogStatsDOriginTagCardinality {
+        self.tag_cardinality
+    }
+    pub const fn origin_detection_unified(&self) -> bool {
+        self.origin_detection_unified
+    }
+    pub const fn origin_detection_optout(&self) -> bool {
+        self.origin_detection_optout
+    }
+    pub const fn origin_detection_client(&self) -> bool {
+        self.origin_detection_client
+    }
+}
+
+impl Default for DogStatsDOriginEnrichmentConfiguration {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            entity_id_precedence: false,
+            tag_cardinality: DogStatsDOriginTagCardinality::Low,
+            origin_detection_unified: false,
+            origin_detection_optout: true,
+            origin_detection_client: false,
+        }
+    }
+}
+
+/// Native DogStatsD source settings.
+#[derive(Clone, Debug)]
+pub struct DogStatsDSourceConfiguration {
+    buffer_size: usize,
+    buffer_count: usize,
+    port: u16,
+    socket_receive_buffer_size: usize,
+    tcp_port: u16,
+    statsd_forward_host: Option<String>,
+    statsd_forward_port: u16,
+    socket_path: Option<String>,
+    socket_stream_path: Option<String>,
+    stream_log_too_big: bool,
+    eol_required: Vec<String>,
+    bind_host: Option<String>,
+    non_local_traffic: bool,
+    autoscale_udp_listeners: bool,
+    allow_context_heap_allocations: bool,
+    no_aggregation_pipeline_support: bool,
+    context_string_interner_entry_count: u64,
+    context_string_interner_size_bytes: Option<u64>,
+    cached_contexts_limit: usize,
+    cached_tagsets_limit: usize,
+    context_expiry_seconds: u64,
+    permissive_decoding: bool,
+    minimum_sample_rate: f64,
+    enable_payloads: DogStatsDEnablePayloadsConfiguration,
+    origin_enrichment: DogStatsDOriginEnrichmentConfiguration,
+    additional_tags: Vec<String>,
+    capture_path: PathBuf,
+    capture_depth: usize,
+    provider_kind: String,
+}
+
+impl DogStatsDSourceConfiguration {
+    /// Creates native DogStatsD source settings.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        buffer_size: usize, buffer_count: usize, port: u16, socket_receive_buffer_size: usize, tcp_port: u16,
+        statsd_forward_host: Option<String>, statsd_forward_port: u16, socket_path: Option<String>,
+        socket_stream_path: Option<String>, stream_log_too_big: bool, eol_required: Vec<String>,
+        bind_host: Option<String>, non_local_traffic: bool, autoscale_udp_listeners: bool,
+        allow_context_heap_allocations: bool, no_aggregation_pipeline_support: bool,
+        context_string_interner_entry_count: u64, context_string_interner_size_bytes: Option<u64>,
+        cached_contexts_limit: usize, cached_tagsets_limit: usize, context_expiry_seconds: u64,
+        permissive_decoding: bool, minimum_sample_rate: f64, enable_payloads: DogStatsDEnablePayloadsConfiguration,
+        origin_enrichment: DogStatsDOriginEnrichmentConfiguration, additional_tags: Vec<String>, capture_path: PathBuf,
+        capture_depth: usize, provider_kind: String,
+    ) -> Self {
+        Self {
+            buffer_size,
+            buffer_count,
+            port,
+            socket_receive_buffer_size,
+            tcp_port,
+            statsd_forward_host,
+            statsd_forward_port,
+            socket_path,
+            socket_stream_path,
+            stream_log_too_big,
+            eol_required,
+            bind_host,
+            non_local_traffic,
+            autoscale_udp_listeners,
+            allow_context_heap_allocations,
+            no_aggregation_pipeline_support,
+            context_string_interner_entry_count,
+            context_string_interner_size_bytes,
+            cached_contexts_limit,
+            cached_tagsets_limit,
+            context_expiry_seconds,
+            permissive_decoding,
+            minimum_sample_rate,
+            enable_payloads,
+            origin_enrichment,
+            additional_tags,
+            capture_path,
+            capture_depth,
+            provider_kind,
+        }
+    }
+
+    pub const fn buffer_size(&self) -> usize {
+        self.buffer_size
+    }
+    pub const fn buffer_count(&self) -> usize {
+        self.buffer_count
+    }
+    pub const fn port(&self) -> u16 {
+        self.port
+    }
+    pub const fn socket_receive_buffer_size(&self) -> usize {
+        self.socket_receive_buffer_size
+    }
+    pub const fn tcp_port(&self) -> u16 {
+        self.tcp_port
+    }
+    pub fn statsd_forward_host(&self) -> Option<&str> {
+        self.statsd_forward_host.as_deref()
+    }
+    pub const fn statsd_forward_port(&self) -> u16 {
+        self.statsd_forward_port
+    }
+    pub fn socket_path(&self) -> Option<&str> {
+        self.socket_path.as_deref()
+    }
+    pub fn socket_stream_path(&self) -> Option<&str> {
+        self.socket_stream_path.as_deref()
+    }
+    pub const fn stream_log_too_big(&self) -> bool {
+        self.stream_log_too_big
+    }
+    pub fn eol_required(&self) -> &[String] {
+        &self.eol_required
+    }
+    pub fn bind_host(&self) -> Option<&str> {
+        self.bind_host.as_deref()
+    }
+    pub const fn non_local_traffic(&self) -> bool {
+        self.non_local_traffic
+    }
+    pub const fn autoscale_udp_listeners(&self) -> bool {
+        self.autoscale_udp_listeners
+    }
+    pub const fn allow_context_heap_allocations(&self) -> bool {
+        self.allow_context_heap_allocations
+    }
+    pub const fn no_aggregation_pipeline_support(&self) -> bool {
+        self.no_aggregation_pipeline_support
+    }
+    pub const fn context_string_interner_entry_count(&self) -> u64 {
+        self.context_string_interner_entry_count
+    }
+    pub const fn context_string_interner_size_bytes(&self) -> Option<u64> {
+        self.context_string_interner_size_bytes
+    }
+    pub const fn cached_contexts_limit(&self) -> usize {
+        self.cached_contexts_limit
+    }
+    pub const fn cached_tagsets_limit(&self) -> usize {
+        self.cached_tagsets_limit
+    }
+    pub const fn context_expiry_seconds(&self) -> u64 {
+        self.context_expiry_seconds
+    }
+    pub const fn permissive_decoding(&self) -> bool {
+        self.permissive_decoding
+    }
+    pub const fn minimum_sample_rate(&self) -> f64 {
+        self.minimum_sample_rate
+    }
+    pub const fn enable_payloads(&self) -> DogStatsDEnablePayloadsConfiguration {
+        self.enable_payloads
+    }
+    pub const fn origin_enrichment(&self) -> &DogStatsDOriginEnrichmentConfiguration {
+        &self.origin_enrichment
+    }
+    pub fn additional_tags(&self) -> &[String] {
+        &self.additional_tags
+    }
+    pub fn capture_path(&self) -> &PathBuf {
+        &self.capture_path
+    }
+    pub const fn capture_depth(&self) -> usize {
+        self.capture_depth
+    }
+    pub fn provider_kind(&self) -> &str {
+        &self.provider_kind
     }
 }
 

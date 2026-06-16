@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use http::Uri;
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder, UsageExpr};
 use saluki_common::buf::FrozenChunkedBytesBuffer;
+use saluki_component_config::DatadogForwarderConfiguration as NativeDatadogForwarderConfiguration;
 use saluki_config::GenericConfiguration;
 use saluki_core::{
     components::{forwarders::*, ComponentContext},
@@ -38,6 +39,15 @@ pub struct DatadogForwarderConfiguration {
 }
 
 impl DatadogForwarderConfiguration {
+    /// Creates a new `DatadogForwarderConfiguration` from native component configuration.
+    pub fn from_native(config: &NativeDatadogForwarderConfiguration) -> Self {
+        let forwarder_config = ForwarderConfiguration::from_native(config);
+        Self {
+            forwarder_config,
+            configuration: None,
+        }
+    }
+
     /// Creates a new `DatadogForwarderConfiguration` from the given configuration.
     pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
         let forwarder_config = ForwarderConfiguration::from_configuration(config)?;

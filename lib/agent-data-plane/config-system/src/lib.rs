@@ -19,11 +19,19 @@ pub mod datadog_agent;
 pub mod logging;
 pub mod stream;
 pub mod system;
-pub mod topology;
 
 pub use bootstrap::BootstrapInputs;
 pub use datadog_agent::DatadogAgentConnection;
 pub use logging::{DynamicLogLevelWorker, LoggingConfigurationTranslator};
 pub use stream::ConfigStreamHandle;
 pub use system::{ConfigurationSystem, LocalDatadogSources, StartedAttachments, StartedConfigurationSystem};
-pub use topology::RuntimeComponentConfiguration;
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn cargo_toml_does_not_depend_on_runtime_components() {
+        let manifest = include_str!("../Cargo.toml");
+
+        assert!(!manifest.contains("saluki-components"));
+    }
+}

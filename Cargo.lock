@@ -93,7 +93,6 @@ dependencies = [
  "prost-types",
  "saluki-app",
  "saluki-common",
- "saluki-components",
  "saluki-config",
  "saluki-core",
  "saluki-error",

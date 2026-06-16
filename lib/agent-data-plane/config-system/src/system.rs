@@ -12,15 +12,19 @@ use agent_data_plane_config::{
     AggregateConfiguration, ApmStatsTransformConfiguration, BootstrapConfiguration, BootstrapStartupConfiguration,
     BootstrapTelemetryConfiguration, ChecksIpcConfiguration, ConfigStreamAuthority, ControlPlaneConfiguration,
     DataPlaneConfiguration, DatadogApmStatsEncoderConfiguration, DatadogEventsEncoderConfiguration,
-    DatadogLogsEncoderConfiguration, DatadogMetricsEncoderConfiguration, DatadogServiceChecksEncoderConfiguration,
+    DatadogForwarderConfiguration, DatadogForwarderEndpointConfiguration, DatadogForwarderHttpProtocol,
+    DatadogForwarderRetryConfiguration, DatadogLogsEncoderConfiguration, DatadogMetricsEncoderConfiguration,
+    DatadogOpwMetricsConfiguration, DatadogProxyConfiguration, DatadogServiceChecksEncoderConfiguration,
     DatadogTraceEncoderConfiguration, DogStatsDCliConfiguration, DogStatsDDebugLogConfiguration,
-    DogStatsDMapperConfiguration, DogStatsDMapperProfileConfiguration, DogStatsDMetricMappingConfiguration,
-    DogStatsDPostAggregateFilterConfiguration, DogStatsDPrefixFilterConfiguration, DynamicValue,
-    EnvironmentConfiguration, MetricTagFilterAction, MetricTagFilterEntry, MultiRegionFailoverConfiguration,
-    OtlpForwarderConfiguration, OtlpPipelineConfiguration, OtlpProxyConfiguration, OtlpReceiverConfiguration,
-    OtlpSourceConfiguration, OtlpTracesConfiguration, OttlErrorMode, OttlFilterConfiguration,
-    OttlTransformConfiguration, PipelineConfiguration, RuntimeConfigAuthority, RuntimeConfigLanguage,
-    SalukiConfiguration, TagFilterlistConfiguration, TraceSamplerConfiguration,
+    DogStatsDEnablePayloadsConfiguration, DogStatsDMapperConfiguration, DogStatsDMapperProfileConfiguration,
+    DogStatsDMetricMappingConfiguration, DogStatsDOriginEnrichmentConfiguration, DogStatsDOriginTagCardinality,
+    DogStatsDPostAggregateFilterConfiguration, DogStatsDPrefixFilterConfiguration, DogStatsDSourceConfiguration,
+    DynamicValue, EnvironmentConfiguration, MetricTagFilterAction, MetricTagFilterEntry,
+    MultiRegionFailoverConfiguration, OtlpForwarderConfiguration, OtlpPipelineConfiguration, OtlpProxyConfiguration,
+    OtlpReceiverConfiguration, OtlpSourceConfiguration, OtlpTracesConfiguration, OttlErrorMode,
+    OttlFilterConfiguration, OttlTransformConfiguration, PipelineConfiguration, RuntimeConfigAuthority,
+    RuntimeConfigLanguage, SalukiConfiguration, TagFilterlistConfiguration, TraceObfuscationConfiguration,
+    TraceSamplerConfiguration,
 };
 use bytesize::ByteSize;
 use datadog_agent_commons::{
@@ -51,7 +55,6 @@ use crate::{
     datadog_agent::{remote_agent_service_names, DatadogAgentConnection},
     logging::{DynamicLogLevelWorker, LoggingConfigurationTranslator},
     stream::ConfigStreamHandle,
-    topology::RuntimeComponentConfiguration,
 };
 
 /// Coordinates bootstrap loading, authority resolution, and translation.
@@ -984,6 +987,750 @@ struct SourceApmConfiguration {
     error_tracking_standalone_enabled: bool,
 }
 
+#[serde_as]
+#[derive(Clone, Debug, Default, Deserialize)]
+struct SourceForwarderApiKeys(#[serde_as(as = "serde_with::OneOrMany<_>")] Vec<String>);
+
+#[derive(Clone, Debug, Default, Deserialize)]
+struct SourceForwarderAdditionalEndpoints(HashMap<String, SourceForwarderApiKeys>);
+
+impl SourceForwarderAdditionalEndpoints {
+    fn into_native(self) -> HashMap<String, Vec<String>> {
+        self.0.into_iter().map(|(url, keys)| (url, keys.0)).collect()
+    }
+}
+
+impl FromStr for SourceForwarderAdditionalEndpoints {
+    type Err = serde_json::Error;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        serde_json::from_str(value)
+    }
+}
+
+const fn default_endpoint_concurrency() -> usize {
+    10
+}
+
+const fn default_endpoint_concurrency_multiplier() -> usize {
+    1
+}
+
+const fn default_request_timeout_secs() -> u64 {
+    20
+}
+
+const fn default_endpoint_buffer_size() -> usize {
+    100
+}
+
+const fn default_forwarder_connection_reset_interval() -> u64 {
+    0
+}
+
+const fn default_api_key_validation_interval_mins() -> i64 {
+    60
+}
+
+fn default_site() -> String {
+    "datadoghq.com".to_string()
+}
+
+fn default_min_tls_version() -> String {
+    "tlsv1.2".to_string()
+}
+
+const fn default_request_backoff_factor() -> f64 {
+    2.0
+}
+
+const fn default_request_backoff_base() -> f64 {
+    2.0
+}
+
+const fn default_request_backoff_max() -> f64 {
+    64.0
+}
+
+const fn default_request_recovery_error_decrease_factor() -> u32 {
+    2
+}
+
+const fn default_storage_max_disk_ratio() -> f64 {
+    0.8
+}
+
+const fn default_outdated_file_in_days() -> u32 {
+    10
+}
+
+const fn default_retry_queue_capacity_time_interval_secs() -> u64 {
+    15 * 60
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum SourceForwarderHttpProtocol {
+    #[default]
+    Auto,
+    Http1,
+}
+
+impl From<SourceForwarderHttpProtocol> for DatadogForwarderHttpProtocol {
+    fn from(value: SourceForwarderHttpProtocol) -> Self {
+        match value {
+            SourceForwarderHttpProtocol::Auto => Self::Auto,
+            SourceForwarderHttpProtocol::Http1 => Self::Http1,
+        }
+    }
+}
+
+#[serde_as]
+#[derive(Clone, Debug, Default, Deserialize)]
+struct SourceForwarderEndpointConfiguration {
+    #[serde(default)]
+    api_key: String,
+    #[serde(default = "default_site")]
+    site: String,
+    #[serde(default, alias = "url")]
+    dd_url: Option<String>,
+    #[serde_as(as = "PickFirst<(DisplayFromStr, _)>")]
+    #[serde(default)]
+    additional_endpoints: SourceForwarderAdditionalEndpoints,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+struct SourceForwarderOpwMetricsConfiguration {
+    #[serde(default, rename = "observability_pipelines_worker_metrics_enabled")]
+    observability_pipelines_worker_enabled: bool,
+    #[serde(default, rename = "observability_pipelines_worker_metrics_url")]
+    observability_pipelines_worker_url: String,
+    #[serde(default, rename = "vector_metrics_enabled")]
+    vector_enabled: bool,
+    #[serde(default, rename = "vector_metrics_url")]
+    vector_url: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct SourceForwarderRetryConfiguration {
+    #[serde(default = "default_request_backoff_factor", rename = "forwarder_backoff_factor")]
+    backoff_factor: f64,
+    #[serde(default = "default_request_backoff_base", rename = "forwarder_backoff_base")]
+    backoff_base: f64,
+    #[serde(default = "default_request_backoff_max", rename = "forwarder_backoff_max")]
+    backoff_max: f64,
+    #[serde(
+        default = "default_request_recovery_error_decrease_factor",
+        rename = "forwarder_recovery_interval"
+    )]
+    recovery_error_decrease_factor: u32,
+    #[serde(default, rename = "forwarder_recovery_reset")]
+    recovery_reset: bool,
+    #[serde(rename = "forwarder_retry_queue_payloads_max_size")]
+    retry_queue_payloads_max_size: Option<u64>,
+    #[serde(rename = "forwarder_retry_queue_max_size")]
+    retry_queue_max_size: Option<u64>,
+    #[serde(default, rename = "forwarder_storage_max_size_in_bytes")]
+    storage_max_size_bytes: u64,
+    #[serde(default, rename = "forwarder_storage_path")]
+    storage_path: PathBuf,
+    #[serde(
+        default = "default_storage_max_disk_ratio",
+        rename = "forwarder_storage_max_disk_ratio"
+    )]
+    storage_max_disk_ratio: f64,
+    #[serde(
+        default = "default_outdated_file_in_days",
+        rename = "forwarder_outdated_file_in_days"
+    )]
+    outdated_file_in_days: u32,
+    #[serde(
+        default = "default_retry_queue_capacity_time_interval_secs",
+        rename = "forwarder_retry_queue_capacity_time_interval_sec"
+    )]
+    capacity_time_interval_secs: u64,
+}
+
+impl Default for SourceForwarderRetryConfiguration {
+    fn default() -> Self {
+        Self {
+            backoff_factor: default_request_backoff_factor(),
+            backoff_base: default_request_backoff_base(),
+            backoff_max: default_request_backoff_max(),
+            recovery_error_decrease_factor: default_request_recovery_error_decrease_factor(),
+            recovery_reset: false,
+            retry_queue_payloads_max_size: None,
+            retry_queue_max_size: None,
+            storage_max_size_bytes: 0,
+            storage_path: PathBuf::new(),
+            storage_max_disk_ratio: default_storage_max_disk_ratio(),
+            outdated_file_in_days: default_outdated_file_in_days(),
+            capacity_time_interval_secs: default_retry_queue_capacity_time_interval_secs(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct SourceForwarderProxyConfiguration {
+    #[serde(rename = "proxy_http")]
+    http_server: Option<String>,
+    #[serde(rename = "proxy_https")]
+    https_server: Option<String>,
+    #[serde(
+        default,
+        rename = "proxy_no_proxy",
+        deserialize_with = "saluki_config::deserialize_space_separated_or_seq"
+    )]
+    no_proxy: Vec<String>,
+    #[serde(default)]
+    no_proxy_nonexact_match: bool,
+    #[serde(default)]
+    use_proxy_for_cloud_metadata: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct SourceForwarderConfiguration {
+    #[serde(
+        default = "default_endpoint_concurrency",
+        rename = "forwarder_max_concurrent_requests"
+    )]
+    endpoint_concurrency: usize,
+    #[serde(
+        default = "default_endpoint_concurrency_multiplier",
+        rename = "forwarder_num_workers"
+    )]
+    endpoint_concurrency_multiplier: usize,
+    #[serde(default = "default_request_timeout_secs", rename = "forwarder_timeout")]
+    request_timeout_secs: u64,
+    #[serde(default = "default_endpoint_buffer_size", rename = "forwarder_high_prio_buffer_size")]
+    endpoint_buffer_size: usize,
+    #[serde(flatten, default)]
+    endpoint: SourceForwarderEndpointConfiguration,
+    #[serde(flatten, default)]
+    retry: SourceForwarderRetryConfiguration,
+    #[serde(flatten)]
+    proxy: Option<SourceForwarderProxyConfiguration>,
+    #[serde(flatten, default)]
+    opw_metrics: SourceForwarderOpwMetricsConfiguration,
+    #[serde(default, rename = "forwarder_http_protocol")]
+    http_protocol: SourceForwarderHttpProtocol,
+    #[serde(
+        default = "default_forwarder_connection_reset_interval",
+        rename = "forwarder_connection_reset_interval"
+    )]
+    connection_reset_interval_secs: u64,
+    #[serde(default)]
+    skip_ssl_validation: bool,
+    #[serde(default)]
+    sslkeylogfile: String,
+    #[serde(default = "default_min_tls_version")]
+    min_tls_version: String,
+    #[serde(default)]
+    allow_arbitrary_tags: bool,
+    #[serde(
+        default = "default_api_key_validation_interval_mins",
+        rename = "forwarder_apikey_validation_interval"
+    )]
+    api_key_validation_interval_mins: i64,
+}
+
+fn retry_queue_payloads_max_size(source: &SourceForwarderRetryConfiguration) -> u64 {
+    source
+        .retry_queue_payloads_max_size
+        .or(source.retry_queue_max_size)
+        .unwrap_or(15 * 1024 * 1024)
+}
+
+fn fix_forwarder_storage_path(config: &GenericConfiguration, storage_path: PathBuf) -> Result<PathBuf, GenericError> {
+    if storage_path.parent().is_some() {
+        return Ok(storage_path);
+    }
+
+    let Some(mut run_path) = config
+        .try_get_typed::<PathBuf>("run_path")
+        .error_context("Failed to read `run_path` for default forwarder storage path.")?
+    else {
+        return Ok(storage_path);
+    };
+    run_path.push("transactions_to_retry");
+    Ok(run_path)
+}
+
+fn translate_datadog_forwarder_configuration(
+    config: &GenericConfiguration,
+) -> Result<DatadogForwarderConfiguration, GenericError> {
+    let source = config
+        .as_typed::<SourceForwarderConfiguration>()
+        .error_context("Failed to parse Datadog forwarder configuration.")?;
+    let additional_endpoints = source.endpoint.additional_endpoints.into_native();
+    let secrets_in_use = secrets_in_use(config)?;
+
+    let api_key_validation_interval_mins = if source.api_key_validation_interval_mins <= 0 {
+        warn!(
+            config_key = "forwarder_apikey_validation_interval",
+            fallback_minutes = default_api_key_validation_interval_mins(),
+            "Configured API key validation interval is invalid; using default."
+        );
+        default_api_key_validation_interval_mins() as u64
+    } else {
+        source.api_key_validation_interval_mins as u64
+    };
+
+    Ok(DatadogForwarderConfiguration::new(
+        source.endpoint_concurrency,
+        source.endpoint_concurrency_multiplier,
+        source.request_timeout_secs,
+        source.endpoint_buffer_size,
+        DatadogForwarderEndpointConfiguration::new(
+            dynamic_value_from_key(config, "api_key", source.endpoint.api_key),
+            source.endpoint.site,
+            source.endpoint.dd_url,
+            dynamic_value_from_key_mapped::<SourceForwarderAdditionalEndpoints, HashMap<String, Vec<String>>, _>(
+                config,
+                "additional_endpoints",
+                additional_endpoints,
+                SourceForwarderAdditionalEndpoints::into_native,
+            ),
+        ),
+        DatadogForwarderRetryConfiguration::new(
+            source.retry.backoff_factor,
+            source.retry.backoff_base,
+            source.retry.backoff_max,
+            source.retry.recovery_error_decrease_factor,
+            source.retry.recovery_reset,
+            retry_queue_payloads_max_size(&source.retry),
+            source.retry.storage_max_size_bytes,
+            fix_forwarder_storage_path(config, source.retry.storage_path)?,
+            source.retry.storage_max_disk_ratio,
+            source.retry.outdated_file_in_days,
+            source.retry.capacity_time_interval_secs,
+            DynamicValue::fixed(secrets_in_use),
+        ),
+        source.proxy.map(|proxy| {
+            DatadogProxyConfiguration::new(
+                proxy.http_server,
+                proxy.https_server,
+                proxy.no_proxy,
+                proxy.no_proxy_nonexact_match,
+                proxy.use_proxy_for_cloud_metadata,
+            )
+        }),
+        DatadogOpwMetricsConfiguration::new(
+            source.opw_metrics.observability_pipelines_worker_enabled,
+            source.opw_metrics.observability_pipelines_worker_url,
+            source.opw_metrics.vector_enabled,
+            source.opw_metrics.vector_url,
+        ),
+        source.http_protocol.into(),
+        source.connection_reset_interval_secs,
+        source.skip_ssl_validation,
+        Some(source.sslkeylogfile.trim().to_string()).filter(|path| !path.is_empty()),
+        source.min_tls_version,
+        source.allow_arbitrary_tags,
+        api_key_validation_interval_mins,
+    ))
+}
+
+fn secrets_in_use(config: &GenericConfiguration) -> Result<bool, GenericError> {
+    let refresh_interval = config
+        .try_get_typed::<u64>("secret_refresh_on_api_key_failure_interval")
+        .error_context("Failed to read `secret_refresh_on_api_key_failure_interval`.")?
+        .unwrap_or_default();
+    let backend_command = config
+        .try_get_typed::<String>("secret_backend_command")
+        .error_context("Failed to read `secret_backend_command`.")?
+        .unwrap_or_default();
+    Ok(refresh_interval > 0 || !backend_command.trim().is_empty())
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+struct SourceTraceObfuscationConfiguration {
+    #[serde(default, rename = "apm_obfuscation_credit_cards_enabled")]
+    credit_cards_enabled: bool,
+    #[serde(default, rename = "apm_obfuscation_credit_cards_luhn")]
+    credit_cards_luhn: bool,
+    #[serde(
+        default,
+        deserialize_with = "saluki_config::deserialize_space_separated_or_seq",
+        rename = "apm_obfuscation_credit_cards_keep_values"
+    )]
+    credit_cards_keep_values: Vec<String>,
+    #[serde(default, rename = "apm_obfuscation_http_remove_query_string")]
+    http_remove_query_string: bool,
+    #[serde(default, rename = "apm_obfuscation_http_remove_paths_with_digits")]
+    http_remove_paths_with_digits: bool,
+    #[serde(default, rename = "apm_obfuscation_memcached_enabled")]
+    memcached_enabled: bool,
+    #[serde(default, rename = "apm_obfuscation_memcached_keep_command")]
+    memcached_keep_command: bool,
+    #[serde(default, rename = "apm_obfuscation_redis_enabled")]
+    redis_enabled: bool,
+    #[serde(default, rename = "apm_obfuscation_redis_remove_all_args")]
+    redis_remove_all_args: bool,
+    #[serde(default, rename = "apm_obfuscation_valkey_enabled")]
+    valkey_enabled: bool,
+    #[serde(default, rename = "apm_obfuscation_valkey_remove_all_args")]
+    valkey_remove_all_args: bool,
+    #[serde(default, rename = "apm_obfuscation_sql_dbms")]
+    sql_dbms: String,
+    #[serde(default, rename = "apm_obfuscation_sql_table_names")]
+    sql_table_names: bool,
+    #[serde(default, rename = "apm_obfuscation_sql_replace_digits")]
+    sql_replace_digits: bool,
+    #[serde(default, rename = "apm_obfuscation_sql_keep_sql_alias")]
+    sql_keep_sql_alias: bool,
+    #[serde(default, rename = "apm_obfuscation_sql_dollar_quoted_func")]
+    sql_dollar_quoted_func: bool,
+    #[serde(default, rename = "apm_obfuscation_mongodb_enabled")]
+    mongodb_enabled: bool,
+    #[serde(
+        default,
+        deserialize_with = "saluki_config::deserialize_space_separated_or_seq",
+        rename = "apm_obfuscation_mongodb_keep_values"
+    )]
+    mongodb_keep_values: Vec<String>,
+    #[serde(
+        default,
+        deserialize_with = "saluki_config::deserialize_space_separated_or_seq",
+        rename = "apm_obfuscation_mongodb_obfuscate_sql_values"
+    )]
+    mongodb_obfuscate_sql_values: Vec<String>,
+    #[serde(default, rename = "apm_obfuscation_elasticsearch_enabled")]
+    elasticsearch_enabled: bool,
+    #[serde(
+        default,
+        deserialize_with = "saluki_config::deserialize_space_separated_or_seq",
+        rename = "apm_obfuscation_elasticsearch_keep_values"
+    )]
+    elasticsearch_keep_values: Vec<String>,
+    #[serde(
+        default,
+        deserialize_with = "saluki_config::deserialize_space_separated_or_seq",
+        rename = "apm_obfuscation_elasticsearch_obfuscate_sql_values"
+    )]
+    elasticsearch_obfuscate_sql_values: Vec<String>,
+    #[serde(default, rename = "apm_obfuscation_opensearch_enabled")]
+    opensearch_enabled: bool,
+    #[serde(
+        default,
+        deserialize_with = "saluki_config::deserialize_space_separated_or_seq",
+        rename = "apm_obfuscation_opensearch_keep_values"
+    )]
+    opensearch_keep_values: Vec<String>,
+    #[serde(
+        default,
+        deserialize_with = "saluki_config::deserialize_space_separated_or_seq",
+        rename = "apm_obfuscation_opensearch_obfuscate_sql_values"
+    )]
+    opensearch_obfuscate_sql_values: Vec<String>,
+}
+
+fn translate_trace_obfuscation_configuration(
+    config: &GenericConfiguration,
+) -> Result<TraceObfuscationConfiguration, GenericError> {
+    let source = config
+        .as_typed::<SourceTraceObfuscationConfiguration>()
+        .error_context("Failed to parse trace obfuscation configuration.")?;
+    Ok(TraceObfuscationConfiguration::new(
+        source.credit_cards_enabled,
+        source.credit_cards_luhn,
+        source.credit_cards_keep_values,
+        source.http_remove_query_string,
+        source.http_remove_paths_with_digits,
+        source.memcached_enabled,
+        source.memcached_keep_command,
+        source.redis_enabled,
+        source.redis_remove_all_args,
+        source.valkey_enabled,
+        source.valkey_remove_all_args,
+        source.sql_dbms,
+        source.sql_table_names,
+        source.sql_replace_digits,
+        source.sql_keep_sql_alias,
+        source.sql_dollar_quoted_func,
+        source.mongodb_enabled,
+        source.mongodb_keep_values,
+        source.mongodb_obfuscate_sql_values,
+        source.elasticsearch_enabled,
+        source.elasticsearch_keep_values,
+        source.elasticsearch_obfuscate_sql_values,
+        source.opensearch_enabled,
+        source.opensearch_keep_values,
+        source.opensearch_obfuscate_sql_values,
+    ))
+}
+
+const fn default_dsd_buffer_size() -> usize {
+    8192
+}
+const fn default_dsd_buffer_count() -> usize {
+    128
+}
+const fn default_dsd_port() -> u16 {
+    8125
+}
+const fn default_dsd_socket_receive_buffer_size() -> usize {
+    0
+}
+const fn default_dsd_tcp_port() -> u16 {
+    0
+}
+const fn default_statsd_forward_port() -> u16 {
+    0
+}
+const fn default_allow_context_heap_allocations() -> bool {
+    true
+}
+const fn default_no_aggregation_pipeline_support() -> bool {
+    true
+}
+const fn default_context_string_interner_entry_count() -> u64 {
+    4096
+}
+const fn default_cached_contexts_limit() -> usize {
+    500_000
+}
+const fn default_cached_tagsets_limit() -> usize {
+    500_000
+}
+const fn default_context_expiry_seconds() -> u64 {
+    20
+}
+const fn default_dsd_permissive_decoding() -> bool {
+    true
+}
+const fn default_dsd_minimum_sample_rate() -> f64 {
+    0.000000003845
+}
+const fn default_dsd_capture_depth() -> usize {
+    1024
+}
+fn default_dsd_tag_cardinality() -> String {
+    "low".to_string()
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct SourceDogStatsDEnablePayloadsConfiguration {
+    #[serde(default = "default_true")]
+    series: bool,
+    #[serde(default = "default_true")]
+    sketches: bool,
+    #[serde(default = "default_true")]
+    events: bool,
+    #[serde(default = "default_true")]
+    service_checks: bool,
+}
+
+impl Default for SourceDogStatsDEnablePayloadsConfiguration {
+    fn default() -> Self {
+        Self {
+            series: true,
+            sketches: true,
+            events: true,
+            service_checks: true,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct SourceDogStatsDOriginEnrichmentConfiguration {
+    #[serde(rename = "dogstatsd_origin_detection", default)]
+    enabled: bool,
+    #[serde(rename = "dogstatsd_entity_id_precedence", default)]
+    entity_id_precedence: bool,
+    #[serde(rename = "dogstatsd_tag_cardinality", default = "default_dsd_tag_cardinality")]
+    tag_cardinality: String,
+    #[serde(rename = "origin_detection_unified", default)]
+    origin_detection_unified: bool,
+    #[serde(rename = "dogstatsd_origin_optout_enabled", default = "default_true")]
+    origin_detection_optout: bool,
+    #[serde(rename = "dogstatsd_origin_detection_client", default)]
+    origin_detection_client: bool,
+}
+
+impl Default for SourceDogStatsDOriginEnrichmentConfiguration {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            entity_id_precedence: false,
+            tag_cardinality: default_dsd_tag_cardinality(),
+            origin_detection_unified: false,
+            origin_detection_optout: true,
+            origin_detection_client: false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct SourceDogStatsDSourceConfiguration {
+    #[serde(rename = "dogstatsd_buffer_size", default = "default_dsd_buffer_size")]
+    buffer_size: usize,
+    #[serde(rename = "dogstatsd_buffer_count", default = "default_dsd_buffer_count")]
+    buffer_count: usize,
+    #[serde(rename = "dogstatsd_port", default = "default_dsd_port")]
+    port: u16,
+    #[serde(rename = "dogstatsd_so_rcvbuf", default = "default_dsd_socket_receive_buffer_size")]
+    socket_receive_buffer_size: usize,
+    #[serde(rename = "dogstatsd_tcp_port", default = "default_dsd_tcp_port")]
+    tcp_port: u16,
+    #[serde(rename = "statsd_forward_host", default)]
+    statsd_forward_host: Option<String>,
+    #[serde(rename = "statsd_forward_port", default = "default_statsd_forward_port")]
+    statsd_forward_port: u16,
+    #[serde(rename = "dogstatsd_socket", default)]
+    socket_path: Option<String>,
+    #[serde(rename = "dogstatsd_stream_socket", default)]
+    socket_stream_path: Option<String>,
+    #[serde(rename = "dogstatsd_stream_log_too_big", default)]
+    stream_log_too_big: bool,
+    #[serde(
+        rename = "dogstatsd_eol_required",
+        default,
+        deserialize_with = "saluki_config::deserialize_space_separated_or_seq"
+    )]
+    eol_required: Vec<String>,
+    #[serde(rename = "bind_host", default)]
+    bind_host: Option<String>,
+    #[serde(rename = "dogstatsd_non_local_traffic", default)]
+    non_local_traffic: bool,
+    #[serde(rename = "dogstatsd_autoscale_udp_listeners", default)]
+    autoscale_udp_listeners: bool,
+    #[serde(
+        rename = "dogstatsd_allow_context_heap_allocs",
+        default = "default_allow_context_heap_allocations"
+    )]
+    allow_context_heap_allocations: bool,
+    #[serde(
+        rename = "dogstatsd_no_aggregation_pipeline",
+        default = "default_no_aggregation_pipeline_support"
+    )]
+    no_aggregation_pipeline_support: bool,
+    #[serde(
+        rename = "dogstatsd_string_interner_size",
+        default = "default_context_string_interner_entry_count"
+    )]
+    context_string_interner_entry_count: u64,
+    #[serde(rename = "dogstatsd_string_interner_size_bytes", default)]
+    context_string_interner_size_bytes: Option<ByteSize>,
+    #[serde(
+        rename = "dogstatsd_cached_contexts_limit",
+        default = "default_cached_contexts_limit"
+    )]
+    cached_contexts_limit: usize,
+    #[serde(rename = "dogstatsd_cached_tagsets_limit", default = "default_cached_tagsets_limit")]
+    cached_tagsets_limit: usize,
+    #[serde(
+        rename = "dogstatsd_context_expiry_seconds",
+        default = "default_context_expiry_seconds"
+    )]
+    context_expiry_seconds: u64,
+    #[serde(
+        rename = "dogstatsd_permissive_decoding",
+        default = "default_dsd_permissive_decoding"
+    )]
+    permissive_decoding: bool,
+    #[serde(
+        rename = "dogstatsd_minimum_sample_rate",
+        default = "default_dsd_minimum_sample_rate"
+    )]
+    minimum_sample_rate: f64,
+    #[serde(rename = "enable_payloads", default)]
+    enable_payloads: SourceDogStatsDEnablePayloadsConfiguration,
+    #[serde(flatten, default)]
+    origin_enrichment: SourceDogStatsDOriginEnrichmentConfiguration,
+    #[serde(rename = "dogstatsd_tags", default)]
+    additional_tags: Vec<String>,
+    #[serde(rename = "dogstatsd_capture_path", default)]
+    capture_path: PathBuf,
+    #[serde(rename = "dogstatsd_capture_depth", default = "default_dsd_capture_depth")]
+    capture_depth: usize,
+    #[serde(default)]
+    provider_kind: String,
+}
+
+fn clean_optional_string(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn translate_dsd_origin_tag_cardinality(value: &str) -> DogStatsDOriginTagCardinality {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "none" => DogStatsDOriginTagCardinality::None,
+        "orchestrator" => DogStatsDOriginTagCardinality::Orchestrator,
+        "high" => DogStatsDOriginTagCardinality::High,
+        _ => DogStatsDOriginTagCardinality::Low,
+    }
+}
+
+fn fix_dsd_capture_path(config: &GenericConfiguration, capture_path: PathBuf) -> Result<PathBuf, GenericError> {
+    if capture_path.parent().is_some() {
+        return Ok(capture_path);
+    }
+
+    let Some(mut run_path) = config
+        .try_get_typed::<PathBuf>("run_path")
+        .error_context("Failed to read `run_path` for default DogStatsD capture path.")?
+    else {
+        return Ok(capture_path);
+    };
+    run_path.push("dsd_capture");
+    Ok(run_path)
+}
+
+fn translate_dogstatsd_source_configuration(
+    config: &GenericConfiguration,
+) -> Result<DogStatsDSourceConfiguration, GenericError> {
+    let source = config
+        .as_typed::<SourceDogStatsDSourceConfiguration>()
+        .error_context("Failed to parse DogStatsD source configuration.")?;
+    let origin = source.origin_enrichment;
+
+    Ok(DogStatsDSourceConfiguration::new(
+        source.buffer_size,
+        source.buffer_count,
+        source.port,
+        source.socket_receive_buffer_size,
+        source.tcp_port,
+        clean_optional_string(source.statsd_forward_host),
+        source.statsd_forward_port,
+        clean_optional_string(source.socket_path),
+        clean_optional_string(source.socket_stream_path),
+        source.stream_log_too_big,
+        source.eol_required,
+        clean_optional_string(source.bind_host),
+        source.non_local_traffic,
+        source.autoscale_udp_listeners,
+        source.allow_context_heap_allocations,
+        source.no_aggregation_pipeline_support,
+        source.context_string_interner_entry_count,
+        source.context_string_interner_size_bytes.map(|value| value.as_u64()),
+        source.cached_contexts_limit,
+        source.cached_tagsets_limit,
+        source.context_expiry_seconds,
+        source.permissive_decoding,
+        source.minimum_sample_rate,
+        DogStatsDEnablePayloadsConfiguration::new(
+            source.enable_payloads.series,
+            source.enable_payloads.sketches,
+            source.enable_payloads.events,
+            source.enable_payloads.service_checks,
+        ),
+        DogStatsDOriginEnrichmentConfiguration::new(
+            origin.enabled,
+            origin.entity_id_precedence,
+            translate_dsd_origin_tag_cardinality(&origin.tag_cardinality),
+            origin.origin_detection_unified,
+            origin.origin_detection_optout,
+            origin.origin_detection_client,
+        ),
+        source.additional_tags,
+        fix_dsd_capture_path(config, source.capture_path)?,
+        source.capture_depth.max(1024),
+        source.provider_kind,
+    ))
+}
+
 fn normalize_sampling_rate(rate: f64) -> f64 {
     if rate <= 0.0 || rate >= 1.0 {
         1.0
@@ -1277,10 +2024,13 @@ fn translate_datadog_snapshot(config: &GenericConfiguration) -> Result<SalukiCon
         source.log_payloads,
     );
     let datadog_trace_encoder = translate_datadog_trace_encoder_configuration(config, &source)?;
+    let datadog_forwarder = translate_datadog_forwarder_configuration(config)?;
     let datadog_apm_stats_encoder = translate_datadog_apm_stats_encoder_configuration(config)?;
     let apm_stats_transform = translate_apm_stats_transform_configuration(config)?;
     let trace_sampler = translate_trace_sampler_configuration(config)?;
+    let trace_obfuscation = translate_trace_obfuscation_configuration(config)?;
     let multi_region_failover = translate_multi_region_failover_configuration(config)?;
+    let dogstatsd = translate_dogstatsd_source_configuration(config)?;
     let dogstatsd_prefix_filter = translate_dogstatsd_prefix_filter_configuration(config)?;
     let dogstatsd_mapper = translate_dogstatsd_mapper_configuration(config)?;
     let aggregate = translate_aggregate_configuration(config)?;
@@ -1317,10 +2067,13 @@ fn translate_datadog_snapshot(config: &GenericConfiguration) -> Result<SalukiCon
         datadog_events_encoder,
         datadog_service_checks_encoder,
         datadog_trace_encoder,
+        datadog_forwarder,
         datadog_apm_stats_encoder,
         apm_stats_transform,
         trace_sampler,
+        trace_obfuscation,
         multi_region_failover,
+        dogstatsd,
         dogstatsd_prefix_filter,
         dogstatsd_mapper,
         aggregate,
@@ -1514,11 +2267,6 @@ impl StartedConfigurationSystem {
     /// Returns the provider attachments created during startup.
     pub const fn attachments(&self) -> &StartedAttachments {
         &self.attachments
-    }
-
-    /// Returns runtime component configuration adapters for topology pieces not yet translated natively.
-    pub fn runtime_component_configuration(&self) -> RuntimeComponentConfiguration {
-        RuntimeComponentConfiguration::new(self.resolved_datadog_source.clone())
     }
 }
 

@@ -4,13 +4,13 @@ use std::{path::PathBuf, time::Duration};
 
 use saluki_component_config::{
     AggregateConfiguration, ApmStatsTransformConfiguration, ChecksIpcConfiguration,
-    DatadogApmStatsEncoderConfiguration, DatadogEventsEncoderConfiguration, DatadogLogsEncoderConfiguration,
-    DatadogMetricsEncoderConfiguration, DatadogServiceChecksEncoderConfiguration, DatadogTraceEncoderConfiguration,
-    DogStatsDDebugLogConfiguration, DogStatsDMapperConfiguration, DogStatsDPostAggregateFilterConfiguration,
-    DogStatsDPrefixFilterConfiguration, MultiRegionFailoverConfiguration, OtlpForwarderConfiguration,
-    OtlpPipelineConfiguration, OtlpReceiverConfiguration, OtlpSourceConfiguration, OtlpTracesConfiguration,
-    OttlFilterConfiguration, OttlTransformConfiguration, PipelineConfiguration, TagFilterlistConfiguration,
-    TraceSamplerConfiguration,
+    DatadogApmStatsEncoderConfiguration, DatadogEventsEncoderConfiguration, DatadogForwarderConfiguration,
+    DatadogLogsEncoderConfiguration, DatadogMetricsEncoderConfiguration, DatadogServiceChecksEncoderConfiguration,
+    DatadogTraceEncoderConfiguration, DogStatsDDebugLogConfiguration, DogStatsDMapperConfiguration,
+    DogStatsDPostAggregateFilterConfiguration, DogStatsDPrefixFilterConfiguration, DogStatsDSourceConfiguration,
+    MultiRegionFailoverConfiguration, OtlpForwarderConfiguration, OtlpPipelineConfiguration, OtlpReceiverConfiguration,
+    OtlpSourceConfiguration, OtlpTracesConfiguration, OttlFilterConfiguration, OttlTransformConfiguration,
+    PipelineConfiguration, TagFilterlistConfiguration, TraceObfuscationConfiguration, TraceSamplerConfiguration,
 };
 use saluki_io::net::ListenAddress;
 
@@ -47,6 +47,9 @@ pub struct SalukiConfiguration {
     /// Datadog trace encoder settings.
     pub datadog_trace_encoder: DatadogTraceEncoderConfiguration,
 
+    /// Datadog forwarder settings.
+    pub datadog_forwarder: DatadogForwarderConfiguration,
+
     /// Datadog APM stats encoder settings.
     pub datadog_apm_stats_encoder: DatadogApmStatsEncoderConfiguration,
 
@@ -56,8 +59,14 @@ pub struct SalukiConfiguration {
     /// Trace sampler settings.
     pub trace_sampler: TraceSamplerConfiguration,
 
+    /// Trace obfuscation settings.
+    pub trace_obfuscation: TraceObfuscationConfiguration,
+
     /// Multi-region failover settings.
     pub multi_region_failover: MultiRegionFailoverConfiguration,
+
+    /// DogStatsD source settings.
+    pub dogstatsd: DogStatsDSourceConfiguration,
 
     /// DogStatsD listener prefix/filter settings.
     pub dogstatsd_prefix_filter: DogStatsDPrefixFilterConfiguration,

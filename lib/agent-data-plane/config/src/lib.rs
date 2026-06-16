@@ -23,14 +23,18 @@ pub use private::SalukiPrivateConfiguration;
 pub use saluki::{ControlPlaneConfiguration, DataPlaneConfiguration, EnvironmentConfiguration, SalukiConfiguration};
 pub use saluki_component_config::{
     AggregateConfiguration, ApmStatsTransformConfiguration, ChecksIpcConfiguration,
-    DatadogApmStatsEncoderConfiguration, DatadogEventsEncoderConfiguration, DatadogLogsEncoderConfiguration,
-    DatadogMetricsEncoderConfiguration, DatadogServiceChecksEncoderConfiguration, DatadogTraceEncoderConfiguration,
-    DogStatsDDebugLogConfiguration, DogStatsDMapperConfiguration, DogStatsDMapperProfileConfiguration,
-    DogStatsDMetricMappingConfiguration, DogStatsDPostAggregateFilterConfiguration, DogStatsDPrefixFilterConfiguration,
-    DynamicValue, MetricTagFilterAction, MetricTagFilterEntry, MultiRegionFailoverConfiguration,
-    OtlpForwarderConfiguration, OtlpPipelineConfiguration, OtlpProxyConfiguration, OtlpReceiverConfiguration,
-    OtlpSourceConfiguration, OtlpTracesConfiguration, OttlErrorMode, OttlFilterConfiguration,
-    OttlTransformConfiguration, PipelineConfiguration, TagFilterlistConfiguration, TraceSamplerConfiguration,
+    DatadogApmStatsEncoderConfiguration, DatadogEventsEncoderConfiguration, DatadogForwarderConfiguration,
+    DatadogForwarderEndpointConfiguration, DatadogForwarderHttpProtocol, DatadogForwarderRetryConfiguration,
+    DatadogLogsEncoderConfiguration, DatadogMetricsEncoderConfiguration, DatadogOpwMetricsConfiguration,
+    DatadogProxyConfiguration, DatadogServiceChecksEncoderConfiguration, DatadogTraceEncoderConfiguration,
+    DogStatsDDebugLogConfiguration, DogStatsDEnablePayloadsConfiguration, DogStatsDMapperConfiguration,
+    DogStatsDMapperProfileConfiguration, DogStatsDMetricMappingConfiguration, DogStatsDOriginEnrichmentConfiguration,
+    DogStatsDOriginTagCardinality, DogStatsDPostAggregateFilterConfiguration, DogStatsDPrefixFilterConfiguration,
+    DogStatsDSourceConfiguration, DynamicValue, MetricTagFilterAction, MetricTagFilterEntry,
+    MultiRegionFailoverConfiguration, OtlpForwarderConfiguration, OtlpPipelineConfiguration, OtlpProxyConfiguration,
+    OtlpReceiverConfiguration, OtlpSourceConfiguration, OtlpTracesConfiguration, OttlErrorMode,
+    OttlFilterConfiguration, OttlTransformConfiguration, PipelineConfiguration, TagFilterlistConfiguration,
+    TraceObfuscationConfiguration, TraceSamplerConfiguration,
 };
 
 #[cfg(test)]

@@ -4,6 +4,7 @@ use std::sync::Arc;
 use facet::Facet;
 use headers::Authorization;
 use hyper_http_proxy::{Intercept, Proxy};
+use saluki_component_config::DatadogProxyConfiguration as NativeDatadogProxyConfiguration;
 use saluki_config::deserialize_space_separated_or_seq;
 use saluki_error::GenericError;
 use serde::Deserialize;
@@ -67,6 +68,17 @@ const CLOUD_METADATA_ADDRS: &[&str] = &[
 ];
 
 impl ProxyConfiguration {
+    /// Creates proxy settings from native component configuration.
+    pub fn from_native(native: &NativeDatadogProxyConfiguration) -> Self {
+        Self {
+            http_server: native.http_server().map(str::to_string),
+            https_server: native.https_server().map(str::to_string),
+            no_proxy: native.no_proxy().to_vec(),
+            no_proxy_nonexact_match: native.no_proxy_nonexact_match(),
+            use_proxy_for_cloud_metadata: native.use_proxy_for_cloud_metadata(),
+        }
+    }
+
     /// Builds the configured proxies.
     ///
     /// Each proxy uses a custom intercept that forwards only requests matching the proxy's scheme

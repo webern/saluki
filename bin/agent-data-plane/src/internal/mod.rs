@@ -1,4 +1,5 @@
 use agent_data_plane_config::DataPlaneConfig;
+use agent_data_plane_config_system::ScopedConfigHandle;
 use resource_accounting::ComponentRegistry;
 use saluki_app::logging::LoggingOverrideController;
 use saluki_core::health::HealthRegistry;
@@ -36,6 +37,7 @@ pub async fn create_internal_supervisor(
     config_snapshot: serde_json::Value, ipc_cert_path: std::path::PathBuf, data_plane: &DataPlaneConfig,
     component_registry: &ComponentRegistry, health_registry: HealthRegistry, control_surfaces: TopologyControlSurfaces,
     services: Option<RemoteAgentServices>, logging_controller: LoggingOverrideController,
+    log_level_handle: Option<ScopedConfigHandle<Option<String>>>,
 ) -> Result<Supervisor, GenericError> {
     // The root supervisor runs in ambient mode (caller's runtime) since its children each have their own
     // dedicated runtimes. The default restart strategy (one-for-one, 1 restart per 5s) applies to the child
@@ -53,6 +55,7 @@ pub async fn create_internal_supervisor(
             control_surfaces,
             services,
             logging_controller,
+            log_level_handle,
         )
         .await?,
     );

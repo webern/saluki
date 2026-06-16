@@ -4,6 +4,7 @@
 //! shared (level, format, console output, rotation), but it must use its own per-subagent destination so it doesn't
 //! collide with the Core Agent's own log file. This module owns those rules in one place.
 
+use agent_data_plane_config_system::ScopedConfigHandle;
 use async_trait::async_trait;
 use bytesize::ByteSize;
 use datadog_agent_commons::platform::PlatformSettings;
@@ -215,32 +216,25 @@ fn first_party_log_level_filter(level: &str) -> Result<LogLevel, GenericError> {
 
 /// A worker that watches for updates to `log_level` and adjusts the logging stack's current filter directives to match.
 ///
-/// The worker relies on dynamic configuration; if it's not enabled, the worker simply idles until shutdown.
+/// The worker observes the typed, scoped `log_level` handle delivered by the configuration system;
+/// when no handle is present (local-snapshot authority), it idles until shutdown after the
+/// bootstrap-applied initial level.
 pub struct DynamicLogLevelWorker {
-    config: Option<GenericConfiguration>,
+    log_level_handle: Option<ScopedConfigHandle<Option<String>>>,
     controller: LoggingOverrideController,
 }
 
 impl DynamicLogLevelWorker {
-    /// Creates a new `DynamicLogLevelWorker` watching the given configuration.
+    /// Creates a `DynamicLogLevelWorker` driven by the typed, scoped `log_level` handle.
     ///
-    /// Transitional: superseded by `new_native` on the native control-plane path.
-    #[allow(dead_code)]
-    pub fn new(config: &GenericConfiguration, controller: LoggingOverrideController) -> Self {
+    /// When the configuration system is stream-backed, `log_level_handle` carries refreshed log
+    /// levels and the worker applies each update to the logging stack. Without a handle, the worker
+    /// idles after the bootstrap-applied initial level. No `GenericConfiguration` is held.
+    pub fn new_native(
+        controller: LoggingOverrideController, log_level_handle: Option<ScopedConfigHandle<Option<String>>>,
+    ) -> Self {
         Self {
-            config: Some(config.clone()),
-            controller,
-        }
-    }
-
-    /// Creates a `DynamicLogLevelWorker` with no raw-config watcher.
-    ///
-    /// On the native path the configuration system delivers `log_level` updates through a typed,
-    /// scoped handle; until that is wired in, this worker idles (the initial level is applied during
-    /// bootstrap). Holding no `GenericConfiguration` keeps the control plane native.
-    pub fn new_native(controller: LoggingOverrideController) -> Self {
-        Self {
-            config: None,
+            log_level_handle,
             controller,
         }
     }
@@ -253,7 +247,7 @@ impl Supervisable for DynamicLogLevelWorker {
     }
 
     async fn initialize(&self, process_shutdown: ShutdownHandle) -> Result<SupervisorFuture, InitializationError> {
-        let mut watcher = self.config.as_ref().map(|c| c.watch_for_updates("log_level"));
+        let mut handle = self.log_level_handle.clone();
         let controller = self.controller.clone();
 
         Ok(Box::pin(async move {
@@ -264,14 +258,17 @@ impl Supervisable for DynamicLogLevelWorker {
             loop {
                 select! {
                     _ = &mut process_shutdown => break,
-                    (_, new_log_level) = async { watcher.as_mut().unwrap().changed::<String>().await }, if watcher.is_some() => {
-                        match parse_optional_log_level_raw(new_log_level) {
-                            Ok(log_level) => {
-                                if let Err(e) = controller.update_base(log_level.as_env_filter()).await {
-                                    warn!(error = %e, %log_level, "Failed to apply updated log level.");
+                    maybe_level = async { handle.as_mut().unwrap().changed().await }, if handle.is_some() => {
+                        match maybe_level {
+                            Some(new_log_level) => match parse_optional_log_level_raw(new_log_level) {
+                                Ok(log_level) => {
+                                    if let Err(e) = controller.update_base(log_level.as_env_filter()).await {
+                                        warn!(error = %e, %log_level, "Failed to apply updated log level.");
+                                    }
                                 }
-                            }
-                            Err(e) => warn!(error = %e, "Failed to parse updated log level."),
+                                Err(e) => warn!(error = %e, "Failed to parse updated log level."),
+                            },
+                            None => break,
                         }
                     }
                 }

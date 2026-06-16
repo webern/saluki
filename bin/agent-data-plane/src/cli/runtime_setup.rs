@@ -117,6 +117,8 @@ impl RuntimeShell {
             None => None,
         };
 
+        let log_level_handle = self.dynamic_handles.as_ref().map(|h| h.log_level.clone());
+
         create_internal_supervisor(
             self.config_snapshot.clone(),
             self.ipc_cert_path.clone(),
@@ -126,6 +128,7 @@ impl RuntimeShell {
             control_surfaces,
             services,
             logging_controller,
+            log_level_handle,
         )
         .await
         .error_context("Failed to create internal supervisor.")

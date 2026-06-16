@@ -130,6 +130,137 @@ impl OtlpReceiverConfiguration {
     }
 }
 
+/// Native OTLP trace processing settings.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OtlpTracesConfiguration {
+    enabled: bool,
+    ignore_missing_datadog_fields: bool,
+    enable_otlp_compute_top_level_by_span_kind: bool,
+    probabilistic_sampler_sampling_percentage: f64,
+    string_interner_bytes: usize,
+    internal_port: u16,
+}
+
+impl OtlpTracesConfiguration {
+    /// Creates OTLP trace processing settings.
+    pub const fn new(
+        enabled: bool, ignore_missing_datadog_fields: bool, enable_otlp_compute_top_level_by_span_kind: bool,
+        probabilistic_sampler_sampling_percentage: f64, string_interner_bytes: usize, internal_port: u16,
+    ) -> Self {
+        Self {
+            enabled,
+            ignore_missing_datadog_fields,
+            enable_otlp_compute_top_level_by_span_kind,
+            probabilistic_sampler_sampling_percentage,
+            string_interner_bytes,
+            internal_port,
+        }
+    }
+
+    /// Returns whether OTLP traces should be processed.
+    pub const fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// Returns whether Datadog-specific field fallbacks should be skipped.
+    pub const fn ignore_missing_datadog_fields(&self) -> bool {
+        self.ignore_missing_datadog_fields
+    }
+
+    /// Returns whether top-level span metadata should be computed from span kind.
+    pub const fn enable_otlp_compute_top_level_by_span_kind(&self) -> bool {
+        self.enable_otlp_compute_top_level_by_span_kind
+    }
+
+    /// Returns the OTLP probabilistic sampler percentage.
+    pub const fn probabilistic_sampler_sampling_percentage(&self) -> f64 {
+        self.probabilistic_sampler_sampling_percentage
+    }
+
+    /// Returns the trace string interner size in bytes.
+    pub const fn string_interner_bytes(&self) -> usize {
+        self.string_interner_bytes
+    }
+
+    /// Returns the internal Core Agent trace port.
+    pub const fn internal_port(&self) -> u16 {
+        self.internal_port
+    }
+}
+
+/// Native OTLP source settings.
+#[derive(Clone, Debug)]
+pub struct OtlpSourceConfiguration {
+    receiver: OtlpReceiverConfiguration,
+    metrics_enabled: bool,
+    logs_enabled: bool,
+    traces: OtlpTracesConfiguration,
+    context_string_interner_bytes: usize,
+    cached_contexts_limit: usize,
+    cached_tagsets_limit: usize,
+    allow_context_heap_allocations: bool,
+}
+
+impl OtlpSourceConfiguration {
+    /// Creates OTLP source settings.
+    pub const fn new(
+        receiver: OtlpReceiverConfiguration, metrics_enabled: bool, logs_enabled: bool,
+        traces: OtlpTracesConfiguration, context_string_interner_bytes: usize, cached_contexts_limit: usize,
+        cached_tagsets_limit: usize, allow_context_heap_allocations: bool,
+    ) -> Self {
+        Self {
+            receiver,
+            metrics_enabled,
+            logs_enabled,
+            traces,
+            context_string_interner_bytes,
+            cached_contexts_limit,
+            cached_tagsets_limit,
+            allow_context_heap_allocations,
+        }
+    }
+
+    /// Returns the OTLP receiver settings.
+    pub const fn receiver(&self) -> &OtlpReceiverConfiguration {
+        &self.receiver
+    }
+
+    /// Returns whether OTLP metrics should be processed.
+    pub const fn metrics_enabled(&self) -> bool {
+        self.metrics_enabled
+    }
+
+    /// Returns whether OTLP logs should be processed.
+    pub const fn logs_enabled(&self) -> bool {
+        self.logs_enabled
+    }
+
+    /// Returns the OTLP traces settings.
+    pub const fn traces(&self) -> &OtlpTracesConfiguration {
+        &self.traces
+    }
+
+    /// Returns the metric context string interner size in bytes.
+    pub const fn context_string_interner_bytes(&self) -> usize {
+        self.context_string_interner_bytes
+    }
+
+    /// Returns the cached-context limit.
+    pub const fn cached_contexts_limit(&self) -> usize {
+        self.cached_contexts_limit
+    }
+
+    /// Returns the cached-tagset limit.
+    pub const fn cached_tagsets_limit(&self) -> usize {
+        self.cached_tagsets_limit
+    }
+
+    /// Returns whether context resolution may allocate on the heap when interners are full.
+    pub const fn allow_context_heap_allocations(&self) -> bool {
+        self.allow_context_heap_allocations
+    }
+}
+
 /// Native OTLP forwarder settings.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OtlpForwarderConfiguration {

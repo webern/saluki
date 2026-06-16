@@ -19,7 +19,7 @@ use tokio::sync::mpsc;
 use tokio::{pin, select};
 use tracing::{debug, error};
 
-use crate::common::otlp::config::Receiver;
+use crate::common::otlp::config::{receiver_config_from_native, Receiver};
 use crate::common::otlp::{
     build_metrics, Metrics, OtlpHandler, OtlpServerBuilder, OTLP_LOGS_GRPC_SERVICE_PATH,
     OTLP_METRICS_GRPC_SERVICE_PATH, OTLP_TRACES_GRPC_SERVICE_PATH,
@@ -46,19 +46,7 @@ impl OtlpRelayConfiguration {
     pub fn from_native(config: &OtlpReceiverConfiguration) -> Self {
         Self {
             otlp_config: OtlpRelayConfig {
-                receiver: Receiver {
-                    protocols: crate::common::otlp::config::Protocols {
-                        grpc: crate::common::otlp::config::GrpcConfig {
-                            endpoint: endpoint_without_transport(config.grpc_endpoint()),
-                            transport: transport_name(config.grpc_endpoint()).to_string(),
-                            max_recv_msg_size_mib: (config.grpc_max_recv_msg_size_bytes() / 1024 / 1024) as u64,
-                        },
-                        http: crate::common::otlp::config::HttpConfig {
-                            endpoint: endpoint_without_transport(config.http_endpoint()),
-                            transport: transport_name(config.http_endpoint()).to_string(),
-                        },
-                    },
-                },
+                receiver: receiver_config_from_native(config),
             },
         }
     }
@@ -188,17 +176,6 @@ impl Relay for OtlpRelay {
         debug!("OTLP relay stopped.");
 
         Ok(())
-    }
-}
-
-fn transport_name(address: &ListenAddress) -> &'static str {
-    address.listener_type()
-}
-
-fn endpoint_without_transport(address: &ListenAddress) -> String {
-    match address {
-        ListenAddress::Tcp(addr) | ListenAddress::Udp(addr) => addr.to_string(),
-        ListenAddress::Unix(path) | ListenAddress::Unixgram(path) => path.display().to_string(),
     }
 }
 

@@ -22,7 +22,8 @@ pub use saluki::{ControlPlaneConfiguration, DataPlaneConfiguration, EnvironmentC
 pub use saluki_component_config::{
     ChecksIpcConfiguration, DatadogEventsEncoderConfiguration, DatadogLogsEncoderConfiguration,
     DatadogServiceChecksEncoderConfiguration, OtlpForwarderConfiguration, OtlpPipelineConfiguration,
-    OtlpProxyConfiguration, OtlpReceiverConfiguration, PipelineConfiguration,
+    OtlpProxyConfiguration, OtlpReceiverConfiguration, OtlpSourceConfiguration, OtlpTracesConfiguration,
+    PipelineConfiguration,
 };
 
 #[cfg(test)]

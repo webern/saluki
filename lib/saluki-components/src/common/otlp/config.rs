@@ -2,8 +2,13 @@
 
 use bytesize::ByteSize;
 use facet::Facet;
+use saluki_component_config::{
+    OtlpReceiverConfiguration as NativeOtlpReceiverConfiguration,
+    OtlpTracesConfiguration as NativeOtlpTracesConfiguration,
+};
 use saluki_config::GenericConfiguration;
 use saluki_error::GenericError;
+use saluki_io::net::ListenAddress;
 use serde::Deserialize;
 
 fn default_grpc_endpoint() -> String {
@@ -285,6 +290,42 @@ impl TracesConfig {
             self.probabilistic_sampler.sampling_percentage = pct;
         }
         Ok(())
+    }
+}
+
+pub(crate) fn receiver_config_from_native(config: &NativeOtlpReceiverConfiguration) -> Receiver {
+    Receiver {
+        protocols: Protocols {
+            grpc: GrpcConfig {
+                endpoint: endpoint_without_transport(config.grpc_endpoint()),
+                transport: config.grpc_endpoint().listener_type().to_string(),
+                max_recv_msg_size_mib: (config.grpc_max_recv_msg_size_bytes() / 1024 / 1024) as u64,
+            },
+            http: HttpConfig {
+                endpoint: endpoint_without_transport(config.http_endpoint()),
+                transport: config.http_endpoint().listener_type().to_string(),
+            },
+        },
+    }
+}
+
+pub(crate) fn traces_config_from_native(config: &NativeOtlpTracesConfiguration) -> TracesConfig {
+    TracesConfig {
+        enabled: config.enabled(),
+        ignore_missing_datadog_fields: config.ignore_missing_datadog_fields(),
+        enable_otlp_compute_top_level_by_span_kind: config.enable_otlp_compute_top_level_by_span_kind(),
+        probabilistic_sampler: ProbabilisticSampler {
+            sampling_percentage: config.probabilistic_sampler_sampling_percentage(),
+        },
+        string_interner_bytes: ByteSize::b(config.string_interner_bytes() as u64),
+        internal_port: config.internal_port(),
+    }
+}
+
+fn endpoint_without_transport(address: &ListenAddress) -> String {
+    match address {
+        ListenAddress::Tcp(addr) | ListenAddress::Udp(addr) => addr.to_string(),
+        ListenAddress::Unix(path) | ListenAddress::Unixgram(path) => path.display().to_string(),
     }
 }
 

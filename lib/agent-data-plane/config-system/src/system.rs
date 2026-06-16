@@ -7,8 +7,10 @@ use agent_data_plane_config::{
     ConfigStreamAuthority, ControlPlaneConfiguration, DataPlaneConfiguration, DatadogEventsEncoderConfiguration,
     DatadogLogsEncoderConfiguration, DatadogServiceChecksEncoderConfiguration, EnvironmentConfiguration,
     OtlpForwarderConfiguration, OtlpPipelineConfiguration, OtlpProxyConfiguration, OtlpReceiverConfiguration,
-    PipelineConfiguration, RuntimeConfigAuthority, RuntimeConfigLanguage, SalukiConfiguration,
+    OtlpSourceConfiguration, OtlpTracesConfiguration, PipelineConfiguration, RuntimeConfigAuthority,
+    RuntimeConfigLanguage, SalukiConfiguration,
 };
+use bytesize::ByteSize;
 use datadog_agent_commons::ipc::config::{IpcAuthConfiguration, RemoteAgentClientConfiguration};
 use datadog_agent_config::{
     classifier::{ConfigClassifier, Pipeline, PipelineAffinity, Severity, SupportLevel},
@@ -257,6 +259,51 @@ fn translate_datadog_snapshot(config: &GenericConfiguration) -> Result<SalukiCon
         )?,
         (otlp_grpc_max_recv_msg_size_mib * 1024 * 1024) as usize,
     );
+    let otlp_traces = OtlpTracesConfiguration::new(
+        config
+            .try_get_typed("otlp_config.traces.enabled")
+            .error_context("Failed to read `otlp_config.traces.enabled`.")?
+            .unwrap_or(true),
+        config
+            .try_get_typed("otlp_config.traces.ignore_missing_datadog_fields")
+            .error_context("Failed to read `otlp_config.traces.ignore_missing_datadog_fields`.")?
+            .unwrap_or(false),
+        config
+            .try_get_typed("otlp_config.traces.enable_otlp_compute_top_level_by_span_kind")
+            .error_context("Failed to read `otlp_config.traces.enable_otlp_compute_top_level_by_span_kind`.")?
+            .unwrap_or(true),
+        read_otlp_trace_sampling_percentage(config)?,
+        read_byte_size(config, "otlp_config.traces.string_interner_size", ByteSize::kib(512))?,
+        config
+            .try_get_typed("otlp_config.traces.internal_port")
+            .error_context("Failed to read `otlp_config.traces.internal_port`.")?
+            .unwrap_or(5003),
+    );
+    let otlp_source = OtlpSourceConfiguration::new(
+        otlp_receiver.clone(),
+        config
+            .try_get_typed("otlp_config.metrics.enabled")
+            .error_context("Failed to read `otlp_config.metrics.enabled`.")?
+            .unwrap_or(true),
+        config
+            .try_get_typed("otlp_config.logs.enabled")
+            .error_context("Failed to read `otlp_config.logs.enabled`.")?
+            .unwrap_or(true),
+        otlp_traces.clone(),
+        read_byte_size(config, "otlp_string_interner_size", ByteSize::mib(2))?,
+        config
+            .try_get_typed("otlp_cached_contexts_limit")
+            .error_context("Failed to read `otlp_cached_contexts_limit`.")?
+            .unwrap_or(500_000),
+        config
+            .try_get_typed("otlp_cached_tagsets_limit")
+            .error_context("Failed to read `otlp_cached_tagsets_limit`.")?
+            .unwrap_or(500_000),
+        config
+            .try_get_typed("otlp_allow_context_heap_allocs")
+            .error_context("Failed to read `otlp_allow_context_heap_allocs`.")?
+            .unwrap_or(true),
+    );
     let datadog_logs_encoder = DatadogLogsEncoderConfiguration::new(
         source.serializer_compressor_kind.clone(),
         source.serializer_zstd_compressor_level as i32,
@@ -316,6 +363,8 @@ fn translate_datadog_snapshot(config: &GenericConfiguration) -> Result<SalukiCon
         datadog_events_encoder,
         datadog_service_checks_encoder,
         otlp_receiver,
+        otlp_source,
+        otlp_traces,
         otlp_forwarder,
         environment,
     };
@@ -349,6 +398,30 @@ fn read_otlp_listen_address(
             e
         )
     })
+}
+
+fn read_byte_size(
+    config: &GenericConfiguration, key: &'static str, default_value: ByteSize,
+) -> Result<usize, GenericError> {
+    Ok(config
+        .try_get_typed::<ByteSize>(key)
+        .error_context(format!("Failed to read `{}`.", key))?
+        .unwrap_or(default_value)
+        .as_u64() as usize)
+}
+
+fn read_otlp_trace_sampling_percentage(config: &GenericConfiguration) -> Result<f64, GenericError> {
+    if let Some(value) = config
+        .try_get_typed("otlp_config.traces.probabilistic_sampler.sampling_percentage")
+        .error_context("Failed to read `otlp_config.traces.probabilistic_sampler.sampling_percentage`.")?
+    {
+        return Ok(value);
+    }
+
+    Ok(config
+        .try_get_typed("otlp_config_traces_probabilistic_sampler_sampling_percentage")
+        .error_context("Failed to read `otlp_config_traces_probabilistic_sampler_sampling_percentage`.")?
+        .unwrap_or(100.0))
 }
 
 fn active_pipelines(dp_config: &DataPlaneConfiguration) -> HashSet<Pipeline> {

@@ -15,6 +15,7 @@ use prost::Message;
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
 use saluki_common::sync::shutdown::{ShutdownCoordinator, ShutdownHandle};
 use saluki_common::task::HandleExt as _;
+use saluki_component_config::OtlpSourceConfiguration as NativeOtlpSourceConfiguration;
 use saluki_config::GenericConfiguration;
 use saluki_context::ContextResolver;
 use saluki_core::topology::interconnect::BufferedDispatcher;
@@ -37,7 +38,9 @@ use tokio::sync::mpsc;
 use tokio::time::{interval, MissedTickBehavior};
 use tracing::{debug, error};
 
-use crate::common::otlp::config::OtlpConfig;
+use crate::common::otlp::config::{
+    receiver_config_from_native, traces_config_from_native, LogsConfig, MetricsConfig, OtlpConfig,
+};
 use crate::common::otlp::{build_metrics, Metrics, OtlpHandler, OtlpServerBuilder};
 
 mod logs;
@@ -125,6 +128,27 @@ pub struct OtlpConfiguration {
 }
 
 impl OtlpConfiguration {
+    /// Creates a new `OtlpConfiguration` from native source configuration.
+    pub fn from_native(config: &NativeOtlpSourceConfiguration) -> Self {
+        Self {
+            otlp_config: OtlpConfig {
+                receiver: receiver_config_from_native(config.receiver()),
+                metrics: MetricsConfig {
+                    enabled: config.metrics_enabled(),
+                },
+                logs: LogsConfig {
+                    enabled: config.logs_enabled(),
+                },
+                traces: traces_config_from_native(config.traces()),
+            },
+            context_string_interner_bytes: ByteSize::b(config.context_string_interner_bytes() as u64),
+            cached_contexts_limit: config.cached_contexts_limit(),
+            cached_tagsets_limit: config.cached_tagsets_limit(),
+            allow_context_heap_allocations: config.allow_context_heap_allocations(),
+            workload_provider: None,
+        }
+    }
+
     /// Creates a new `OTLPConfiguration` from the given configuration.
     pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
         let mut cfg: Self = config.as_typed()?;

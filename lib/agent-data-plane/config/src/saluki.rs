@@ -5,7 +5,7 @@ use std::{path::PathBuf, time::Duration};
 use saluki_component_config::{
     ChecksIpcConfiguration, DatadogEventsEncoderConfiguration, DatadogLogsEncoderConfiguration,
     DatadogServiceChecksEncoderConfiguration, OtlpForwarderConfiguration, OtlpPipelineConfiguration,
-    OtlpReceiverConfiguration, PipelineConfiguration,
+    OtlpReceiverConfiguration, OtlpSourceConfiguration, OtlpTracesConfiguration, PipelineConfiguration,
 };
 use saluki_io::net::ListenAddress;
 
@@ -32,6 +32,12 @@ pub struct SalukiConfiguration {
 
     /// OTLP receiver settings.
     pub otlp_receiver: OtlpReceiverConfiguration,
+
+    /// OTLP source settings.
+    pub otlp_source: OtlpSourceConfiguration,
+
+    /// OTLP trace processing settings.
+    pub otlp_traces: OtlpTracesConfiguration,
 
     /// OTLP forwarder settings.
     pub otlp_forwarder: OtlpForwarderConfiguration,

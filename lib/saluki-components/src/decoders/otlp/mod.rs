@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use otlp_protos::opentelemetry::proto::collector::trace::v1::ExportTraceServiceRequest;
 use prost::Message;
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
+use saluki_component_config::OtlpTracesConfiguration as NativeOtlpTracesConfiguration;
 use saluki_config::GenericConfiguration;
 use saluki_core::{
     components::{
@@ -23,8 +24,9 @@ use tracing::{debug, error, warn};
 
 use crate::common::otlp::traces::translator::OtlpTracesTranslator;
 use crate::common::otlp::{
-    build_metrics, config::TracesConfig, Metrics, OTLP_LOGS_GRPC_SERVICE_PATH, OTLP_METRICS_GRPC_SERVICE_PATH,
-    OTLP_TRACES_GRPC_SERVICE_PATH,
+    build_metrics,
+    config::{traces_config_from_native, TracesConfig},
+    Metrics, OTLP_LOGS_GRPC_SERVICE_PATH, OTLP_METRICS_GRPC_SERVICE_PATH, OTLP_TRACES_GRPC_SERVICE_PATH,
 };
 
 /// Configuration for the OTLP decoder.
@@ -44,6 +46,15 @@ struct OtlpDecoderConfig {
 }
 
 impl OtlpDecoderConfiguration {
+    /// Creates a new `OtlpDecoderConfiguration` from native trace processing configuration.
+    pub fn from_native(config: &NativeOtlpTracesConfiguration) -> Self {
+        Self {
+            otlp_config: OtlpDecoderConfig {
+                traces: traces_config_from_native(config),
+            },
+        }
+    }
+
     /// Creates a new `OtlpDecoderConfiguration` from the given configuration.
     pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
         let mut cfg: Self = config

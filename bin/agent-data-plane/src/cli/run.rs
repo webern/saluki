@@ -279,7 +279,7 @@ async fn create_topology(
     }
 
     if dp_config.otlp().enabled() {
-        add_otlp_pipeline_to_blueprint(&mut blueprint, config, saluki_config, env_provider)?;
+        add_otlp_pipeline_to_blueprint(&mut blueprint, saluki_config, env_provider)?;
     }
 
     Ok((blueprint, control_surfaces))
@@ -580,8 +580,7 @@ async fn add_dsd_pipeline_to_blueprint(
 }
 
 fn add_otlp_pipeline_to_blueprint(
-    blueprint: &mut TopologyBlueprint, config: &GenericConfiguration, saluki_config: &SalukiConfiguration,
-    env_provider: &ADPEnvironmentProvider,
+    blueprint: &mut TopologyBlueprint, saluki_config: &SalukiConfiguration, env_provider: &ADPEnvironmentProvider,
 ) -> Result<(), GenericError> {
     let dp_config = &saluki_config.data_plane;
     if dp_config.otlp().proxy().enabled() {
@@ -599,7 +598,7 @@ fn add_otlp_pipeline_to_blueprint(
         );
 
         let otlp_relay_config = OtlpRelayConfiguration::from_native(&saluki_config.otlp_receiver);
-        let otlp_decoder_config = OtlpDecoderConfiguration::from_configuration(config)?;
+        let otlp_decoder_config = OtlpDecoderConfiguration::from_native(&saluki_config.otlp_traces);
 
         let local_agent_otlp_forwarder_config = OtlpForwarderConfiguration::from_native(&saluki_config.otlp_forwarder);
 
@@ -621,8 +620,8 @@ fn add_otlp_pipeline_to_blueprint(
     } else {
         info!("OTLP proxy mode disabled. OTLP signals will be handled natively.");
 
-        let otlp_config =
-            OtlpConfiguration::from_configuration(config)?.with_workload_provider(env_provider.workload().clone());
+        let otlp_config = OtlpConfiguration::from_native(&saluki_config.otlp_source)
+            .with_workload_provider(env_provider.workload().clone());
 
         blueprint
             // Components.

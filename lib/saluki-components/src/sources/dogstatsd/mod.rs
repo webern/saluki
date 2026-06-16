@@ -22,7 +22,7 @@ use saluki_common::{
     sync::shutdown::{ShutdownCoordinator, ShutdownHandle},
     task::spawn_traced_named,
 };
-use saluki_config::{deserialize_space_separated_or_seq, GenericConfiguration};
+use saluki_config::deserialize_space_separated_or_seq;
 use saluki_context::{
     origin::RawOrigin,
     tags::{RawTags, RawTagsFilter},
@@ -226,8 +226,6 @@ const MIN_CAPTURE_DEPTH: usize = 1024;
 const fn default_capture_depth() -> usize {
     MIN_CAPTURE_DEPTH
 }
-
-const DOGSTATSD_CAPTURE_DIR: &str = "dsd_capture";
 
 fn deserialize_empty_metastring_as_none<'de, D>(deserializer: D) -> Result<Option<MetaString>, D::Error>
 where
@@ -609,10 +607,30 @@ async fn resolve_bind_host(host: &str) -> Result<std::net::IpAddr, Error> {
 }
 
 impl DogStatsDConfiguration {
-    /// Creates a new `DogStatsDConfiguration` from the given configuration.
-    pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
-        let mut dogstatsd_config: Self = config.as_typed()?;
-        dogstatsd_config.fix_empty_capture_path(config);
+    /// Creates a new `DogStatsDConfiguration` from native configuration.
+    ///
+    /// Fields with no native equivalent retain their existing defaults. The returned value can be
+    /// further customized via the builder methods (for example
+    /// [`with_workload_provider`][Self::with_workload_provider]).
+    pub fn from_native(native: &saluki_component_config::DogStatsDConfig) -> Result<Self, GenericError> {
+        let mut dogstatsd_config = Self {
+            buffer_size: native.buffer_size,
+            buffer_count: native.buffer_count,
+            port: native.port,
+            // Native models the OS-default receive buffer as `None`; the internal type uses `0`.
+            socket_receive_buffer_size: native.socket_receive_buffer_size.unwrap_or(0),
+            socket_path: native.socket_path.as_ref().map(|s| s.to_string()),
+            socket_stream_path: native.socket_stream_path.as_ref().map(|s| s.to_string()),
+            non_local_traffic: native.non_local_traffic,
+            enable_payloads: EnablePayloadsConfiguration {
+                series: native.enabled_payloads.series,
+                sketches: native.enabled_payloads.sketches,
+                events: native.enabled_payloads.events,
+                service_checks: native.enabled_payloads.service_checks,
+            },
+            origin_enrichment: OriginEnrichmentConfiguration::from_native(native.origin_detection_enabled),
+            ..Self::default()
+        };
         dogstatsd_config.fix_capture_depth();
         Ok(dogstatsd_config)
     }
@@ -728,34 +746,6 @@ impl DogStatsDConfiguration {
     /// Returns an HTTP API handler exposing the DogStatsD replay control surface.
     pub fn replay_api_handler(&self) -> DogStatsDReplayAPIHandler {
         DogStatsDReplayAPIHandler::new(self.replay_control.clone())
-    }
-
-    fn fix_empty_capture_path(&mut self, config: &GenericConfiguration) {
-        if self.capture_path.parent().is_some() {
-            return;
-        }
-
-        let capture_path = match config.try_get_typed::<PathBuf>("run_path") {
-            Ok(Some(mut run_path)) => {
-                run_path.push(DOGSTATSD_CAPTURE_DIR);
-                run_path
-            }
-            Ok(None) => {
-                debug!(
-                    "`dogstatsd_capture_path` and `run_path` were empty. Default DogStatsD capture path is unavailable."
-                );
-                return;
-            }
-            Err(e) => {
-                debug!(
-                    error = %e,
-                    "Failed to read `run_path` from configuration. Default DogStatsD capture path is unavailable."
-                );
-                return;
-            }
-        };
-
-        self.capture_path = capture_path;
     }
 
     /// Using the current configuration, determines which listeners should be created and adds an address for each into
@@ -1738,14 +1728,12 @@ mod tests {
         collections::HashMap,
         io::ErrorKind,
         net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4},
-        path::PathBuf,
         sync::{Arc, OnceLock},
         time::Duration,
     };
 
     use bytes::Bytes;
     use bytesize::ByteSize;
-    use saluki_config::ConfigurationLoader;
     use saluki_context::{origin::RawOrigin, ContextResolverBuilder, TagsResolverBuilder};
     use saluki_core::{components::ComponentContext, topology::ComponentId};
     use saluki_env::workload::{CaptureEntityResolver, EntityId};
@@ -1754,7 +1742,6 @@ mod tests {
         net::{ConnectionAddress, ListenAddress, ProcessCredentials, ProcessIdentity},
     };
     use saluki_metrics::test::TestRecorder;
-    use serde_json::json;
     use stringtheory::MetaString;
     use tokio::{net::UdpSocket, sync::mpsc, time::timeout};
 
@@ -1764,8 +1751,7 @@ mod tests {
         },
         handle_metric_packet,
         metrics::build_metrics,
-        resolve_capture_container_id, ContextResolvers, DogStatsDConfiguration, DOGSTATSD_CAPTURE_DIR,
-        MIN_CAPTURE_DEPTH,
+        resolve_capture_container_id, ContextResolvers, DogStatsDConfiguration, MIN_CAPTURE_DEPTH,
     };
 
     const LINUX_EAFNOSUPPORT: i32 = 97;
@@ -2483,43 +2469,20 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn fix_empty_capture_path_sets_path_from_run_path() {
-        const RUN_PATH: &str = "/my/little/run_path";
-
-        let base_config_values = json!({ "run_path": RUN_PATH });
-        let (config, _) = ConfigurationLoader::for_tests(Some(base_config_values), None, false).await;
-
-        let dogstatsd_config = DogStatsDConfiguration::from_configuration(&config).expect("should deserialize");
-
-        let expected = PathBuf::from(RUN_PATH).join(DOGSTATSD_CAPTURE_DIR);
-        assert_eq!(expected, dogstatsd_config.capture_path);
-    }
-
-    #[tokio::test]
-    async fn fix_empty_capture_path_keeps_explicit_path() {
-        const RUN_PATH: &str = "/my/little/run_path";
-        const CAPTURE_PATH: &str = "/custom/path/to/capture";
-
-        let base_config_values = json!({ "run_path": RUN_PATH, "dogstatsd_capture_path": CAPTURE_PATH });
-        let (config, _) = ConfigurationLoader::for_tests(Some(base_config_values), None, false).await;
-
-        let dogstatsd_config = DogStatsDConfiguration::from_configuration(&config).expect("should deserialize");
-
-        assert_eq!(PathBuf::from(CAPTURE_PATH), dogstatsd_config.capture_path);
-    }
-
-    #[tokio::test]
-    async fn from_configuration_normalizes_capture_depth() {
+    #[test]
+    fn fix_capture_depth_normalizes_below_minimum() {
         let cases = [
-            (json!({}), MIN_CAPTURE_DEPTH),
-            (json!({ "dogstatsd_capture_depth": 0 }), MIN_CAPTURE_DEPTH),
-            (json!({ "dogstatsd_capture_depth": 2048 }), 2048),
+            (0, MIN_CAPTURE_DEPTH),
+            (MIN_CAPTURE_DEPTH, MIN_CAPTURE_DEPTH),
+            (2048, 2048),
         ];
 
-        for (base_config_values, expected_depth) in cases {
-            let (config, _) = ConfigurationLoader::for_tests(Some(base_config_values), None, false).await;
-            let dogstatsd_config = DogStatsDConfiguration::from_configuration(&config).expect("should deserialize");
+        for (configured_depth, expected_depth) in cases {
+            let mut dogstatsd_config = DogStatsDConfiguration {
+                capture_depth: configured_depth,
+                ..Default::default()
+            };
+            dogstatsd_config.fix_capture_depth();
 
             assert_eq!(expected_depth, dogstatsd_config.capture_depth);
         }

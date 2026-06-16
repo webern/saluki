@@ -116,6 +116,17 @@ impl OriginEnrichmentConfiguration {
     pub(super) const fn enabled(&self) -> bool {
         self.enabled
     }
+
+    /// Builds an `OriginEnrichmentConfiguration` from native configuration.
+    ///
+    /// Only `enabled` is sourced from native configuration today; all other fields use their
+    /// existing defaults.
+    pub(super) fn from_native(origin_detection_enabled: bool) -> Self {
+        Self {
+            enabled: origin_detection_enabled,
+            ..Self::default()
+        }
+    }
 }
 
 #[derive(Clone)]

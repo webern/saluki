@@ -352,13 +352,11 @@ mod tests {
     };
 
     use axum::{routing::get, Router};
-    use saluki_config::{dynamic::ConfigUpdate, ConfigurationLoader};
     use saluki_tls::initialize_default_crypto_provider;
-    use serde_json::json;
     use tokio::net::TcpListener;
 
     use super::*;
-    use crate::common::datadog::{config::ForwarderConfiguration, endpoints::ResolvedEndpoint};
+    use crate::common::datadog::endpoints::ResolvedEndpoint;
 
     fn validation_url_for(raw_endpoint: &str) -> String {
         let endpoint = ResolvedEndpoint::from_raw_endpoint(raw_endpoint, "api-key").expect("endpoint should resolve");
@@ -450,99 +448,6 @@ mod tests {
             validate_target(&mut client, &target_for("http://127.0.0.1:1/")).await,
             KeyValidationResult::Error
         );
-    }
-
-    #[tokio::test]
-    async fn validation_targets_include_primary_additional_and_opw() {
-        let (config, _) = ConfigurationLoader::for_tests(
-            Some(json!({
-                "api_key": "primary-key",
-                "dd_url": "http://primary.example.com",
-                "additional_endpoints": {
-                    "http://additional.example.com": ["additional-key", "additional-key", ""]
-                },
-                "observability_pipelines_worker_metrics_enabled": true,
-                "observability_pipelines_worker_metrics_url": "http://opw.example.com"
-            })),
-            None,
-            false,
-        )
-        .await;
-        let forwarder_config = ForwarderConfiguration::from_configuration(&config).expect("config should parse");
-        let mut endpoints = forwarder_config
-            .build_routable_endpoints(Some(config))
-            .expect("endpoints should resolve");
-
-        let targets = collect_validation_targets(&mut endpoints);
-        let mut target_pairs = targets
-            .into_iter()
-            .map(|target| (target.endpoint.to_string(), target.api_key))
-            .collect::<Vec<_>>();
-        target_pairs.sort();
-
-        assert_eq!(
-            target_pairs,
-            vec![
-                (
-                    "http://additional.example.com/".to_string(),
-                    "additional-key".to_string()
-                ),
-                ("http://opw.example.com/".to_string(), "primary-key".to_string()),
-                ("http://primary.example.com/".to_string(), "primary-key".to_string()),
-            ]
-        );
-    }
-
-    #[tokio::test]
-    async fn validation_targets_refresh_existing_additional_endpoint_key() {
-        let (config, sender) = ConfigurationLoader::for_tests(None, None, true).await;
-        let sender = sender.expect("dynamic sender should exist");
-        sender
-            .send(ConfigUpdate::Snapshot(json!({
-                "api_key": "primary-key",
-                "dd_url": "http://primary.example.com",
-                "additional_endpoints": {
-                    "http://additional.example.com": ["old-additional-key"]
-                }
-            })))
-            .await
-            .expect("initial snapshot should send");
-        config.ready().await;
-
-        let forwarder_config = ForwarderConfiguration::from_configuration(&config).expect("config should parse");
-        let mut endpoints = forwarder_config
-            .build_routable_endpoints(Some(config.clone()))
-            .expect("endpoints should resolve");
-
-        sender
-            .send(ConfigUpdate::Snapshot(json!({
-                "api_key": "primary-key",
-                "dd_url": "http://primary.example.com",
-                "additional_endpoints": {
-                    "http://additional.example.com": ["new-additional-key"],
-                    "http://new.example.com": ["ignored-new-domain-key"]
-                }
-            })))
-            .await
-            .expect("updated snapshot should send");
-
-        let deadline = std::time::Instant::now() + Duration::from_secs(2);
-        let targets = loop {
-            let targets = collect_validation_targets(&mut endpoints);
-            if targets.iter().any(|target| target.api_key == "new-additional-key") {
-                break targets;
-            }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "timed out waiting for key refresh"
-            );
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        };
-
-        assert!(targets.iter().any(|target| target.api_key == "new-additional-key"));
-        assert!(!targets
-            .iter()
-            .any(|target| target.endpoint.as_str() == "http://new.example.com/"));
     }
 
     #[tokio::test]

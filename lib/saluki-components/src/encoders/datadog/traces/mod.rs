@@ -14,7 +14,6 @@ use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
 use saluki_common::collections::FastHashMap;
 use saluki_common::strings::StringBuilder;
 use saluki_common::task::HandleExt as _;
-use saluki_config::GenericConfiguration;
 use saluki_context::tags::TagSet;
 use saluki_core::data_model::event::trace::AttributeValue;
 use saluki_core::topology::{EventsBuffer, PayloadsBuffer};
@@ -78,6 +77,14 @@ fn default_env() -> String {
     "none".to_string()
 }
 
+/// Maps a native compression kind to the compressor kind string used by `CompressionScheme`.
+fn compression_kind_str(kind: saluki_component_config::CompressionKind) -> &'static str {
+    match kind {
+        saluki_component_config::CompressionKind::Zstd => "zstd",
+        saluki_component_config::CompressionKind::Zlib => "zlib",
+    }
+}
+
 /// Configuration for the Datadog Traces encoder.
 ///
 /// This encoder converts trace events into Datadog's TracerPayload protobuf format and sends them
@@ -127,17 +134,19 @@ pub struct DatadogTraceConfiguration {
 }
 
 impl DatadogTraceConfiguration {
-    /// Creates a new `DatadogTraceConfiguration` from the given configuration.
-    pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
-        let mut trace_config: Self = config.as_typed()?;
-
+    /// Creates a new `DatadogTraceConfiguration` from the given native configuration.
+    pub fn from_native(native: &saluki_component_config::DatadogTracesEncoderConfig) -> Result<Self, GenericError> {
         let app_details = saluki_metadata::get_app_details();
-        trace_config.version = format!("agent-data-plane/{}", app_details.version().raw());
-
-        trace_config.apm_config = ApmConfig::from_configuration(config)?;
-        trace_config.otlp_traces = config.try_get_typed("otlp_config.traces")?.unwrap_or_default();
-
-        Ok(trace_config)
+        Ok(Self {
+            compressor_kind: compression_kind_str(native.compression.kind).to_owned(),
+            zstd_compressor_level: native.compression.zstd_level,
+            flush_timeout_secs: default_flush_timeout_secs(),
+            default_hostname: None,
+            version: format!("agent-data-plane/{}", app_details.version().raw()),
+            apm_config: ApmConfig::default(),
+            otlp_traces: TracesConfig::default(),
+            env: native.default_env.to_string(),
+        })
     }
 }
 
@@ -836,30 +845,15 @@ fn append_tags(target: &mut String, tags: &str) {
 mod tests {
     use datadog_protos::traces::AgentPayload;
     use protobuf::Message as _;
-    use saluki_config::ConfigurationLoader;
     use saluki_core::data_model::event::trace::{Span as DdSpan, Trace};
     use stringtheory::MetaString;
 
     use super::*;
     use crate::common::datadog::apm::ApmConfig;
     use crate::common::otlp::config::TracesConfig;
-    use crate::config::{DatadogRemapper, KEY_ALIASES};
 
-    async fn make_encoder(ets_enabled: bool) -> TraceEndpointEncoder {
-        let env_vars: Vec<(String, String)> = if ets_enabled {
-            vec![("APM_ERROR_TRACKING_STANDALONE_ENABLED".to_string(), "true".to_string())]
-        } else {
-            vec![]
-        };
-        let (cfg, _) = ConfigurationLoader::for_tests_with_provider_factory(
-            None,
-            Some(&env_vars),
-            false,
-            KEY_ALIASES,
-            DatadogRemapper::new,
-        )
-        .await;
-        let apm_config = ApmConfig::from_configuration(&cfg).expect("ApmConfig should deserialize");
+    fn make_encoder(ets_enabled: bool) -> TraceEndpointEncoder {
+        let apm_config = ApmConfig::with_error_tracking_standalone(ets_enabled);
         TraceEndpointEncoder::new(
             MetaString::from("test-host"),
             "0.0.0".to_string(),
@@ -905,7 +899,7 @@ mod tests {
 
     #[tokio::test]
     async fn ets_header_present_when_enabled() {
-        let encoder = make_encoder(true).await;
+        let encoder = make_encoder(true);
         let headers = encoder.additional_headers();
         assert_eq!(headers.len(), 1);
         assert_eq!(headers[0].0.as_str(), "x-datadog-error-tracking-standalone");
@@ -914,13 +908,13 @@ mod tests {
 
     #[tokio::test]
     async fn ets_header_absent_when_disabled() {
-        let encoder = make_encoder(false).await;
+        let encoder = make_encoder(false);
         assert!(encoder.additional_headers().is_empty());
     }
 
     #[tokio::test]
     async fn ets_chunk_tag_present_for_error_trace() {
-        let mut encoder = make_encoder(true).await;
+        let mut encoder = make_encoder(true);
         let trace = make_error_trace();
         let mut buf = Vec::new();
         encoder.encode(&trace, &mut buf).expect("encode should succeed");
@@ -944,7 +938,7 @@ mod tests {
 
     #[tokio::test]
     async fn ets_chunk_tag_absent_for_non_error_trace() {
-        let mut encoder = make_encoder(true).await;
+        let mut encoder = make_encoder(true);
         let trace = make_trace(); // no error
         let mut buf = Vec::new();
         encoder.encode(&trace, &mut buf).expect("encode should succeed");
@@ -959,7 +953,7 @@ mod tests {
 
     #[tokio::test]
     async fn ets_chunk_tag_absent_when_disabled() {
-        let mut encoder = make_encoder(false).await;
+        let mut encoder = make_encoder(false);
         let trace = make_trace();
         let mut buf = Vec::new();
         encoder.encode(&trace, &mut buf).expect("encode should succeed");

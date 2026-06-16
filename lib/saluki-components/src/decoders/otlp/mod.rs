@@ -4,7 +4,6 @@ use async_trait::async_trait;
 use otlp_protos::opentelemetry::proto::collector::trace::v1::ExportTraceServiceRequest;
 use prost::Message;
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
-use saluki_config::GenericConfiguration;
 use saluki_core::{
     components::{
         decoders::{Decoder, DecoderBuilder, DecoderContext},
@@ -13,7 +12,7 @@ use saluki_core::{
     data_model::{event::EventType, payload::PayloadType},
     topology::interconnect::EventBufferManager,
 };
-use saluki_error::{generic_error, ErrorContext as _, GenericError};
+use saluki_error::{generic_error, GenericError};
 use serde::Deserialize;
 use tokio::{
     select,
@@ -44,12 +43,14 @@ struct OtlpDecoderConfig {
 }
 
 impl OtlpDecoderConfiguration {
-    /// Creates a new `OtlpDecoderConfiguration` from the given configuration.
-    pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
-        let mut cfg: Self = config
-            .as_typed()
-            .error_context("Failed to load OTLP decoder configuration")?;
-        cfg.otlp_config.traces.apply_env_overrides(config)?;
+    /// Creates a new `OtlpDecoderConfiguration` from native configuration.
+    ///
+    /// The native OTLP config carries only `traces_enabled` for traces, so the internal traces
+    /// config is built from its defaults with `enabled` taken from native; all other traces fields
+    /// (sampler, interner size, etc.) retain their defaults.
+    pub fn from_native(native: &saluki_component_config::OtlpConfig) -> Result<Self, GenericError> {
+        let mut cfg = Self::default();
+        cfg.otlp_config.traces.enabled = native.traces_enabled;
         Ok(cfg)
     }
 }
@@ -179,30 +180,5 @@ impl Decoder for OtlpDecoder {
         debug!("OTLP decoder stopped.");
 
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod config_smoke {
-    use datadog_agent_config_testing::config_registry::structs;
-    use datadog_agent_config_testing::run_config_smoke_tests;
-    use serde_json::json;
-
-    use super::OtlpDecoderConfiguration;
-    use crate::config::{DatadogRemapper, KEY_ALIASES};
-
-    #[tokio::test]
-    async fn smoke_test() {
-        run_config_smoke_tests(
-            structs::OTLP_DECODER_CONFIGURATION,
-            &[],
-            json!({}),
-            |cfg| {
-                OtlpDecoderConfiguration::from_configuration(&cfg).expect("OtlpDecoderConfiguration should deserialize")
-            },
-            KEY_ALIASES,
-            DatadogRemapper::new,
-        )
-        .await
     }
 }

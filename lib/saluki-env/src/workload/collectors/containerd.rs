@@ -65,6 +65,26 @@ impl ContainerdMetadataCollector {
             health,
         })
     }
+
+    /// Creates a new `ContainerdMetadataCollector` from a natively-provided socket path.
+    ///
+    /// # Errors
+    ///
+    /// If the containerd gRPC client can't be created, or listing the namespaces in the containerd runtime fails, an
+    /// error will be returned.
+    pub async fn from_native(
+        socket_path: Option<std::path::PathBuf>, health: Health, tag_interner: GenericMapInterner,
+    ) -> Result<Self, GenericError> {
+        let client = ContainerdClient::from_native(socket_path).await?;
+        let watched_namespaces = client.list_namespaces().await?;
+
+        Ok(Self {
+            client,
+            watched_namespaces,
+            tag_interner,
+            health,
+        })
+    }
 }
 
 #[async_trait]

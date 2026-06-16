@@ -3,7 +3,6 @@
 use std::{future::Future, num::NonZeroUsize, time::Duration};
 
 use resource_accounting::{ComponentRegistry, MemoryBounds, MemoryBoundsBuilder};
-use saluki_config::GenericConfiguration;
 use saluki_context::{
     origin::{OriginTagCardinality, RawOrigin},
     tags::SharedTagSet,
@@ -34,6 +33,9 @@ use saluki_error::{generic_error, GenericError};
 use stringtheory::interning::GenericMapInterner;
 
 mod api;
+use agent_data_plane_config::WorkloadPrivateConfig;
+use datadog_agent_commons::ipc::client::RemoteAgentClient;
+
 use self::api::RemoteAgentWorkloadAPIWorker;
 
 mod collectors;
@@ -78,22 +80,21 @@ pub struct RemoteAgentWorkloadProvider {
 pub(crate) const WORKLOAD_HEALTH_PREFIX: &str = "env_provider.workload.";
 
 impl RemoteAgentWorkloadProvider {
-    /// Create a new `RemoteAgentWorkloadProvider` based on the given configuration, along with a [`Supervisor`] that
-    /// drives the aggregator and all collector workers.
+    /// Creates a new `RemoteAgentWorkloadProvider` from native configuration and a shared Datadog
+    /// Agent client.
     ///
-    /// # Errors
-    ///
-    /// If there is an issue with any of the provider configuration, or creating the underlying metadata collectors, an
-    /// error is returned.
-    pub async fn from_configuration(
-        config: &GenericConfiguration, component_registry: ComponentRegistry, health_registry: &HealthRegistry,
+    /// Remote Agent collectors (tagger, workloadmeta) reuse `client`; the containerd/cgroups
+    /// collectors and PID resolver are built from the native workload knobs.
+    pub async fn from_native(
+        client: RemoteAgentClient, workload: &WorkloadPrivateConfig, component_registry: ComponentRegistry,
+        health_registry: &HealthRegistry,
     ) -> Result<(Self, Supervisor), GenericError> {
         let mut component_registry = component_registry.get_or_create("remote-agent");
         let mut provider_bounds = component_registry.bounds_builder();
 
-        // Create our string interner which will get used primarily for tags, but also for any other long-ish lived strings.
-        let string_interner_size_bytes = config
-            .try_get_typed::<NonZeroUsize>("remote_agent_string_interner_size_bytes")?
+        let string_interner_size_bytes = workload
+            .string_interner_size_bytes
+            .and_then(NonZeroUsize::new)
             .unwrap_or(DEFAULT_STRING_INTERNER_SIZE_BYTES);
         let string_interner = GenericMapInterner::new(string_interner_size_bytes);
 
@@ -102,8 +103,6 @@ impl RemoteAgentWorkloadProvider {
             .firm()
             .with_fixed_amount("string interner", string_interner_size_bytes.get());
 
-        // Construct our metadata aggregator and any relevant metadata collectors based on the detected features we've
-        // been given.
         let aggregator_health = health_registry
             .register_component(format!("{WORKLOAD_HEALTH_PREFIX}remote_agent.aggregator"))
             .ok_or_else(|| {
@@ -116,72 +115,88 @@ impl RemoteAgentWorkloadProvider {
         let mut collector_bounds = provider_bounds.subcomponent("collectors");
         let mut collector_workers: Vec<MetadataCollectorWorker> = Vec::new();
 
-        // Add the containerd collector if the feature is available.
-        let feature_detector = FeatureDetector::automatic(config);
+        let feature_detector = FeatureDetector::automatic_native(workload.containerd_socket_path.clone());
+
         #[cfg(unix)]
         if feature_detector.is_feature_available(Feature::Containerd) {
+            let socket_path = workload.containerd_socket_path.clone();
             let cri_collector = build_collector("containerd", health_registry, &mut collector_bounds, |health| {
-                ContainerdMetadataCollector::from_configuration(config, health, string_interner.clone())
+                ContainerdMetadataCollector::from_native(socket_path, health, string_interner.clone())
             })
             .await?;
-
             collector_workers.push(MetadataCollectorWorker::new(cri_collector, operations_tx.clone()));
         }
 
-        // Add the cgroups collector if the feature if we're on Linux.
         #[cfg(target_os = "linux")]
         {
+            let proc_root = workload.container_proc_root.clone();
+            let cgroup_root = workload.container_cgroup_root.clone();
+            let feature_detector = feature_detector.clone();
             let cgroups_collector = build_collector("cgroups", health_registry, &mut collector_bounds, |health| {
-                CgroupsMetadataCollector::from_configuration(
-                    config,
-                    feature_detector.clone(),
+                CgroupsMetadataCollector::from_native(
+                    proc_root,
+                    cgroup_root,
+                    feature_detector,
                     health,
                     string_interner.clone(),
                 )
             })
             .await?;
-
             collector_workers.push(MetadataCollectorWorker::new(cgroups_collector, operations_tx.clone()));
         }
 
-        // Finally, add the Remote Agent collectors: one for the tagger, and one for workloadmeta.
-        let ra_tags_collector =
-            build_collector("remote-agent-tags", health_registry, &mut collector_bounds, |health| {
-                RemoteAgentTaggerMetadataCollector::from_configuration(config, health, string_interner.clone())
-            })
-            .await?;
-
+        let tags_client = client.clone();
+        let ra_tags_collector = build_collector(
+            "remote-agent-tags",
+            health_registry,
+            &mut collector_bounds,
+            |health| async {
+                Ok(RemoteAgentTaggerMetadataCollector::from_client(
+                    tags_client,
+                    health,
+                    string_interner.clone(),
+                ))
+            },
+        )
+        .await?;
         collector_workers.push(MetadataCollectorWorker::new(ra_tags_collector, operations_tx.clone()));
 
-        let ra_wmeta_collector =
-            build_collector("remote-agent-wmeta", health_registry, &mut collector_bounds, |health| {
-                RemoteAgentWorkloadMetadataCollector::from_configuration(config, health, string_interner.clone())
-            })
-            .await?;
-
+        let wmeta_client = client.clone();
+        let ra_wmeta_collector = build_collector(
+            "remote-agent-wmeta",
+            health_registry,
+            &mut collector_bounds,
+            |health| async {
+                Ok(RemoteAgentWorkloadMetadataCollector::from_client(
+                    wmeta_client,
+                    health,
+                    string_interner.clone(),
+                ))
+            },
+        )
+        .await?;
         collector_workers.push(MetadataCollectorWorker::new(ra_wmeta_collector, operations_tx));
 
-        // Create and attach the various metadata stores.
         let tag_store = TagStore::with_entity_limit(DEFAULT_TAG_STORE_ENTITY_LIMIT);
         let tags_querier = tag_store.querier();
-
         aggregator.add_store(tag_store);
 
         let external_data_store = ExternalDataStore::with_entity_limit(DEFAULT_EXTERNAL_DATA_STORE_ENTITY_LIMIT);
         let eds_resolver = external_data_store.resolver();
-
         aggregator.add_store(external_data_store);
 
-        let on_demand_pid_resolver =
-            OnDemandPIDResolver::from_configuration(config, feature_detector, string_interner)?;
+        let on_demand_pid_resolver = OnDemandPIDResolver::from_native(
+            workload.container_proc_root.clone(),
+            workload.container_cgroup_root.clone(),
+            feature_detector,
+            string_interner,
+        )?;
         let origin_resolver = OriginResolver::new(eds_resolver.clone());
 
-        // With the aggregator configured, update the memory bounds before handing it off to the supervisor.
         provider_bounds.with_subcomponent("aggregator", &aggregator);
 
         let api_worker = RemoteAgentWorkloadAPIWorker::from_state(tags_querier.clone(), eds_resolver);
 
-        // Build the workload supervisor.
         let mut supervisor = Supervisor::new("workload")?
             .with_restart_strategy(RestartStrategy::one_to_one().with_intensity_and_period(5, Duration::from_secs(30)));
         supervisor.add_worker(aggregator);

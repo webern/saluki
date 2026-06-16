@@ -1,9 +1,10 @@
 //! DogStatsD metric prefix and listener-side metric filter transform.
 
+use agent_data_plane_config_system::ScopedConfigHandle;
 use async_trait::async_trait;
 use metrics::{Counter, Gauge};
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
-use saluki_config::GenericConfiguration;
+use saluki_component_config::PrefixFilterConfig;
 use saluki_core::data_model::event::{metric::Metric, EventType};
 use saluki_core::{
     components::{
@@ -19,10 +20,7 @@ use serde::Deserialize;
 use tokio::select;
 use tracing::{debug, error};
 
-use crate::components::dogstatsd_filterlist::{
-    Blocklist, EffectiveFilterlist, METRIC_FILTERLIST_CONFIG_KEY, METRIC_FILTERLIST_MATCH_PREFIX_CONFIG_KEY,
-    STATSD_METRIC_BLOCKLIST_CONFIG_KEY, STATSD_METRIC_BLOCKLIST_MATCH_PREFIX_CONFIG_KEY,
-};
+use crate::components::dogstatsd_filterlist::{Blocklist, EffectiveFilterlist};
 
 const METRIC_FILTERLIST_SIZE_METRIC: &str = "metric_filterlist_size";
 const METRIC_FILTERLIST_UPDATES_METRIC: &str = "metric_filterlist_updates_total";
@@ -61,7 +59,7 @@ pub struct DogStatsDPrefixFilterConfiguration {
 
     #[serde(skip)]
     #[cfg_attr(test, derive_where(skip))]
-    configuration: Option<GenericConfiguration>,
+    dynamic_handle: Option<ScopedConfigHandle<PrefixFilterConfig>>,
 }
 
 fn default_metric_prefix_blocklist() -> Vec<String> {
@@ -91,11 +89,30 @@ fn default_metric_prefix_blocklist() -> Vec<String> {
 }
 
 impl DogStatsDPrefixFilterConfiguration {
-    /// Creates a new `DogStatsDPrefixFilterConfiguration` from the given configuration.
-    pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
-        let mut typed_config: DogStatsDPrefixFilterConfiguration = config.as_typed()?;
-        typed_config.configuration = Some(config.clone());
-        Ok(typed_config)
+    /// Creates a new `DogStatsDPrefixFilterConfiguration` from native configuration.
+    ///
+    /// The initial filterlist/blocklist are taken from `native`. Dynamic updates are delivered
+    /// through the typed [`ScopedConfigHandle`] attached via [`Self::with_dynamic_handle`]; absent a
+    /// handle, the built transform applies no runtime updates.
+    pub fn from_native(native: &PrefixFilterConfig) -> Result<Self, GenericError> {
+        Ok(Self {
+            metric_prefix: String::new(),
+            metric_prefix_blocklist: default_metric_prefix_blocklist(),
+            metric_filterlist: native.metric_filterlist.iter().map(|s| s.to_string()).collect(),
+            metric_filterlist_match_prefix: native.metric_filterlist_match_prefix,
+            metric_blocklist: native.metric_blocklist.iter().map(|s| s.to_string()).collect(),
+            metric_blocklist_match_prefix: native.metric_blocklist_match_prefix,
+            dynamic_handle: None,
+        })
+    }
+
+    /// Attaches the typed, scoped dynamic-configuration handle for this slice.
+    ///
+    /// The built transform watches this handle and applies refreshed prefix-filter configuration at
+    /// runtime, replacing the legacy raw-key configuration watchers.
+    pub fn with_dynamic_handle(mut self, handle: ScopedConfigHandle<PrefixFilterConfig>) -> Self {
+        self.dynamic_handle = Some(handle);
+        self
     }
 }
 
@@ -131,7 +148,7 @@ impl TransformBuilder for DogStatsDPrefixFilterConfiguration {
             matcher: Blocklist::default(),
             effective_filterlist,
             telemetry,
-            configuration: self.configuration.clone(),
+            dynamic_handle: self.dynamic_handle.clone(),
         };
         filter.sync_effective_blocklist(false);
 
@@ -192,7 +209,7 @@ struct DogStatsDPrefixFilter {
     matcher: Blocklist,
     effective_filterlist: EffectiveFilterlist,
     telemetry: FilterlistTelemetry,
-    configuration: Option<GenericConfiguration>,
+    dynamic_handle: Option<ScopedConfigHandle<PrefixFilterConfig>>,
 }
 
 impl DogStatsDPrefixFilter {
@@ -229,6 +246,15 @@ impl DogStatsDPrefixFilter {
         self.effective_filterlist
             .set_metric_blocklist_match_prefix(match_prefix);
         self.sync_effective_blocklist(count_update);
+    }
+
+    /// Applies a refreshed, fully-typed prefix-filter configuration delivered over the scoped handle.
+    fn apply_dynamic_update(&mut self, new_config: PrefixFilterConfig) {
+        debug!("Applying dynamic prefix-filter configuration update.");
+        self.update_metric_filterlist(new_config.metric_filterlist.iter().map(|s| s.to_string()).collect());
+        self.update_metric_filterlist_match_prefix(new_config.metric_filterlist_match_prefix);
+        self.update_metric_blocklist(new_config.metric_blocklist.iter().map(|s| s.to_string()).collect());
+        self.update_metric_blocklist_match_prefix(new_config.metric_blocklist_match_prefix);
     }
 
     fn process_metric(&self, metric: &mut Metric) -> bool {
@@ -281,12 +307,10 @@ impl Transform for DogStatsDPrefixFilter {
         let mut health = context.take_health_handle();
         health.mark_ready();
 
-        let config = self.configuration.as_ref().unwrap();
-        let mut filterlist_watcher = config.watch_for_updates(METRIC_FILTERLIST_CONFIG_KEY);
-        let mut filterlist_match_prefix_watcher = config.watch_for_updates(METRIC_FILTERLIST_MATCH_PREFIX_CONFIG_KEY);
-        let mut blocklist_watcher = config.watch_for_updates(STATSD_METRIC_BLOCKLIST_CONFIG_KEY);
-        let mut blocklist_match_prefix_watcher =
-            config.watch_for_updates(STATSD_METRIC_BLOCKLIST_MATCH_PREFIX_CONFIG_KEY);
+        // Dynamic updates arrive as a fully-typed `PrefixFilterConfig` over the scoped handle (the
+        // configuration system re-translates and routes only changed slices here). Absent a handle,
+        // the transform applies its static initial configuration with no runtime updates.
+        let mut handle = self.dynamic_handle.take();
 
         debug!("DogStatsD Prefix Filter transform started.");
 
@@ -308,28 +332,10 @@ impl Transform for DogStatsDPrefixFilter {
                     },
                     None => break,
                 },
-                (_, maybe_new_metric_filterlist) = filterlist_watcher.changed::<Vec<String>>() => {
-                    if let Some(new_filterlist) = maybe_new_metric_filterlist {
-                        debug!(?new_filterlist, "Updated metric filterlist.");
-                        self.update_metric_filterlist(new_filterlist);
-                    }
-                },
-                (_, maybe_new_filterlist_match_prefix) = filterlist_match_prefix_watcher.changed::<bool>() => {
-                    if let Some(new_match_prefix) = maybe_new_filterlist_match_prefix {
-                        debug!(new_match_prefix, "Updated metric filterlist match prefix.");
-                        self.update_metric_filterlist_match_prefix(new_match_prefix);
-                    }
-                },
-                (_, maybe_new_blocklist) = blocklist_watcher.changed::<Vec<String>>() => {
-                    if let Some(new_blocklist) = maybe_new_blocklist {
-                        debug!(?new_blocklist, "Updated metric blocklist.");
-                        self.update_metric_blocklist(new_blocklist);
-                    }
-                },
-                (_, maybe_new_blocklist_match_prefix) = blocklist_match_prefix_watcher.changed::<bool>() => {
-                    if let Some(new_match_prefix) = maybe_new_blocklist_match_prefix {
-                        debug!(new_match_prefix, "Updated metric blocklist match prefix.");
-                        self.update_metric_blocklist_match_prefix(new_match_prefix);
+                maybe_update = async { handle.as_mut().unwrap().changed().await }, if handle.is_some() => {
+                    match maybe_update {
+                        Some(new_config) => self.apply_dynamic_update(new_config),
+                        None => handle = None,
                     }
                 },
             }
@@ -344,8 +350,8 @@ impl Transform for DogStatsDPrefixFilter {
 #[cfg(test)]
 mod tests {
     use metrics::set_default_local_recorder;
-    use saluki_config::{dynamic::ConfigUpdate, ConfigurationLoader};
     use saluki_metrics::{test::TestRecorder, MetricsBuilder};
+    use stringtheory::MetaString;
 
     use super::*;
 
@@ -357,7 +363,7 @@ mod tests {
             matcher: Blocklist::default(),
             effective_filterlist: EffectiveFilterlist::default(),
             telemetry: FilterlistTelemetry::noop(),
-            configuration: None,
+            dynamic_handle: None,
         };
 
         let mut metric = Metric::gauge("bar", 1.0);
@@ -373,7 +379,7 @@ mod tests {
             matcher: Blocklist::default(),
             effective_filterlist: EffectiveFilterlist::default(),
             telemetry: FilterlistTelemetry::noop(),
-            configuration: None,
+            dynamic_handle: None,
         };
 
         let mut metric = Metric::gauge("barbar", 1.0);
@@ -389,7 +395,7 @@ mod tests {
             matcher: Blocklist::new(["foobar", "test"], false),
             effective_filterlist: EffectiveFilterlist::default(),
             telemetry: FilterlistTelemetry::noop(),
-            configuration: None,
+            dynamic_handle: None,
         };
 
         let mut metric = Metric::gauge("foobar", 1.0);
@@ -408,7 +414,7 @@ mod tests {
             matcher: Blocklist::new(["foo.bar", "test"], false),
             effective_filterlist: EffectiveFilterlist::default(),
             telemetry: FilterlistTelemetry::noop(),
-            configuration: None,
+            dynamic_handle: None,
         };
 
         let mut metric = Metric::gauge("bar", 1.0);
@@ -420,7 +426,7 @@ mod tests {
             matcher: Blocklist::default(),
             effective_filterlist: EffectiveFilterlist::default(),
             telemetry: FilterlistTelemetry::noop(),
-            configuration: None,
+            dynamic_handle: None,
         };
 
         let mut metric = Metric::gauge("foo", 1.0);
@@ -436,7 +442,7 @@ mod tests {
             matcher: Blocklist::new(["b", "test"], true),
             effective_filterlist: EffectiveFilterlist::default(),
             telemetry: FilterlistTelemetry::noop(),
-            configuration: None,
+            dynamic_handle: None,
         };
 
         // match prefix is true, "bar" has prefix "b"
@@ -456,7 +462,7 @@ mod tests {
             matcher: Blocklist::new(["fo", "test"], true),
             effective_filterlist: EffectiveFilterlist::default(),
             telemetry: FilterlistTelemetry::noop(),
-            configuration: None,
+            dynamic_handle: None,
         };
 
         // new_metric is "foo.bar", match prefix is true, "foo.bar" has prefix "fo"
@@ -464,17 +470,8 @@ mod tests {
         assert!(!filter.process_metric(&mut metric));
     }
 
-    #[tokio::test]
-    async fn test_metric_blocklist_dynamic_update() {
-        let (cfg, sender) = ConfigurationLoader::for_tests(Some(serde_json::json!({})), None, true).await;
-        let sender = sender.expect("sender should exist");
-        sender
-            .send(ConfigUpdate::Snapshot(serde_json::json!({})))
-            .await
-            .unwrap();
-
-        cfg.ready().await;
-
+    #[test]
+    fn test_metric_blocklist_dynamic_update() {
         let mut filter = DogStatsDPrefixFilter {
             metric_prefix: "".to_string(),
             metric_prefix_blocklist: vec![],
@@ -486,7 +483,7 @@ mod tests {
                 false,
             ),
             telemetry: FilterlistTelemetry::noop(),
-            configuration: Some(cfg.clone()),
+            dynamic_handle: None,
         };
 
         let mut metric = Metric::gauge("foobar", 1.0);
@@ -496,27 +493,13 @@ mod tests {
         assert!(filter.process_metric(&mut metric));
         assert_eq!(metric.context().name(), "foo");
 
-        let mut blocklist_watcher = cfg.watch_for_updates("statsd_metric_blocklist");
-
-        sender
-            .send(ConfigUpdate::Partial {
-                key: "statsd_metric_blocklist".to_string(),
-                value: serde_json::json!(["foo".to_string()]),
-            })
-            .await
-            .unwrap();
-
-        let (_, new) = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            blocklist_watcher.changed::<Vec<String>>(),
-        )
-        .await
-        .expect("timed out waiting for statsd_metric_blocklist update");
-
-        assert_eq!(new, Some(vec!["foo".to_string()]));
-
-        // Apply the dynamic update to the filter under test.
-        filter.update_metric_blocklist(new.unwrap());
+        // A typed dynamic update swaps the blocklist to ["foo"].
+        filter.apply_dynamic_update(PrefixFilterConfig {
+            metric_filterlist: Vec::new(),
+            metric_filterlist_match_prefix: false,
+            metric_blocklist: vec![MetaString::from("foo")],
+            metric_blocklist_match_prefix: false,
+        });
 
         // "foobar" is taken off the blocklist
         let mut metric = Metric::gauge("foobar", 1.0);
@@ -527,83 +510,40 @@ mod tests {
         let mut metric = Metric::gauge("foo", 1.0);
         assert!(!filter.process_metric(&mut metric));
 
-        let mut metric_filterlist_watcher = cfg.watch_for_updates("metric_filterlist");
-        sender
-            .send(ConfigUpdate::Partial {
-                key: "metric_filterlist".to_string(),
-                value: serde_json::json!(["baz".to_string()]),
-            })
-            .await
-            .unwrap();
-
-        let (_, new) = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            metric_filterlist_watcher.changed::<Vec<String>>(),
-        )
-        .await
-        .expect("timed out waiting for metric_filterlist update");
-
-        assert_eq!(new, Some(vec!["baz".to_string()]));
-
-        // Apply the dynamic update to the filter under test.
-        filter.update_metric_filterlist(new.unwrap());
+        // A further typed update adds "baz" to the metric filterlist (keeping the blocklist).
+        filter.apply_dynamic_update(PrefixFilterConfig {
+            metric_filterlist: vec![MetaString::from("baz")],
+            metric_filterlist_match_prefix: false,
+            metric_blocklist: vec![MetaString::from("foo")],
+            metric_blocklist_match_prefix: false,
+        });
 
         // "baz" is added to the filterlist
         let mut metric = Metric::gauge("baz", 1.0);
         assert!(!filter.process_metric(&mut metric));
     }
 
-    #[tokio::test]
-    async fn test_metric_filterlist_match_prefix_dynamic_update_is_applied() {
-        let (cfg, sender) = ConfigurationLoader::for_tests(
-            Some(serde_json::json!({
-                "metric_filterlist": ["foo"],
-                "metric_filterlist_match_prefix": false
-            })),
-            None,
-            true,
-        )
-        .await;
-        let sender = sender.expect("sender should exist");
-
-        sender
-            .send(ConfigUpdate::Snapshot(serde_json::json!({})))
-            .await
-            .unwrap();
-        cfg.ready().await;
-
+    #[test]
+    fn test_metric_filterlist_match_prefix_dynamic_update_is_applied() {
         let mut filter = DogStatsDPrefixFilter {
             metric_prefix: "".to_string(),
             metric_prefix_blocklist: vec![],
             matcher: Blocklist::new(["foo"], false),
             effective_filterlist: EffectiveFilterlist::new(vec!["foo".to_string()], false, Vec::new(), false),
             telemetry: FilterlistTelemetry::noop(),
-            configuration: Some(cfg.clone()),
+            dynamic_handle: None,
         };
 
         let mut metric = Metric::gauge("foo.bar", 1.0);
         assert!(filter.process_metric(&mut metric));
 
-        let mut match_prefix_watcher = cfg.watch_for_updates("metric_filterlist_match_prefix");
-        sender
-            .send(ConfigUpdate::Partial {
-                key: "metric_filterlist_match_prefix".to_string(),
-                value: serde_json::json!(true),
-            })
-            .await
-            .unwrap();
-
-        let (_, new) = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            match_prefix_watcher.changed::<bool>(),
-        )
-        .await
-        .expect("timed out waiting for metric_filterlist_match_prefix update");
-
-        assert_eq!(new, Some(true));
-
-        // Apply the dynamic update to the filter under test.
-        filter.update_metric_filterlist_match_prefix(new.unwrap());
+        // A typed dynamic update enables match-prefix on the filterlist.
+        filter.apply_dynamic_update(PrefixFilterConfig {
+            metric_filterlist: vec![MetaString::from("foo")],
+            metric_filterlist_match_prefix: true,
+            metric_blocklist: Vec::new(),
+            metric_blocklist_match_prefix: false,
+        });
 
         let mut metric = Metric::gauge("foo.bar", 1.0);
         assert!(!filter.process_metric(&mut metric));
@@ -627,7 +567,7 @@ mod tests {
                 false,
             ),
             telemetry,
-            configuration: None,
+            dynamic_handle: None,
         };
 
         filter.sync_effective_blocklist(false);
@@ -663,7 +603,7 @@ mod tests {
             matcher: Blocklist::default(),
             effective_filterlist: EffectiveFilterlist::new(vec!["foo".to_string()], true, Vec::new(), false),
             telemetry,
-            configuration: None,
+            dynamic_handle: None,
         };
 
         filter.sync_effective_blocklist(false);
@@ -688,7 +628,7 @@ mod tests {
             matcher: Blocklist::new(["foo", "bar"], true),
             effective_filterlist: EffectiveFilterlist::default(),
             telemetry,
-            configuration: None,
+            dynamic_handle: None,
         };
 
         let mut exact_metric = Metric::gauge("foo", 1.0);

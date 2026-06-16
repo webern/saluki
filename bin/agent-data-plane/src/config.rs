@@ -1,3 +1,8 @@
+// Transitional: `DataPlaneConfiguration` is superseded by `SalukiConfiguration::data_plane`
+// (the native gating/control-surface model). It is retained for the bootstrap-phase reads in
+// the superseded `RemoteAgentBootstrap` path and removed once that path is deleted.
+#![allow(dead_code)]
+
 use saluki_config::GenericConfiguration;
 use saluki_error::GenericError;
 use saluki_io::net::ListenAddress;
@@ -7,8 +12,6 @@ use saluki_io::net::ListenAddress;
 pub struct DataPlaneConfiguration {
     enabled: bool,
     standalone_mode: bool,
-    use_new_config_stream_endpoint: bool,
-    remote_agent_enabled: bool,
     api_listen_address: ListenAddress,
     secure_api_listen_address: ListenAddress,
     checks: DataPlaneChecksConfiguration,
@@ -33,10 +36,6 @@ impl DataPlaneConfiguration {
         Ok(Self {
             enabled: config.try_get_typed("data_plane.enabled")?.unwrap_or(false),
             standalone_mode: config.try_get_typed("data_plane.standalone_mode")?.unwrap_or(false),
-            use_new_config_stream_endpoint: config
-                .try_get_typed("data_plane.use_new_config_stream_endpoint")?
-                .unwrap_or(true),
-            remote_agent_enabled: config.try_get_typed("data_plane.remote_agent_enabled")?.unwrap_or(true),
             api_listen_address: config
                 .try_get_typed("data_plane.api_listen_address")?
                 .unwrap_or_else(|| ListenAddress::any_tcp(5100)),
@@ -57,16 +56,6 @@ impl DataPlaneConfiguration {
     /// Returns `true` if the data plane is running in standalone mode.
     pub const fn standalone_mode(&self) -> bool {
         self.standalone_mode
-    }
-
-    /// Returns `true` if the new config stream endpoint should be used.
-    pub const fn use_new_config_stream_endpoint(&self) -> bool {
-        self.use_new_config_stream_endpoint
-    }
-
-    /// Returns `true` if the data plane should register as a remote agent.
-    pub const fn remote_agent_enabled(&self) -> bool {
-        self.remote_agent_enabled
     }
 
     /// Returns a reference to the API listen address
@@ -301,6 +290,9 @@ impl DataPlaneOtlpProxyConfiguration {
     }
 
     /// Returns the OTLP gRPC endpoint on the Core Agent to proxy signals to.
+    ///
+    /// Transitional: superseded by the OTLP proxy config read by the configuration system.
+    #[allow(dead_code)]
     pub fn core_agent_otlp_grpc_endpoint(&self) -> &str {
         &self.core_agent_otlp_grpc_endpoint
     }
@@ -311,11 +303,17 @@ impl DataPlaneOtlpProxyConfiguration {
     }
 
     /// Returns `true` if the OTLP metrics should be proxied to the Core Agent.
+    ///
+    /// Transitional: superseded by the OTLP proxy config read by the configuration system.
+    #[allow(dead_code)]
     pub const fn proxy_metrics(&self) -> bool {
         self.proxy_metrics
     }
 
     /// Returns `true` if the OTLP logs should be proxied to the Core Agent.
+    ///
+    /// Transitional: superseded by the OTLP proxy config read by the configuration system.
+    #[allow(dead_code)]
     pub const fn proxy_logs(&self) -> bool {
         self.proxy_logs
     }

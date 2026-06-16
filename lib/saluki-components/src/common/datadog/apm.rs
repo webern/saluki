@@ -1,9 +1,5 @@
-use saluki_config::GenericConfiguration;
-use saluki_error::GenericError;
 use serde::Deserialize;
 use stringtheory::MetaString;
-
-use super::obfuscation::ObfuscationConfig;
 
 const fn default_target_traces_per_second() -> f64 {
     10.0
@@ -77,35 +73,6 @@ impl Default for RareSamplerConfig {
             cardinality: default_rare_sampler_cardinality(),
         }
     }
-}
-
-/// APM configuration.
-///
-/// This configuration mirrors the Agent's trace agent configuration..
-#[derive(Clone, Debug, Deserialize)]
-struct ApmConfiguration {
-    #[serde(default)]
-    apm_config: ApmConfig,
-
-    /// Enables the rare sampler. This needs to live up here rather than nested
-    /// within `apm_config` so that we can remap the environment variable path
-    /// using the ConfigurationLoader::with_key_aliases.
-    #[serde(default = "default_rare_sampler_enabled", rename = "apm_enable_rare_sampler")]
-    enable_rare_sampler: bool,
-
-    /// Enables Error Tracking Standalone mode. Lives here (rather than nested within `apm_config`)
-    /// so that the env var path (`DD_APM_ERROR_TRACKING_STANDALONE_ENABLED` → `apm_error_tracking_standalone_enabled`)
-    /// can be remapped via ConfigurationLoader::with_key_aliases.
-    #[serde(
-        default = "default_error_tracking_standalone_enabled",
-        rename = "apm_error_tracking_standalone_enabled"
-    )]
-    enable_error_tracking_standalone: bool,
-
-    /// Obfuscation config read from flat `apm_obfuscation_*` keys.
-    /// KEY_ALIASES in `crate::config` bridge the YAML nested paths to these flat keys.
-    #[serde(default, flatten)]
-    obfuscation: ObfuscationConfig,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -209,22 +176,20 @@ pub struct ApmConfig {
 
     #[serde(default)]
     rare_sampler: RareSamplerConfig,
-
-    /// Obfuscation configuration for trace data.
-    ///
-    /// Populated from `ApmConfiguration.obfuscation` in `from_configuration`; not read from serde directly.
-    #[serde(skip)]
-    obfuscation: ObfuscationConfig,
 }
 
 impl ApmConfig {
-    pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
-        let wrapper = config.as_typed::<ApmConfiguration>()?;
-        let mut apm_config = wrapper.apm_config;
-        apm_config.enable_rare_sampler = wrapper.enable_rare_sampler;
-        apm_config.error_tracking_standalone = wrapper.enable_error_tracking_standalone;
-        apm_config.obfuscation = wrapper.obfuscation;
-        Ok(apm_config)
+    /// Creates an `ApmConfig` with defaults, overriding error-tracking-standalone mode.
+    ///
+    /// Test-only helper for exercising the encoder/transform behavior that depends on the
+    /// `#[serde(skip)]` `error_tracking_standalone` field without routing through configuration
+    /// parsing.
+    #[cfg(test)]
+    pub(crate) fn with_error_tracking_standalone(enabled: bool) -> Self {
+        Self {
+            error_tracking_standalone: enabled,
+            ..Self::default()
+        }
     }
 
     /// Returns the target traces per second for priority sampling.
@@ -308,11 +273,6 @@ impl ApmConfig {
     pub const fn rare_sampler_cardinality(&self) -> usize {
         self.rare_sampler.cardinality
     }
-
-    /// Returns the obfuscation configuration.
-    pub fn obfuscation(&self) -> &ObfuscationConfig {
-        &self.obfuscation
-    }
 }
 
 impl Default for ApmConfig {
@@ -330,113 +290,6 @@ impl Default for ApmConfig {
             hostname: MetaString::default(),
             enable_rare_sampler: default_rare_sampler_enabled(),
             rare_sampler: RareSamplerConfig::default(),
-            obfuscation: ObfuscationConfig::default(),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use saluki_config::ConfigurationLoader;
-
-    use super::*;
-    use crate::config::{DatadogRemapper, KEY_ALIASES};
-
-    async fn apm_config_from(
-        file_values: Option<serde_json::Value>, env_vars: Option<&[(String, String)]>,
-    ) -> ApmConfig {
-        let (cfg, _) = ConfigurationLoader::for_tests_with_provider_factory(
-            file_values,
-            env_vars,
-            false,
-            KEY_ALIASES,
-            DatadogRemapper::new,
-        )
-        .await;
-        ApmConfig::from_configuration(&cfg).expect("ApmConfig should deserialize")
-    }
-
-    #[tokio::test]
-    async fn rare_sampler_disabled_by_default() {
-        let config = apm_config_from(None, None).await;
-        assert!(!config.rare_sampler_enabled());
-    }
-
-    #[tokio::test]
-    async fn rare_sampler_enabled_via_yaml() {
-        let config = apm_config_from(
-            Some(serde_json::json!({ "apm_config": { "enable_rare_sampler": true } })),
-            None,
-        )
-        .await;
-        assert!(config.rare_sampler_enabled());
-    }
-
-    #[tokio::test]
-    async fn rare_sampler_enabled_via_env_var() {
-        let env_vars = vec![("APM_ENABLE_RARE_SAMPLER".to_string(), "true".to_string())];
-        let config = apm_config_from(None, Some(&env_vars)).await;
-        assert!(config.rare_sampler_enabled());
-    }
-
-    #[tokio::test]
-    async fn rare_sampler_env_var_overrides_yaml() {
-        let env_vars = vec![("APM_ENABLE_RARE_SAMPLER".to_string(), "true".to_string())];
-        let config = apm_config_from(
-            Some(serde_json::json!({ "apm_config": { "enable_rare_sampler": false } })),
-            Some(&env_vars),
-        )
-        .await;
-        assert!(config.rare_sampler_enabled());
-    }
-
-    #[tokio::test]
-    async fn ets_disabled_by_default() {
-        let config = apm_config_from(None, None).await;
-        assert!(!config.error_tracking_standalone_enabled());
-    }
-
-    #[tokio::test]
-    async fn ets_enabled_via_yaml() {
-        let config = apm_config_from(
-            Some(serde_json::json!({ "apm_config": { "error_tracking_standalone": { "enabled": true } } })),
-            None,
-        )
-        .await;
-        assert!(config.error_tracking_standalone_enabled());
-    }
-
-    #[tokio::test]
-    async fn ets_enabled_via_env_var() {
-        let env_vars = vec![("APM_ERROR_TRACKING_STANDALONE_ENABLED".to_string(), "true".to_string())];
-        let config = apm_config_from(None, Some(&env_vars)).await;
-        assert!(config.error_tracking_standalone_enabled());
-    }
-
-    #[tokio::test]
-    async fn ets_env_var_overrides_yaml() {
-        let env_vars = vec![("APM_ERROR_TRACKING_STANDALONE_ENABLED".to_string(), "true".to_string())];
-        let config = apm_config_from(
-            Some(serde_json::json!({ "apm_config": { "error_tracking_standalone": { "enabled": false } } })),
-            Some(&env_vars),
-        )
-        .await;
-        assert!(config.error_tracking_standalone_enabled());
-    }
-
-    #[tokio::test]
-    async fn rare_sampler_tuning_via_yaml() {
-        let config = apm_config_from(
-            Some(serde_json::json!({
-                "apm_config": {
-                    "rare_sampler": { "tps": 10, "cooldown": 60, "cardinality": 100 }
-                }
-            })),
-            None,
-        )
-        .await;
-        assert_eq!(config.rare_sampler_tps(), 10.0);
-        assert_eq!(config.rare_sampler_cooldown_period_secs(), 60.0);
-        assert_eq!(config.rare_sampler_cardinality(), 100);
     }
 }

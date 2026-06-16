@@ -4,7 +4,6 @@ use facet::Facet;
 use http::{uri::PathAndQuery, HeaderValue, Method, Uri};
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
 use saluki_common::iter::ReusableDeduplicator;
-use saluki_config::GenericConfiguration;
 use saluki_context::tags::Tag;
 use saluki_core::{
     components::{encoders::*, ComponentContext},
@@ -42,6 +41,14 @@ const fn default_zstd_compressor_level() -> i32 {
     3
 }
 
+/// Maps a native compression kind to the compressor kind string used by `CompressionScheme`.
+fn compression_kind_str(kind: saluki_component_config::CompressionKind) -> &'static str {
+    match kind {
+        saluki_component_config::CompressionKind::Zstd => "zstd",
+        saluki_component_config::CompressionKind::Zlib => "zlib",
+    }
+}
+
 /// Datadog Logs incremental encoder.
 #[derive(Deserialize, Debug, Facet)]
 #[cfg_attr(test, derive(PartialEq, serde::Serialize))]
@@ -62,9 +69,12 @@ pub struct DatadogLogsConfiguration {
 }
 
 impl DatadogLogsConfiguration {
-    /// Creates a new `DatadogLogsConfiguration` from the given configuration.
-    pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
-        Ok(config.as_typed()?)
+    /// Creates a new `DatadogLogsConfiguration` from the given native configuration.
+    pub fn from_native(native: &saluki_component_config::DatadogLogsEncoderConfig) -> Result<Self, GenericError> {
+        Ok(Self {
+            compressor_kind: compression_kind_str(native.compression.kind).to_owned(),
+            zstd_compressor_level: native.compression.zstd_level,
+        })
     }
 }
 

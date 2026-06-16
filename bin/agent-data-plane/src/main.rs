@@ -99,6 +99,13 @@ async fn main() -> Result<(), GenericError> {
     #[cfg(feature = "antithesis")]
     antithesis_sdk::assert_reachable!("agent-data-plane completed bootstrap", &serde_json::json!({}));
 
+    // Inputs for the configuration system's startup seam (the `run` subcommand). The config system
+    // owns all raw configuration loading; the binary passes only these local source controls.
+    let bootstrap_inputs = agent_data_plane_config_system::BootstrapInputs {
+        config_file_path: Some(bootstrap_config_path),
+        env_var_prefix: PlatformSettings::get_env_var_prefix(),
+    };
+
     // Run the given subcommand. The bootstrap supervisor is forwarded by value; only the long-lived `run`
     // subcommand actually drives it (it is added as a child of the internal supervisor inside
     // `handle_run_command`). All other subcommands drop it on entry.
@@ -106,6 +113,7 @@ async fn main() -> Result<(), GenericError> {
         cli.action,
         started,
         bootstrap_config,
+        bootstrap_inputs,
         &mut bootstrap_guard,
         bootstrap_supervisor,
     )
@@ -135,7 +143,8 @@ fn parse_metrics_level(config: &GenericConfiguration) -> Result<Level, GenericEr
 }
 
 async fn run_inner(
-    action: Action, started: Instant, bootstrap_config: GenericConfiguration, bootstrap_guard: &mut BootstrapGuard,
+    action: Action, started: Instant, bootstrap_config: GenericConfiguration,
+    bootstrap_inputs: agent_data_plane_config_system::BootstrapInputs, bootstrap_guard: &mut BootstrapGuard,
     bootstrap_supervisor: Supervisor,
 ) -> Result<Option<i32>, GenericError> {
     match action {
@@ -149,17 +158,31 @@ async fn run_inner(
                 }
             }
 
-            let exit_code =
-                match handle_run_command(started, bootstrap_config, bootstrap_guard, bootstrap_supervisor).await {
-                    Ok(()) => {
-                        info!("Agent Data Plane stopped.");
-                        None
+            // Resolve the runtime configuration via the configuration system, then run with typed
+            // inputs. No `GenericConfiguration` is threaded through the run command.
+            let service_names = crate::internal::remote_agent::remote_agent_service_names();
+            let exit_code = match RuntimeShell::resolve(bootstrap_inputs, service_names, bootstrap_guard).await {
+                Ok(Some(shell)) => {
+                    match handle_run_command(started, shell, bootstrap_guard, bootstrap_supervisor).await {
+                        Ok(()) => {
+                            info!("Agent Data Plane stopped.");
+                            None
+                        }
+                        Err(e) => {
+                            error!("{:?}", e);
+                            Some(1)
+                        }
                     }
-                    Err(e) => {
-                        error!("{:?}", e);
-                        Some(1)
-                    }
-                };
+                }
+                Ok(None) => {
+                    info!("Agent Data Plane stopped.");
+                    None
+                }
+                Err(e) => {
+                    error!("{:?}", e);
+                    Some(1)
+                }
+            };
 
             // Remove the PID file, if configured.
             if let Some(pid_file) = &cmd.pid_file {

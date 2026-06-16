@@ -138,6 +138,49 @@ impl HistogramConfiguration {
         }
     }
 
+    /// Creates a new `HistogramConfiguration` from native plain-data parts.
+    ///
+    /// The native `statistics` list mixes aggregate names (`count`, `sum`, `min`, `max`, `avg`,
+    /// `median`) and percentiles expressed in quantile form (for example `0.95`). They are parsed
+    /// using the same rules as the configuration-based path.
+    pub fn from_native_parts(
+        statistics: &[MetaString], copy_to_distribution: bool, copy_to_distribution_prefix: String,
+    ) -> Result<Self, String> {
+        let mut parsed = Vec::with_capacity(statistics.len());
+
+        for stat in statistics {
+            match stat.as_ref() {
+                "count" => parsed.push(HistogramStatistic::Count),
+                "sum" => parsed.push(HistogramStatistic::Sum),
+                "min" => parsed.push(HistogramStatistic::Minimum),
+                "max" => parsed.push(HistogramStatistic::Maximum),
+                "avg" => parsed.push(HistogramStatistic::Average),
+                "median" => parsed.push(HistogramStatistic::Median),
+                other => {
+                    // Anything that isn't a known aggregate name is treated as a percentile
+                    // expressed in quantile form, matching the configuration-based path.
+                    let quantile = other
+                        .parse::<f64>()
+                        .map_err(|_| format!("Unknown histogram aggregate or invalid percentile: {}", other))?;
+                    if !(0.0..=1.0).contains(&quantile) {
+                        return Err(format!("Percentile out of range: {}", other));
+                    }
+
+                    let percentile = (quantile * 100.0 + 0.5) as u32;
+                    let quantile = f64::from(percentile) / 100.0;
+                    let suffix = format!("{}percentile", percentile).into();
+                    parsed.push(HistogramStatistic::Percentile { q: quantile, suffix });
+                }
+            }
+        }
+
+        Ok(Self {
+            statistics: parsed,
+            copy_to_distribution,
+            copy_to_distribution_prefix,
+        })
+    }
+
     /// Returns the configured aggregate statistics to calculate.
     pub fn statistics(&self) -> &[HistogramStatistic] {
         &self.statistics

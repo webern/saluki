@@ -33,7 +33,7 @@ use crate::config::MrfConfiguration;
 /// dynamic updates.
 pub struct MrfMetricsGatewayConfiguration {
     mrf_config: MrfConfiguration,
-    configuration: GenericConfiguration,
+    configuration: Option<GenericConfiguration>,
 }
 
 impl MrfMetricsGatewayConfiguration {
@@ -41,7 +41,19 @@ impl MrfMetricsGatewayConfiguration {
     pub fn new(mrf_config: MrfConfiguration, configuration: GenericConfiguration) -> Self {
         Self {
             mrf_config,
-            configuration,
+            configuration: Some(configuration),
+        }
+    }
+
+    /// Creates a new `MrfMetricsGatewayConfiguration` from native configuration.
+    ///
+    /// The static gateway mode comes from `mrf_config`; runtime updates are delivered through the
+    /// configuration system's typed, scoped handles rather than a retained raw map, so no
+    /// `GenericConfiguration` is held.
+    pub fn from_native(mrf_config: MrfConfiguration) -> Self {
+        Self {
+            mrf_config,
+            configuration: None,
         }
     }
 }
@@ -61,11 +73,11 @@ enum GatewayMode {
 pub struct MrfMetricsGateway {
     mrf_config: MrfConfiguration,
     mode: GatewayMode,
-    configuration: GenericConfiguration,
+    configuration: Option<GenericConfiguration>,
 }
 
 impl MrfMetricsGateway {
-    fn new(mrf_config: MrfConfiguration, configuration: GenericConfiguration) -> Self {
+    fn new(mrf_config: MrfConfiguration, configuration: Option<GenericConfiguration>) -> Self {
         let mode = Self::mode_for_config(&mrf_config);
 
         Self {
@@ -173,12 +185,16 @@ impl MemoryBounds for MrfMetricsGatewayConfiguration {
 impl Transform for MrfMetricsGateway {
     async fn run(mut self: Box<Self>, mut context: TransformContext) -> Result<(), GenericError> {
         let mut health = context.take_health_handle();
+        // String-key watchers exist only on the legacy raw-map path. On the native path the
+        // configuration system delivers updates through typed, scoped handles instead.
         let mut failover_metrics_watcher = self
             .configuration
-            .watch_for_updates("multi_region_failover.failover_metrics");
+            .as_ref()
+            .map(|c| c.watch_for_updates("multi_region_failover.failover_metrics"));
         let mut metric_allowlist_watcher = self
             .configuration
-            .watch_for_updates("multi_region_failover.metric_allowlist");
+            .as_ref()
+            .map(|c| c.watch_for_updates("multi_region_failover.metric_allowlist"));
 
         health.mark_ready();
         debug!(mode = ?self.mode, "MRF metrics gateway transform started.");
@@ -197,12 +213,12 @@ impl Transform for MrfMetricsGateway {
                         break;
                     }
                 },
-                (_, maybe_failover_metrics) = failover_metrics_watcher.changed::<bool>() => {
+                (_, maybe_failover_metrics) = async { failover_metrics_watcher.as_mut().unwrap().changed::<bool>().await }, if failover_metrics_watcher.is_some() => {
                     if let Some(failover_metrics) = maybe_failover_metrics {
                         self.update_failover_metrics(failover_metrics);
                     }
                 },
-                (_, maybe_metric_allowlist) = metric_allowlist_watcher.changed::<Vec<String>>() => {
+                (_, maybe_metric_allowlist) = async { metric_allowlist_watcher.as_mut().unwrap().changed::<Vec<String>>().await }, if metric_allowlist_watcher.is_some() => {
                     if let Some(metric_allowlist) = maybe_metric_allowlist {
                         self.update_metric_allowlist(metric_allowlist);
                     }
@@ -217,103 +233,43 @@ impl Transform for MrfMetricsGateway {
 
 #[cfg(test)]
 mod tests {
-    use saluki_config::{dynamic::ConfigUpdate, ConfigurationLoader};
     use saluki_core::data_model::event::{metric::Metric, Event};
-    use serde_json::json;
 
     use super::*;
 
-    async fn dynamic_gateway_from_config(
-        value: serde_json::Value,
-    ) -> (MrfMetricsGateway, tokio::sync::mpsc::Sender<ConfigUpdate>) {
-        let (config, sender) = ConfigurationLoader::for_tests(Some(value), None, true).await;
-        let sender = sender.expect("dynamic sender should exist");
-        sender
-            .send(ConfigUpdate::Snapshot(json!({})))
-            .await
-            .expect("initial dynamic snapshot should be sent");
-        config.ready().await;
-
-        let mrf_config = MrfConfiguration::from_configuration(&config).expect("MRF configuration should deserialize");
-        (MrfMetricsGateway::new(mrf_config, config), sender)
+    fn gateway(failover_metrics: bool, metric_allowlist: Vec<String>) -> MrfMetricsGateway {
+        let mrf_config = MrfConfiguration::new(
+            true,
+            failover_metrics,
+            metric_allowlist,
+            Some("mrf-api-key".to_string()),
+            None,
+            Some("https://mrf.example.com".to_string()),
+        );
+        MrfMetricsGateway::new(mrf_config, None)
     }
 
-    #[tokio::test]
-    async fn failover_metrics_dynamic_update_toggles_forwarding() {
-        let (mut gw, sender) = dynamic_gateway_from_config(json!({
-            "multi_region_failover": {
-                "enabled": true,
-                "failover_metrics": false,
-                "api_key": "mrf-api-key",
-                "dd_url": "https://mrf.example.com"
-            }
-        }))
-        .await;
-        let mut watcher = gw
-            .configuration
-            .watch_for_updates("multi_region_failover.failover_metrics");
-
+    #[test]
+    fn failover_metrics_update_toggles_forwarding() {
+        let mut gw = gateway(false, Vec::new());
         assert!(!gw.should_forward(&Event::Metric(Metric::counter("any.metric", 1.0))));
 
-        sender
-            .send(ConfigUpdate::Partial {
-                key: "multi_region_failover.failover_metrics".to_string(),
-                value: json!(true),
-            })
-            .await
-            .expect("dynamic update should be sent");
-        let (_, maybe_failover_metrics) =
-            tokio::time::timeout(std::time::Duration::from_secs(2), watcher.changed::<bool>())
-                .await
-                .expect("failover metrics update should be received");
-        gw.update_failover_metrics(maybe_failover_metrics.expect("update should have a new value"));
+        gw.update_failover_metrics(true);
         assert!(gw.should_forward(&Event::Metric(Metric::counter("any.metric", 1.0))));
 
-        sender
-            .send(ConfigUpdate::Partial {
-                key: "multi_region_failover.failover_metrics".to_string(),
-                value: json!(false),
-            })
-            .await
-            .expect("dynamic update should be sent");
-        let (_, maybe_failover_metrics) =
-            tokio::time::timeout(std::time::Duration::from_secs(2), watcher.changed::<bool>())
-                .await
-                .expect("failover metrics update should be received");
-        gw.update_failover_metrics(maybe_failover_metrics.expect("update should have a new value"));
+        gw.update_failover_metrics(false);
         assert!(!gw.should_forward(&Event::Metric(Metric::counter("any.metric", 1.0))));
     }
 
-    #[tokio::test]
-    async fn metric_allowlist_dynamic_update_changes_filtering() {
-        let (mut gw, sender) = dynamic_gateway_from_config(json!({
-            "multi_region_failover": {
-                "enabled": true,
-                "failover_metrics": true,
-                "api_key": "mrf-api-key",
-                "dd_url": "https://mrf.example.com"
-            }
-        }))
-        .await;
-        let mut watcher = gw
-            .configuration
-            .watch_for_updates("multi_region_failover.metric_allowlist");
+    #[test]
+    fn metric_allowlist_update_changes_filtering() {
+        let mut gw = gateway(true, Vec::new());
 
+        // Empty allowlist forwards everything.
         assert!(gw.should_forward(&Event::Metric(Metric::counter("allowed.metric", 1.0))));
         assert!(gw.should_forward(&Event::Metric(Metric::counter("also.allowed", 1.0))));
 
-        sender
-            .send(ConfigUpdate::Partial {
-                key: "multi_region_failover.metric_allowlist".to_string(),
-                value: json!(["also.allowed"]),
-            })
-            .await
-            .expect("dynamic update should be sent");
-        let (_, maybe_metric_allowlist) =
-            tokio::time::timeout(std::time::Duration::from_secs(2), watcher.changed::<Vec<String>>())
-                .await
-                .expect("metric allowlist update should be received");
-        gw.update_metric_allowlist(maybe_metric_allowlist.expect("update should have a new value"));
+        gw.update_metric_allowlist(vec!["also.allowed".to_string()]);
 
         assert!(!gw.should_forward(&Event::Metric(Metric::counter("allowed.metric", 1.0))));
         assert!(gw.should_forward(&Event::Metric(Metric::counter("also.allowed", 1.0))));

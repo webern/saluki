@@ -78,6 +78,48 @@ impl CgroupsConfiguration {
         })
     }
 
+    /// Creates a new `CgroupsConfiguration` from the given native inputs.
+    ///
+    /// # Errors
+    ///
+    /// If any of the provided paths aren't valid, an error will be returned. This doesn't include,
+    /// however, if any of the provided paths don't _exist_.
+    pub fn from_native(
+        procfs_root: Option<std::path::PathBuf>, cgroupfs_root: Option<std::path::PathBuf>,
+        feature_detector: FeatureDetector,
+    ) -> Result<Self, GenericError> {
+        let procfs_root = match procfs_root {
+            Some(path) => path,
+            None => {
+                if feature_detector.is_feature_available(Feature::HostMappedProcfs) {
+                    PathBuf::from(DEFAULT_HOST_MAPPED_PROCFS_ROOT)
+                } else {
+                    PathBuf::from(DEFAULT_PROCFS_ROOT)
+                }
+            }
+        };
+
+        let cgroupfs_root = match cgroupfs_root {
+            Some(path) => path,
+            None => {
+                if feature_detector.is_feature_available(Feature::HostMappedProcfs) {
+                    PathBuf::from(DEFAULT_HOST_MAPPED_CGROUPFS_ROOT)
+                } else {
+                    // TODO: Consider if we need to do anything specific for Amazon Linux [1] or does the referenced code only
+                    // matter for cgroups v1?
+                    //
+                    // [1]: https://github.com/DataDog/datadog-agent/blob/fe75b815c2f135f0d2ea85d7a57a8fc8cbf56bd9/pkg/config/setup/config.go#L1172-L1173
+                    PathBuf::from(DEFAULT_CGROUPFS_ROOT)
+                }
+            }
+        };
+
+        Ok(Self {
+            procfs_root,
+            cgroupfs_root,
+        })
+    }
+
     /// Returns the path to the "procfs" filesystem.
     pub fn procfs_path(&self) -> &Path {
         self.procfs_root.as_path()

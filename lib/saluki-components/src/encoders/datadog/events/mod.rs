@@ -5,7 +5,6 @@ use http::{uri::PathAndQuery, HeaderValue, Method, Uri};
 use protobuf::{rt::WireType, CodedOutputStream};
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
 use saluki_common::iter::ReusableDeduplicator;
-use saluki_config::GenericConfiguration;
 use saluki_context::tags::Tag;
 use saluki_core::{
     components::{encoders::*, ComponentContext},
@@ -55,6 +54,14 @@ const fn default_max_uncompressed_payload_size() -> usize {
 
 const fn default_log_payloads() -> bool {
     false
+}
+
+/// Maps a native compression kind to the compressor kind string used by `CompressionScheme`.
+fn compression_kind_str(kind: saluki_component_config::CompressionKind) -> &'static str {
+    match kind {
+        saluki_component_config::CompressionKind::Zstd => "zstd",
+        saluki_component_config::CompressionKind::Zlib => "zlib",
+    }
 }
 
 /// Datadog Events incremental encoder.
@@ -114,9 +121,15 @@ pub struct DatadogEventsConfiguration {
 }
 
 impl DatadogEventsConfiguration {
-    /// Creates a new `DatadogEventsConfiguration` from the given configuration.
-    pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
-        Ok(config.as_typed()?)
+    /// Creates a new `DatadogEventsConfiguration` from the given native configuration.
+    pub fn from_native(native: &saluki_component_config::DatadogEventsEncoderConfig) -> Result<Self, GenericError> {
+        Ok(Self {
+            max_payload_size: native.max_payload_size,
+            max_uncompressed_payload_size: native.max_uncompressed_payload_size,
+            compressor_kind: compression_kind_str(native.compression.kind).to_owned(),
+            zstd_compressor_level: native.compression.zstd_level,
+            log_payloads: native.log_payloads,
+        })
     }
 }
 

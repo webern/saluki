@@ -10,7 +10,7 @@ use std::time::Instant;
 // Pull in the Antithesis coverage-instrumentation runtime shim only when
 // building for antithesis. Load-baring: equired to avoid the shim being dropped
 // as unused.
-use agent_data_plane_config_system::BootstrapInputs;
+use agent_data_plane_config_system::{BootstrapInputs, ConfigurationSystem};
 #[cfg(feature = "antithesis")]
 use antithesis_instrumentation as _;
 use datadog_agent_commons::platform::PlatformSettings;
@@ -77,7 +77,9 @@ async fn main() -> Result<(), GenericError> {
     let bootstrap_logging_config = LoggingConfigurationTranslator::translate(&bootstrap_config)
         .error_context("Failed to translate logging configuration during bootstrap phase.")?;
 
-    let metrics_default_level = parse_metrics_level(&bootstrap_config)?;
+    let typed_bootstrap_config = ConfigurationSystem::translate_local_datadog_bootstrap(&bootstrap_config)
+        .error_context("Failed to translate bootstrap configuration.")?;
+    let metrics_default_level = parse_metrics_level(typed_bootstrap_config.telemetry.metrics_level.as_deref())?;
 
     // Proceed with bootstrapping.
     //
@@ -124,16 +126,11 @@ async fn main() -> Result<(), GenericError> {
     Ok(())
 }
 
-fn parse_metrics_level(config: &GenericConfiguration) -> Result<Level, GenericError> {
-    let raw = config
-        .try_get_typed::<String>("metrics_level")
-        .error_context("Failed to read `metrics_level`.")?;
-    match raw {
-        Some(value) => {
-            Level::try_from(value.as_str()).map_err(|e| generic_error!("Failed to parse `metrics_level`: {}", e))
-        }
-        None => Ok(Level::INFO),
-    }
+fn parse_metrics_level(raw: Option<&str>) -> Result<Level, GenericError> {
+    raw.map(Level::try_from)
+        .transpose()
+        .map_err(|e| generic_error!("Failed to parse `metrics_level`: {}", e))?
+        .map_or(Ok(Level::INFO), Ok)
 }
 
 async fn run_inner(

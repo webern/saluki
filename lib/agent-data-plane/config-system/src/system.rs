@@ -38,6 +38,13 @@ impl ConfigurationSystem {
         start_from_local_datadog_sources(local, &self.inputs).await
     }
 
+    /// Translates bootstrap decisions from an already loaded local Datadog-shaped bootstrap snapshot.
+    pub fn translate_local_datadog_bootstrap(
+        config: &GenericConfiguration,
+    ) -> Result<BootstrapConfiguration, GenericError> {
+        translate_bootstrap_configuration(config)
+    }
+
     /// Starts the configuration system from an already loaded local Datadog-shaped bootstrap snapshot.
     pub async fn start_from_local_datadog_sources(
         self, local: GenericConfiguration,

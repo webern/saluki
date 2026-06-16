@@ -508,4 +508,3 @@ async fn run_converter(
 
     debug!("OTLP resource converter task stopped.");
 }
-

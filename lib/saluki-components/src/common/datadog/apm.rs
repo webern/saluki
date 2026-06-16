@@ -273,7 +273,6 @@ impl ApmConfig {
     pub const fn rare_sampler_cardinality(&self) -> usize {
         self.rare_sampler.cardinality
     }
-
 }
 
 impl Default for ApmConfig {
@@ -294,4 +293,3 @@ impl Default for ApmConfig {
         }
     }
 }
-

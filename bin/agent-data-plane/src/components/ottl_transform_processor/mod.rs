@@ -206,7 +206,9 @@ mod tests {
     /// Builds an `OttlTransformConfiguration` from a test JSON document shaped like the data-plane
     /// configuration (the OTTL config lives under the `ottl_transform_config` key). Deserializes the
     /// typed `OttlTransformConfig` directly, mirroring what the configuration system would translate.
-    fn build_transform_config(full_json: Option<serde_json::Value>) -> Result<OttlTransformConfiguration, GenericError> {
+    fn build_transform_config(
+        full_json: Option<serde_json::Value>,
+    ) -> Result<OttlTransformConfiguration, GenericError> {
         let config = match full_json.as_ref().and_then(|v| v.get("ottl_transform_config")) {
             Some(inner) => serde_json::from_value::<OttlTransformConfig>(inner.clone())
                 .map_err(|e| generic_error!("invalid ottl_transform_config: {e}"))?,

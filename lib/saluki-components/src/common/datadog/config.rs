@@ -439,4 +439,3 @@ impl ForwarderConfiguration {
         Duration::from_mins(self.api_key_validation_interval_mins as u64)
     }
 }
-

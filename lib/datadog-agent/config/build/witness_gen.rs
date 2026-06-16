@@ -59,9 +59,7 @@ pub fn generate(overlay: &SchemaOverlay, schema_map: &IndexMap<String, FieldInfo
 
     out.push_str(DRIVE_DOC);
     out.push_str("pub fn drive(config: &DatadogConfiguration, consumer: &mut impl DatadogConfigConsumer) {\n");
-    out.push_str(
-        "    let root = serde_json::to_value(config).expect(\"DatadogConfiguration always serializes\");\n",
-    );
+    out.push_str("    let root = serde_json::to_value(config).expect(\"DatadogConfiguration always serializes\");\n");
     out.push_str(&drive_calls);
     out.push_str("}\n\n");
 

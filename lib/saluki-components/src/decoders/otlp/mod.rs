@@ -182,4 +182,3 @@ impl Decoder for OtlpDecoder {
         Ok(())
     }
 }
-

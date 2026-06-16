@@ -227,7 +227,6 @@ const fn default_capture_depth() -> usize {
     MIN_CAPTURE_DEPTH
 }
 
-
 fn deserialize_empty_metastring_as_none<'de, D>(deserializer: D) -> Result<Option<MetaString>, D::Error>
 where
     D: Deserializer<'de>,
@@ -2472,7 +2471,11 @@ mod tests {
 
     #[test]
     fn fix_capture_depth_normalizes_below_minimum() {
-        let cases = [(0, MIN_CAPTURE_DEPTH), (MIN_CAPTURE_DEPTH, MIN_CAPTURE_DEPTH), (2048, 2048)];
+        let cases = [
+            (0, MIN_CAPTURE_DEPTH),
+            (MIN_CAPTURE_DEPTH, MIN_CAPTURE_DEPTH),
+            (2048, 2048),
+        ];
 
         for (configured_depth, expected_depth) in cases {
             let mut dogstatsd_config = DogStatsDConfiguration::default();

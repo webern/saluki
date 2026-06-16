@@ -77,8 +77,13 @@ pub async fn handle_run_command(
     let (env_provider, maybe_env_supervisor) = shell.build_environment(&component_registry, &health_registry).await?;
 
     // Create the blueprint for our primary topology, built entirely from the native configuration.
-    let (mut blueprint, control_surfaces) =
-        create_topology(shell.saluki(), shell.dynamic_handles(), &env_provider, &component_registry).await?;
+    let (mut blueprint, control_surfaces) = create_topology(
+        shell.saluki(),
+        shell.dynamic_handles(),
+        &env_provider,
+        &component_registry,
+    )
+    .await?;
 
     // Run memory bounds validation to ensure that we can launch the topology with our configured memory limit, if any.
     // Built from the native memory configuration rather than the raw map.
@@ -464,8 +469,9 @@ async fn add_dsd_pipeline_to_blueprint(
     let dsd_mapper_config = DogStatsDMapperConfiguration::from_native(&saluki_config.dogstatsd.mapper)?;
     let dsd_enrich_config =
         ChainedConfiguration::default().with_transform_builder("dogstatsd_mapper", dsd_mapper_config);
-    let mut dsd_tag_filterlist_config = TagFilterlistConfiguration::from_native(&saluki_config.dogstatsd.tag_filterlist)
-        .error_context("Failed to configure metric tag filterlist transform.")?;
+    let mut dsd_tag_filterlist_config =
+        TagFilterlistConfiguration::from_native(&saluki_config.dogstatsd.tag_filterlist)
+            .error_context("Failed to configure metric tag filterlist transform.")?;
     if let Some(handles) = dynamic_handles {
         dsd_tag_filterlist_config = dsd_tag_filterlist_config.with_dynamic_handle(handles.tag_filterlist.clone());
     }

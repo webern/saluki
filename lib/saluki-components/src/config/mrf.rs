@@ -93,24 +93,12 @@ mod tests {
 
     #[test]
     fn metrics_endpoint_override_requires_api_key_and_endpoint() {
-        let missing_api_key = MrfConfiguration::new(
-            true,
-            true,
-            Vec::new(),
-            None,
-            Some("datadoghq.eu".to_string()),
-            None,
-        );
+        let missing_api_key =
+            MrfConfiguration::new(true, true, Vec::new(), None, Some("datadoghq.eu".to_string()), None);
         assert_eq!(missing_api_key.metrics_endpoint_override(), None);
 
-        let missing_endpoint = MrfConfiguration::new(
-            true,
-            true,
-            Vec::new(),
-            Some("mrf-api-key".to_string()),
-            None,
-            None,
-        );
+        let missing_endpoint =
+            MrfConfiguration::new(true, true, Vec::new(), Some("mrf-api-key".to_string()), None, None);
         assert_eq!(missing_endpoint.metrics_endpoint_override(), None);
 
         let ready = MrfConfiguration::new(

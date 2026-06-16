@@ -1,6 +1,6 @@
 //! Component-native configuration structs shared by ADP translators and components.
 
-use std::{collections::HashMap, future::pending, num::NonZeroU64, time::Duration};
+use std::{collections::HashMap, future::pending, num::NonZeroU64, path::PathBuf, time::Duration};
 
 use saluki_io::net::ListenAddress;
 use tokio::sync::watch;
@@ -950,6 +950,57 @@ impl DogStatsDMetricMappingConfiguration {
     /// Returns mapped tags.
     pub fn tags(&self) -> &HashMap<String, String> {
         &self.tags
+    }
+}
+
+/// Native DogStatsD debug-log destination settings.
+#[derive(Clone, Debug)]
+pub struct DogStatsDDebugLogConfiguration {
+    metrics_stats_enabled: DynamicValue<bool>,
+    logging_enabled: bool,
+    log_file: PathBuf,
+    log_file_max_size_bytes: u64,
+    log_file_max_rolls: usize,
+}
+
+impl DogStatsDDebugLogConfiguration {
+    /// Creates native DogStatsD debug-log destination settings.
+    pub fn new(
+        metrics_stats_enabled: DynamicValue<bool>, logging_enabled: bool, log_file: PathBuf,
+        log_file_max_size_bytes: u64, log_file_max_rolls: usize,
+    ) -> Self {
+        Self {
+            metrics_stats_enabled,
+            logging_enabled,
+            log_file,
+            log_file_max_size_bytes,
+            log_file_max_rolls,
+        }
+    }
+
+    /// Returns whether metric-level DogStatsD statistics are currently enabled.
+    pub fn metrics_stats_enabled(&self) -> DynamicValue<bool> {
+        self.metrics_stats_enabled.clone()
+    }
+
+    /// Returns whether the debug-log destination should be added to the topology.
+    pub const fn logging_enabled(&self) -> bool {
+        self.logging_enabled
+    }
+
+    /// Returns the DogStatsD debug log file path.
+    pub fn log_file(&self) -> &PathBuf {
+        &self.log_file
+    }
+
+    /// Returns maximum active log-file size in bytes.
+    pub const fn log_file_max_size_bytes(&self) -> u64 {
+        self.log_file_max_size_bytes
+    }
+
+    /// Returns the number of rolled log files to keep.
+    pub const fn log_file_max_rolls(&self) -> usize {
+        self.log_file_max_rolls
     }
 }
 

@@ -8,12 +8,11 @@ use agent_data_plane_config_system::{
     BootstrapInputs, ConfigurationSystem, LocalDatadogSources, RuntimeComponentConfiguration, StartedAttachments,
 };
 use argh::FromArgs;
-use datadog_agent_commons::platform::PlatformSettings;
 use resource_accounting::{ComponentBounds, ComponentRegistry};
 use saluki_app::{accounting::initialize_memory_bounds, bootstrap::BootstrapGuard, metrics::emit_startup_metrics};
 use saluki_components::{
     decoders::otlp::OtlpDecoderConfiguration,
-    destinations::DogStatsDStatisticsConfiguration,
+    destinations::{DogStatsDDebugLogConfiguration, DogStatsDStatisticsConfiguration},
     encoders::{
         BufferedIncrementalConfiguration, DatadogEventsConfiguration, DatadogLogsConfiguration,
         DatadogServiceChecksConfiguration,
@@ -504,8 +503,7 @@ async fn add_dsd_pipeline_to_blueprint(
         "host_enrichment",
         HostEnrichmentConfiguration::from_environment_provider(env_provider.clone()),
     );
-    let dsd_debug_log_config =
-        runtime_config.dogstatsd_debug_log_configuration(PlatformSettings::get_default_dogstatsd_log_file_path())?;
+    let dsd_debug_log_config = DogStatsDDebugLogConfiguration::from_native(&saluki_config.dogstatsd_debug_log);
     let dsd_stats_config = DogStatsDStatisticsConfiguration::new();
 
     let stats_api_handler = dsd_stats_config.api_handler();

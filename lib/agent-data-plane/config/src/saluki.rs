@@ -4,10 +4,10 @@ use std::{path::PathBuf, time::Duration};
 
 use saluki_component_config::{
     AggregateConfiguration, ChecksIpcConfiguration, DatadogEventsEncoderConfiguration, DatadogLogsEncoderConfiguration,
-    DatadogServiceChecksEncoderConfiguration, DogStatsDMapperConfiguration, DogStatsDPostAggregateFilterConfiguration,
-    DogStatsDPrefixFilterConfiguration, OtlpForwarderConfiguration, OtlpPipelineConfiguration,
-    OtlpReceiverConfiguration, OtlpSourceConfiguration, OtlpTracesConfiguration, OttlFilterConfiguration,
-    OttlTransformConfiguration, PipelineConfiguration, TagFilterlistConfiguration,
+    DatadogServiceChecksEncoderConfiguration, DogStatsDDebugLogConfiguration, DogStatsDMapperConfiguration,
+    DogStatsDPostAggregateFilterConfiguration, DogStatsDPrefixFilterConfiguration, OtlpForwarderConfiguration,
+    OtlpPipelineConfiguration, OtlpReceiverConfiguration, OtlpSourceConfiguration, OtlpTracesConfiguration,
+    OttlFilterConfiguration, OttlTransformConfiguration, PipelineConfiguration, TagFilterlistConfiguration,
 };
 use saluki_io::net::ListenAddress;
 
@@ -46,6 +46,9 @@ pub struct SalukiConfiguration {
 
     /// DogStatsD aggregate transform settings.
     pub aggregate: AggregateConfiguration,
+
+    /// DogStatsD debug-log destination settings.
+    pub dogstatsd_debug_log: DogStatsDDebugLogConfiguration,
 
     /// DogStatsD post-aggregate filter settings.
     pub dogstatsd_post_aggregate_filter: DogStatsDPostAggregateFilterConfiguration,

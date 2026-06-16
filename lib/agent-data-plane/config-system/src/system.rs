@@ -12,15 +12,19 @@ use agent_data_plane_config::{
     AggregateConfiguration, BootstrapConfiguration, BootstrapStartupConfiguration, BootstrapTelemetryConfiguration,
     ChecksIpcConfiguration, ConfigStreamAuthority, ControlPlaneConfiguration, DataPlaneConfiguration,
     DatadogEventsEncoderConfiguration, DatadogLogsEncoderConfiguration, DatadogServiceChecksEncoderConfiguration,
-    DogStatsDCliConfiguration, DogStatsDMapperConfiguration, DogStatsDMapperProfileConfiguration,
-    DogStatsDMetricMappingConfiguration, DogStatsDPostAggregateFilterConfiguration, DogStatsDPrefixFilterConfiguration,
-    DynamicValue, EnvironmentConfiguration, MetricTagFilterAction, MetricTagFilterEntry, OtlpForwarderConfiguration,
+    DogStatsDCliConfiguration, DogStatsDDebugLogConfiguration, DogStatsDMapperConfiguration,
+    DogStatsDMapperProfileConfiguration, DogStatsDMetricMappingConfiguration,
+    DogStatsDPostAggregateFilterConfiguration, DogStatsDPrefixFilterConfiguration, DynamicValue,
+    EnvironmentConfiguration, MetricTagFilterAction, MetricTagFilterEntry, OtlpForwarderConfiguration,
     OtlpPipelineConfiguration, OtlpProxyConfiguration, OtlpReceiverConfiguration, OtlpSourceConfiguration,
     OtlpTracesConfiguration, OttlErrorMode, OttlFilterConfiguration, OttlTransformConfiguration, PipelineConfiguration,
     RuntimeConfigAuthority, RuntimeConfigLanguage, SalukiConfiguration, TagFilterlistConfiguration,
 };
 use bytesize::ByteSize;
-use datadog_agent_commons::ipc::config::{IpcAuthConfiguration, RemoteAgentClientConfiguration};
+use datadog_agent_commons::{
+    ipc::config::{IpcAuthConfiguration, RemoteAgentClientConfiguration},
+    platform::PlatformSettings,
+};
 use datadog_agent_config::{
     classifier::{ConfigClassifier, Pipeline, PipelineAffinity, Severity, SupportLevel},
     DatadogConfiguration, DatadogRemapper, KEY_ALIASES,
@@ -621,6 +625,38 @@ struct SourceDogStatsDMapperConfiguration {
     dogstatsd_mapper_profiles: SourceDogStatsDMapperProfiles,
 }
 
+const fn default_true() -> bool {
+    true
+}
+
+const fn default_dogstatsd_log_file_max_size() -> ByteSize {
+    ByteSize::mb(10)
+}
+
+const fn default_dogstatsd_log_file_max_rolls() -> usize {
+    3
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct SourceDogStatsDDebugLogConfiguration {
+    #[serde(rename = "dogstatsd_metrics_stats_enable", default)]
+    metrics_stats_enabled: bool,
+    #[serde(rename = "dogstatsd_logging_enabled", default = "default_true")]
+    logging_enabled: bool,
+    #[serde(rename = "dogstatsd_log_file", default)]
+    log_file: PathBuf,
+    #[serde(
+        rename = "dogstatsd_log_file_max_size",
+        default = "default_dogstatsd_log_file_max_size"
+    )]
+    log_file_max_size: ByteSize,
+    #[serde(
+        rename = "dogstatsd_log_file_max_rolls",
+        default = "default_dogstatsd_log_file_max_rolls"
+    )]
+    log_file_max_rolls: usize,
+}
+
 fn translate_data_plane_configuration(config: &GenericConfiguration) -> Result<DataPlaneConfiguration, GenericError> {
     let source = config
         .as_typed::<DatadogConfiguration>()
@@ -821,6 +857,34 @@ fn translate_dogstatsd_mapper_configuration(
     ))
 }
 
+fn translate_dogstatsd_debug_log_configuration(
+    config: &GenericConfiguration,
+) -> Result<DogStatsDDebugLogConfiguration, GenericError> {
+    let source = config
+        .as_typed::<SourceDogStatsDDebugLogConfiguration>()
+        .error_context("Failed to parse DogStatsD debug log configuration.")?;
+    let log_file = if source.log_file.as_os_str().is_empty() {
+        PlatformSettings::get_default_dogstatsd_log_file_path()
+    } else {
+        source.log_file
+    };
+
+    if log_file.to_str().is_none() {
+        return Err(generic_error!(
+            "dogstatsd_log_file must be valid UTF-8, got '{}'",
+            log_file.display()
+        ));
+    }
+
+    Ok(DogStatsDDebugLogConfiguration::new(
+        dynamic_value_from_key(config, "dogstatsd_metrics_stats_enable", source.metrics_stats_enabled),
+        source.logging_enabled,
+        log_file,
+        source.log_file_max_size.as_u64(),
+        source.log_file_max_rolls,
+    ))
+}
+
 fn translate_datadog_snapshot(config: &GenericConfiguration) -> Result<SalukiConfiguration, GenericError> {
     let source = config
         .as_typed::<DatadogConfiguration>()
@@ -940,6 +1004,7 @@ fn translate_datadog_snapshot(config: &GenericConfiguration) -> Result<SalukiCon
     let dogstatsd_prefix_filter = translate_dogstatsd_prefix_filter_configuration(config)?;
     let dogstatsd_mapper = translate_dogstatsd_mapper_configuration(config)?;
     let aggregate = translate_aggregate_configuration(config)?;
+    let dogstatsd_debug_log = translate_dogstatsd_debug_log_configuration(config)?;
     let dogstatsd_post_aggregate_filter = translate_dogstatsd_post_aggregate_filter_configuration(config)?;
     let tag_filterlist = translate_tag_filterlist_configuration(config)?;
     let otlp_forwarder = OtlpForwarderConfiguration::new(
@@ -973,6 +1038,7 @@ fn translate_datadog_snapshot(config: &GenericConfiguration) -> Result<SalukiCon
         dogstatsd_prefix_filter,
         dogstatsd_mapper,
         aggregate,
+        dogstatsd_debug_log,
         dogstatsd_post_aggregate_filter,
         tag_filterlist,
         otlp_receiver,

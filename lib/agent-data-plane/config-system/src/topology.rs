@@ -1,10 +1,7 @@
 //! Temporary runtime component configuration adapters.
 
-use std::path::PathBuf;
-
 use saluki_components::{
     config::MrfConfiguration,
-    destinations::DogStatsDDebugLogConfiguration,
     encoders::{DatadogApmStatsEncoderConfiguration, DatadogMetricsConfiguration, DatadogTraceConfiguration},
     forwarders::DatadogForwarderConfiguration,
     sources::DogStatsDConfiguration,
@@ -103,13 +100,5 @@ impl RuntimeComponentConfiguration {
     /// Builds DogStatsD source configuration.
     pub fn dogstatsd_configuration(&self) -> Result<DogStatsDConfiguration, GenericError> {
         DogStatsDConfiguration::from_configuration(&self.config).error_context("Failed to configure DogStatsD source.")
-    }
-
-    /// Builds DogStatsD debug log destination configuration.
-    pub fn dogstatsd_debug_log_configuration(
-        &self, default_log_file_path: PathBuf,
-    ) -> Result<DogStatsDDebugLogConfiguration, GenericError> {
-        DogStatsDDebugLogConfiguration::from_configuration(&self.config, default_log_file_path)
-            .error_context("Failed to configure DogStatsD debug log destination.")
     }
 }

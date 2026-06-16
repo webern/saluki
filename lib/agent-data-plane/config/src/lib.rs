@@ -23,10 +23,11 @@ pub use private::SalukiPrivateConfiguration;
 pub use saluki::{ControlPlaneConfiguration, DataPlaneConfiguration, EnvironmentConfiguration, SalukiConfiguration};
 pub use saluki_component_config::{
     AggregateConfiguration, ChecksIpcConfiguration, DatadogEventsEncoderConfiguration, DatadogLogsEncoderConfiguration,
-    DatadogServiceChecksEncoderConfiguration, DogStatsDMapperConfiguration, DogStatsDMapperProfileConfiguration,
-    DogStatsDMetricMappingConfiguration, DogStatsDPostAggregateFilterConfiguration, DogStatsDPrefixFilterConfiguration,
-    DynamicValue, MetricTagFilterAction, MetricTagFilterEntry, OtlpForwarderConfiguration, OtlpPipelineConfiguration,
-    OtlpProxyConfiguration, OtlpReceiverConfiguration, OtlpSourceConfiguration, OtlpTracesConfiguration, OttlErrorMode,
+    DatadogServiceChecksEncoderConfiguration, DogStatsDDebugLogConfiguration, DogStatsDMapperConfiguration,
+    DogStatsDMapperProfileConfiguration, DogStatsDMetricMappingConfiguration,
+    DogStatsDPostAggregateFilterConfiguration, DogStatsDPrefixFilterConfiguration, DynamicValue, MetricTagFilterAction,
+    MetricTagFilterEntry, OtlpForwarderConfiguration, OtlpPipelineConfiguration, OtlpProxyConfiguration,
+    OtlpReceiverConfiguration, OtlpSourceConfiguration, OtlpTracesConfiguration, OttlErrorMode,
     OttlFilterConfiguration, OttlTransformConfiguration, PipelineConfiguration, TagFilterlistConfiguration,
 };
 

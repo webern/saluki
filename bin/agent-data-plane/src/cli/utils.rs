@@ -13,8 +13,6 @@ use saluki_error::{generic_error, ErrorContext as _, GenericError};
 use saluki_io::net::{client::http::HttpClient, ListenAddress};
 use serde::{Deserialize, Serialize};
 
-use crate::config::DataPlaneConfiguration;
-
 /// Typed API client for interacting with the APIs exposed by ADP.
 pub struct DataPlaneAPIClient {
     client: HttpClient,
@@ -48,9 +46,9 @@ impl DataPlaneAPIClient {
     /// If the data plane configuration can't be deserialized, or the data plane API endpoints can't be
     /// determined, an error will be returned.
     pub fn from_config(config: &GenericConfiguration) -> Result<Self, GenericError> {
-        let dp_config = DataPlaneConfiguration::from_configuration(config)?;
-
-        let listen_address = dp_config.secure_api_listen_address();
+        let listen_address = config
+            .try_get_typed::<ListenAddress>("data_plane.secure_api_listen_address")?
+            .unwrap_or_else(|| ListenAddress::any_tcp(5101));
 
         let builder = HttpClient::builder().with_tls_config(|b| b.danger_accept_invalid_certs());
 

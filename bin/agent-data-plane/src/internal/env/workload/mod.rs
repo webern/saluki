@@ -4,7 +4,6 @@ use std::{future::Future, num::NonZeroUsize, time::Duration};
 
 use datadog_agent_commons::ipc::client::RemoteAgentClient;
 use resource_accounting::{ComponentRegistry, MemoryBounds, MemoryBoundsBuilder};
-use saluki_config::GenericConfiguration;
 use saluki_context::{
     origin::{OriginTagCardinality, RawOrigin},
     tags::SharedTagSet,
@@ -13,14 +12,7 @@ use saluki_core::{
     health::{Health, HealthRegistry},
     runtime::{RestartStrategy, Supervisor},
 };
-#[cfg(unix)]
-use saluki_env::features::Feature;
-#[cfg(target_os = "linux")]
-use saluki_env::workload::collectors::CgroupsMetadataCollector;
-#[cfg(unix)]
-use saluki_env::workload::collectors::ContainerdMetadataCollector;
 use saluki_env::{
-    features::FeatureDetector,
     workload::{
         aggregator::MetadataAggregator,
         collectors::MetadataCollectorWorker,
@@ -79,128 +71,6 @@ pub struct RemoteAgentWorkloadProvider {
 pub(crate) const WORKLOAD_HEALTH_PREFIX: &str = "env_provider.workload.";
 
 impl RemoteAgentWorkloadProvider {
-    /// Create a new `RemoteAgentWorkloadProvider` based on the given configuration, along with a [`Supervisor`] that
-    /// drives the aggregator and all collector workers.
-    ///
-    /// # Errors
-    ///
-    /// If there is an issue with any of the provider configuration, or creating the underlying metadata collectors, an
-    /// error is returned.
-    #[allow(dead_code)]
-    pub async fn from_configuration(
-        config: &GenericConfiguration, component_registry: ComponentRegistry, health_registry: &HealthRegistry,
-    ) -> Result<(Self, Supervisor), GenericError> {
-        let mut component_registry = component_registry.get_or_create("remote-agent");
-        let mut provider_bounds = component_registry.bounds_builder();
-
-        // Create our string interner which will get used primarily for tags, but also for any other long-ish lived strings.
-        let string_interner_size_bytes = config
-            .try_get_typed::<NonZeroUsize>("remote_agent_string_interner_size_bytes")?
-            .unwrap_or(DEFAULT_STRING_INTERNER_SIZE_BYTES);
-        let string_interner = GenericMapInterner::new(string_interner_size_bytes);
-
-        provider_bounds
-            .subcomponent("string_interner")
-            .firm()
-            .with_fixed_amount("string interner", string_interner_size_bytes.get());
-
-        // Construct our metadata aggregator and any relevant metadata collectors based on the detected features we've
-        // been given.
-        let aggregator_health = health_registry
-            .register_component(format!("{WORKLOAD_HEALTH_PREFIX}remote_agent.aggregator"))
-            .ok_or_else(|| {
-                generic_error!(
-                    "Component '{WORKLOAD_HEALTH_PREFIX}remote_agent.aggregator' already registered in health registry."
-                )
-            })?;
-        let (mut aggregator, operations_tx) = MetadataAggregator::new(aggregator_health);
-
-        let mut collector_bounds = provider_bounds.subcomponent("collectors");
-        let mut collector_workers: Vec<MetadataCollectorWorker> = Vec::new();
-
-        // Add the containerd collector if the feature is available.
-        let feature_detector = FeatureDetector::automatic(config);
-        #[cfg(unix)]
-        if feature_detector.is_feature_available(Feature::Containerd) {
-            let cri_collector = build_collector("containerd", health_registry, &mut collector_bounds, |health| {
-                ContainerdMetadataCollector::from_configuration(config, health, string_interner.clone())
-            })
-            .await?;
-
-            collector_workers.push(MetadataCollectorWorker::new(cri_collector, operations_tx.clone()));
-        }
-
-        // Add the cgroups collector if the feature if we're on Linux.
-        #[cfg(target_os = "linux")]
-        {
-            let cgroups_collector = build_collector("cgroups", health_registry, &mut collector_bounds, |health| {
-                CgroupsMetadataCollector::from_configuration(
-                    config,
-                    feature_detector.clone(),
-                    health,
-                    string_interner.clone(),
-                )
-            })
-            .await?;
-
-            collector_workers.push(MetadataCollectorWorker::new(cgroups_collector, operations_tx.clone()));
-        }
-
-        // Finally, add the Remote Agent collectors: one for the tagger, and one for workloadmeta.
-        let ra_tags_collector =
-            build_collector("remote-agent-tags", health_registry, &mut collector_bounds, |health| {
-                RemoteAgentTaggerMetadataCollector::from_configuration(config, health, string_interner.clone())
-            })
-            .await?;
-
-        collector_workers.push(MetadataCollectorWorker::new(ra_tags_collector, operations_tx.clone()));
-
-        let ra_wmeta_collector =
-            build_collector("remote-agent-wmeta", health_registry, &mut collector_bounds, |health| {
-                RemoteAgentWorkloadMetadataCollector::from_configuration(config, health, string_interner.clone())
-            })
-            .await?;
-
-        collector_workers.push(MetadataCollectorWorker::new(ra_wmeta_collector, operations_tx));
-
-        // Create and attach the various metadata stores.
-        let tag_store = TagStore::with_entity_limit(DEFAULT_TAG_STORE_ENTITY_LIMIT);
-        let tags_querier = tag_store.querier();
-
-        aggregator.add_store(tag_store);
-
-        let external_data_store = ExternalDataStore::with_entity_limit(DEFAULT_EXTERNAL_DATA_STORE_ENTITY_LIMIT);
-        let eds_resolver = external_data_store.resolver();
-
-        aggregator.add_store(external_data_store);
-
-        let on_demand_pid_resolver =
-            OnDemandPIDResolver::from_configuration(config, feature_detector, string_interner)?;
-        let origin_resolver = OriginResolver::new(eds_resolver.clone());
-
-        // With the aggregator configured, update the memory bounds before handing it off to the supervisor.
-        provider_bounds.with_subcomponent("aggregator", &aggregator);
-
-        let api_worker = RemoteAgentWorkloadAPIWorker::from_state(tags_querier.clone(), eds_resolver);
-
-        // Build the workload supervisor.
-        let mut supervisor = Supervisor::new("workload")?
-            .with_restart_strategy(RestartStrategy::one_to_one().with_intensity_and_period(5, Duration::from_secs(30)));
-        supervisor.add_worker(aggregator);
-        for worker in collector_workers {
-            supervisor.add_worker(worker);
-        }
-        supervisor.add_worker(api_worker);
-
-        let provider = Self {
-            tags_querier,
-            origin_resolver,
-            on_demand_pid_resolver,
-        };
-
-        Ok((provider, supervisor))
-    }
-
     /// Create a new `RemoteAgentWorkloadProvider` from an established Datadog Agent IPC client.
     ///
     /// This path avoids opening another IPC connection for the remote tagger/workloadmeta collectors.

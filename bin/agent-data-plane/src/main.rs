@@ -27,7 +27,6 @@ use self::cli::*;
 use crate::internal::logging::LoggingConfigurationTranslator;
 
 mod components;
-mod config;
 mod internal;
 
 pub(crate) mod state;

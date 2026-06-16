@@ -73,33 +73,40 @@ the runtime shell (below). This relocation keeps the command surface typed; it d
 make the shell native — that is the remaining work, and `runtime.rs` documents it inline. Decisions
 are logged in `datadog/projects/confra/design/spike-2c-claude.md`.
 
-### Now native (no longer raw-config) — added after the initial cutover
+### Now native — the entire data topology
+
+`run.rs` and `cli/runtime.rs` are both `GenericConfiguration`-free. `runtime.rs` builds the whole
+data topology from `SalukiConfiguration` and assembles the supervision tree from typed outputs.
+Native now:
 
 - **Overlay classifier validation** moved into `config-system` (`validate_against_overlay`, run by
-  `translate_from_generic`), per the design. `runtime.rs` no longer flattens/classifies source keys.
-- **Memory bounds** are native: `SalukiConfiguration::memory` (`MemoryConfig`) is populated by the
-  config system, and `runtime.rs` builds `MemoryBoundsConfiguration::from_parts(...)` from it.
-- **Trace transforms** (sampler, obfuscation, APM stats) and the **traces encoder** are now built via
-  `from_native` (Default + native fields — a documented fidelity reduction for the heavy
-  `ApmConfig`/`ObfuscationConfig` rule sets).
+  `translate_from_generic`), per the design.
+- **Memory bounds**: `SalukiConfiguration::memory` (`MemoryConfig`) + `MemoryBoundsConfiguration::from_parts`.
+- **Trace transforms** (sampler, obfuscation, APM stats) and the **traces encoder** (Default + native
+  fields — a documented fidelity reduction for the heavy `ApmConfig`/`ObfuscationConfig` rule sets).
+- **MRF**: the gateway no longer retains a raw map (string-key watchers guarded behind the optional
+  legacy config; the translator captures `failover_metrics`/`metric_allowlist`).
+- **DSD debug-log**: native `from_native`, optional watcher.
+- **OTLP proxy**: the config system reads `data_plane.otlp.proxy.*` into the native `OtlpProxyConfig`.
+- **Host tags**: disabled native stub (pending the shared connection).
 
-### Transitional remainders (still consume the raw configuration in `runtime.rs`)
+### Transitional remainder — the raw-config shell in `cli/runtime_setup.rs`
 
-These are the honest gaps to a *no-concessions* GenericConfiguration-free binary. `run.rs` itself is
-free of it; these live in `cli/runtime.rs`:
+The only remaining holder of `GenericConfiguration` in the run path is `RuntimeShell` in
+`cli/runtime_setup.rs`. It is the honest gap to a *no-concessions* GenericConfiguration-free binary:
 
 - **Bootstrap/authority resolution** (`DataPlaneConfiguration::from_configuration`, the
   `RemoteAgentBootstrap` + dynamic-config-stream dance). Replaced in the end state by
   `ConfigurationSystem::start()`.
 - **Environment provider** (host/workload/autodiscovery) and **internal supervisor** (`ConfigWorker`,
-  `DynamicLogLevelWorker`, `IpcAuthConfiguration` + server TLS). The env/host/workload providers and
-  the workload collectors (tagger/workloadmeta, plus containerd/cgroups/feature-detector/PID-resolver)
-  each construct their own IPC client and read config pervasively — routing them through the shared
-  `DatadogAgentConnection` is the design's open question and a genuine `saluki-env` rewrite.
-- **Host tags** (queries the Agent; native path is a disabled stub pending the shared connection).
-- **MRF** and the **OTLP proxy branch**: MRF's gateway retains a map for runtime watching; the OTLP
-  proxy gRPC endpoint isn't a witnessed key. Both need per-component watcher/translator work to go
-  native (the scoped `ScopedConfigHandle`s from `dynamic.rs` are the replacement for the watchers).
+  `DynamicLogLevelWorker`, `IpcAuthConfiguration` + server TLS). The workload collectors
+  (tagger/workloadmeta, plus containerd/cgroups/feature-detector/PID-resolver) each construct their
+  own IPC client and read config pervasively — routing them through the shared
+  `DatadogAgentConnection` is the design's open question and a genuine `saluki-env`/`saluki-app`
+  rewrite.
+
+(`main.rs` also reads local sources for the bootstrap phase — logging/metrics via `AppBootstrapper` —
+which the design's bootstrap phase explicitly permits.)
 
 ### To finish (no-concessions end state)
 

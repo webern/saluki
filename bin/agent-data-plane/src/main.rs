@@ -24,6 +24,8 @@ use tracing::{error, info, warn};
 
 mod cli;
 use self::cli::*;
+#[cfg(test)]
+mod architecture_tests;
 mod components;
 mod internal;
 

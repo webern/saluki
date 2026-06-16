@@ -158,23 +158,19 @@ async fn run_inner(
                 }
             }
 
-            // Resolve the runtime configuration via the configuration system, then run with typed
-            // inputs. No `GenericConfiguration` is threaded through the run command.
+            // Run with typed inputs from the configuration system. No `GenericConfiguration` is
+            // threaded through the run command.
             let service_names = crate::internal::remote_agent::remote_agent_service_names();
-            let exit_code = match RuntimeShell::resolve(bootstrap_inputs, service_names, bootstrap_guard).await {
-                Ok(Some(shell)) => {
-                    match handle_run_command(started, shell, bootstrap_guard, bootstrap_supervisor).await {
-                        Ok(()) => {
-                            info!("Agent Data Plane stopped.");
-                            None
-                        }
-                        Err(e) => {
-                            error!("{:?}", e);
-                            Some(1)
-                        }
-                    }
-                }
-                Ok(None) => {
+            let exit_code = match handle_run_command(
+                started,
+                bootstrap_inputs,
+                service_names,
+                bootstrap_guard,
+                bootstrap_supervisor,
+            )
+            .await
+            {
+                Ok(()) => {
                     info!("Agent Data Plane stopped.");
                     None
                 }

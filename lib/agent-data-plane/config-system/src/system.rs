@@ -5,8 +5,9 @@ use std::collections::HashSet;
 use agent_data_plane_config::{
     BootstrapConfiguration, BootstrapStartupConfiguration, BootstrapTelemetryConfiguration, ChecksIpcConfiguration,
     ConfigStreamAuthority, DataPlaneConfiguration, DatadogEventsEncoderConfiguration, DatadogLogsEncoderConfiguration,
-    DatadogServiceChecksEncoderConfiguration, EnvironmentConfiguration, OtlpPipelineConfiguration,
-    OtlpProxyConfiguration, PipelineConfiguration, RuntimeConfigAuthority, RuntimeConfigLanguage, SalukiConfiguration,
+    DatadogServiceChecksEncoderConfiguration, EnvironmentConfiguration, OtlpForwarderConfiguration,
+    OtlpPipelineConfiguration, OtlpProxyConfiguration, PipelineConfiguration, RuntimeConfigAuthority,
+    RuntimeConfigLanguage, SalukiConfiguration,
 };
 use datadog_agent_commons::ipc::config::RemoteAgentClientConfiguration;
 use datadog_agent_config::{
@@ -246,6 +247,13 @@ fn translate_datadog_snapshot(config: &GenericConfiguration) -> Result<SalukiCon
         source.serializer_zstd_compressor_level as i32,
         source.log_payloads,
     );
+    let otlp_forwarder = OtlpForwarderConfiguration::new(
+        otlp.proxy().core_agent_otlp_grpc_endpoint().to_string(),
+        config
+            .try_get_typed("otlp_config.traces.internal_port")
+            .error_context("Failed to read `otlp_config.traces.internal_port`.")?
+            .unwrap_or(5003),
+    );
     let environment = EnvironmentConfiguration::new(
         config
             .try_get_typed("hostname")
@@ -278,6 +286,7 @@ fn translate_datadog_snapshot(config: &GenericConfiguration) -> Result<SalukiCon
         datadog_logs_encoder,
         datadog_events_encoder,
         datadog_service_checks_encoder,
+        otlp_forwarder,
         environment,
     };
 

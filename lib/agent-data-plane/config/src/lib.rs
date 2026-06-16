@@ -21,7 +21,8 @@ pub use private::SalukiPrivateConfiguration;
 pub use saluki::{DataPlaneConfiguration, EnvironmentConfiguration, SalukiConfiguration};
 pub use saluki_component_config::{
     ChecksIpcConfiguration, DatadogEventsEncoderConfiguration, DatadogLogsEncoderConfiguration,
-    DatadogServiceChecksEncoderConfiguration, OtlpPipelineConfiguration, OtlpProxyConfiguration, PipelineConfiguration,
+    DatadogServiceChecksEncoderConfiguration, OtlpForwarderConfiguration, OtlpPipelineConfiguration,
+    OtlpProxyConfiguration, PipelineConfiguration,
 };
 
 #[cfg(test)]

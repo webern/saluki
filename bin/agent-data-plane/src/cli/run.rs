@@ -3,7 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use agent_data_plane_config::{DataPlaneConfiguration, SalukiConfiguration};
+use agent_data_plane_config::SalukiConfiguration;
 use agent_data_plane_config_system::{BootstrapInputs, ConfigurationSystem, StartedAttachments};
 use argh::FromArgs;
 use datadog_agent_commons::platform::PlatformSettings;
@@ -278,7 +278,7 @@ async fn create_topology(
     }
 
     if dp_config.otlp().enabled() {
-        add_otlp_pipeline_to_blueprint(&mut blueprint, config, dp_config, env_provider)?;
+        add_otlp_pipeline_to_blueprint(&mut blueprint, config, saluki_config, env_provider)?;
     }
 
     Ok((blueprint, control_surfaces))
@@ -579,9 +579,10 @@ async fn add_dsd_pipeline_to_blueprint(
 }
 
 fn add_otlp_pipeline_to_blueprint(
-    blueprint: &mut TopologyBlueprint, config: &GenericConfiguration, dp_config: &DataPlaneConfiguration,
+    blueprint: &mut TopologyBlueprint, config: &GenericConfiguration, saluki_config: &SalukiConfiguration,
     env_provider: &ADPEnvironmentProvider,
 ) -> Result<(), GenericError> {
+    let dp_config = &saluki_config.data_plane;
     if dp_config.otlp().proxy().enabled() {
         let core_agent_otlp_grpc_endpoint = dp_config.otlp().proxy().core_agent_otlp_grpc_endpoint().to_string();
         let proxy_metrics = dp_config.otlp().proxy().proxy_metrics();
@@ -599,8 +600,7 @@ fn add_otlp_pipeline_to_blueprint(
         let otlp_relay_config = OtlpRelayConfiguration::from_configuration(config)?;
         let otlp_decoder_config = OtlpDecoderConfiguration::from_configuration(config)?;
 
-        let local_agent_otlp_forwarder_config =
-            OtlpForwarderConfiguration::from_configuration(config, core_agent_otlp_grpc_endpoint)?;
+        let local_agent_otlp_forwarder_config = OtlpForwarderConfiguration::from_native(&saluki_config.otlp_forwarder);
 
         blueprint
             // Components.

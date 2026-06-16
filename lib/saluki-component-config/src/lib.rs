@@ -94,6 +94,33 @@ impl OtlpProxyConfiguration {
     }
 }
 
+/// Native OTLP forwarder settings.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OtlpForwarderConfiguration {
+    core_agent_otlp_grpc_endpoint: String,
+    core_agent_traces_internal_port: u16,
+}
+
+impl OtlpForwarderConfiguration {
+    /// Creates OTLP forwarder settings.
+    pub fn new(core_agent_otlp_grpc_endpoint: String, core_agent_traces_internal_port: u16) -> Self {
+        Self {
+            core_agent_otlp_grpc_endpoint,
+            core_agent_traces_internal_port,
+        }
+    }
+
+    /// Returns the Core Agent OTLP gRPC endpoint.
+    pub fn core_agent_otlp_grpc_endpoint(&self) -> &str {
+        &self.core_agent_otlp_grpc_endpoint
+    }
+
+    /// Returns the Trace Agent internal OTLP port.
+    pub const fn core_agent_traces_internal_port(&self) -> u16 {
+        self.core_agent_traces_internal_port
+    }
+}
+
 /// Native Checks IPC source settings.
 #[derive(Clone, Debug)]
 pub struct ChecksIpcConfiguration {

@@ -69,6 +69,9 @@ pub struct Translator {
     // Shared compression, applied to every encoder at `finish`.
     compression: CompressionConfig,
 
+    // Workload tuning knobs carried through to `SalukiConfiguration` for the environment provider.
+    workload: agent_data_plane_config::WorkloadPrivateConfig,
+
     // Staged endpoint inputs assembled into the forwarder endpoints at `finish`.
     api_key: Option<String>,
     dd_url: Option<String>,
@@ -145,6 +148,7 @@ impl Translator {
             },
             otlp,
             compression: private.compression,
+            workload: private.workload.clone(),
             api_key: None,
             dd_url: None,
             site: None,
@@ -286,6 +290,7 @@ impl Translator {
                 debug_log,
             },
             otlp: OtlpConfigs { config: self.otlp },
+            workload: self.workload,
         }
     }
 }

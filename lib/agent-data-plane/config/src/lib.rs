@@ -28,7 +28,7 @@ pub use bootstrap::{
     BootstrapConfiguration, BootstrapIpcConfiguration, BootstrapStartupConfiguration, BootstrapTelemetryConfiguration,
 };
 pub use logging::RuntimeLoggingConfig;
-pub use private::SalukiPrivateConfiguration;
+pub use private::{SalukiPrivateConfiguration, WorkloadPrivateConfig};
 pub use saluki::{
     ChecksConfigs, DataPlaneConfig, DogStatsDConfigs, EventsConfigs, ForwarderConfigs, LogsConfigs, MemoryConfig,
     MetricsConfigs, OtlpConfigs, PipelineGate, SalukiConfiguration, ServiceChecksConfigs, TracesConfigs,

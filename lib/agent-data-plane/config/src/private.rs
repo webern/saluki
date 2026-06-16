@@ -1,5 +1,7 @@
 //! Saluki-native supplemental configuration.
 
+use std::path::PathBuf;
+
 use bytesize::ByteSize;
 use saluki_component_config::common::CompressionConfig;
 
@@ -24,6 +26,9 @@ pub struct SalukiPrivateConfiguration {
 
     /// Outbound payload compression knobs applied across encoders.
     pub compression: CompressionConfig,
+
+    /// Workload-metadata (environment provider) tuning knobs.
+    pub workload: WorkloadPrivateConfig,
 }
 
 impl SalukiPrivateConfiguration {
@@ -34,8 +39,26 @@ impl SalukiPrivateConfiguration {
             otlp: OtlpPrivateConfig::default(),
             dogstatsd: DogStatsDPrivateConfig::default(),
             compression: CompressionConfig::default(),
+            workload: WorkloadPrivateConfig::default(),
         }
     }
+}
+
+/// Workload-metadata tuning knobs that the Datadog Agent language does not express as first-class
+/// ADP configuration. These drive the environment provider's metadata collectors.
+#[derive(Clone, Debug, Eq, PartialEq, Default)]
+pub struct WorkloadPrivateConfig {
+    /// Size of the string interner shared across workload collectors, or `None` for the default.
+    pub string_interner_size_bytes: Option<usize>,
+
+    /// Containerd gRPC socket path (`cri_socket_path`), or `None` to auto-detect.
+    pub containerd_socket_path: Option<PathBuf>,
+
+    /// Host-mapped procfs root (`container_proc_root`), or `None` for the default.
+    pub container_proc_root: Option<PathBuf>,
+
+    /// Host-mapped cgroupfs root (`container_cgroup_root`), or `None` for the default.
+    pub container_cgroup_root: Option<PathBuf>,
 }
 
 /// OTLP context-resolution tuning knobs that the Datadog Agent language does not express.

@@ -15,6 +15,7 @@ use saluki_component_config::{
 use saluki_io::net::ListenAddress;
 
 use crate::logging::RuntimeLoggingConfig;
+use crate::private::WorkloadPrivateConfig;
 
 /// Complete ADP-native runtime configuration produced by a source-language translator.
 #[derive(Clone, Debug)]
@@ -54,6 +55,9 @@ pub struct SalukiConfiguration {
 
     /// OTLP ingest configuration.
     pub otlp: OtlpConfigs,
+
+    /// Workload-metadata (environment provider) tuning knobs.
+    pub workload: WorkloadPrivateConfig,
 }
 
 /// Process memory-bounds configuration.

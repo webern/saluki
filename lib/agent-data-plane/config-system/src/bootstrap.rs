@@ -163,6 +163,27 @@ pub(crate) fn read_otlp_proxy(config: &GenericConfiguration) -> Option<saluki_co
     })
 }
 
+/// Read the workload-metadata tuning knobs (environment provider control inputs outside the
+/// witnessed schema surface).
+pub(crate) fn read_workload_config(config: &GenericConfiguration) -> agent_data_plane_config::WorkloadPrivateConfig {
+    let path = |key: &str| {
+        config
+            .try_get_typed::<std::path::PathBuf>(key)
+            .ok()
+            .flatten()
+            .filter(|p| !p.as_os_str().is_empty())
+    };
+    agent_data_plane_config::WorkloadPrivateConfig {
+        string_interner_size_bytes: config
+            .try_get_typed::<usize>("remote_agent_string_interner_size_bytes")
+            .ok()
+            .flatten(),
+        containerd_socket_path: path("cri_socket_path"),
+        container_proc_root: path("container_proc_root"),
+        container_cgroup_root: path("container_cgroup_root"),
+    }
+}
+
 /// Read the ADP memory-bounds control inputs (outside the witnessed schema surface).
 pub(crate) fn read_memory_config(config: &GenericConfiguration) -> agent_data_plane_config::MemoryConfig {
     agent_data_plane_config::MemoryConfig {

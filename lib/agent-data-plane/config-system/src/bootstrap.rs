@@ -181,6 +181,11 @@ pub(crate) fn read_workload_config(config: &GenericConfiguration) -> agent_data_
         containerd_socket_path: path("cri_socket_path"),
         container_proc_root: path("container_proc_root"),
         container_cgroup_root: path("container_cgroup_root"),
+        hostname: config
+            .try_get_typed::<String>("hostname")
+            .ok()
+            .flatten()
+            .filter(|s| !s.is_empty()),
     }
 }
 

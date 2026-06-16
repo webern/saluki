@@ -47,17 +47,22 @@ impl RemoteAgentTaggerMetadataCollector {
     ///
     /// If the Agent gRPC client can't be created (invalid API endpoint, missing authentication token, etc), or if the
     /// authentication token is invalid, an error will be returned.
+    #[allow(dead_code)]
     pub async fn from_configuration(
         config: &GenericConfiguration, health: Health, interner: GenericMapInterner,
     ) -> Result<Self, GenericError> {
         let client = RemoteAgentClient::from_configuration(config).await?;
+        Ok(Self::from_client(client, health, interner))
+    }
 
-        Ok(Self {
+    /// Creates a new collector from a shared Datadog Agent client.
+    pub fn from_client(client: RemoteAgentClient, health: Health, interner: GenericMapInterner) -> Self {
+        Self {
             client,
             interner,
             health,
             telemetry: Telemetry::new(),
-        })
+        }
     }
 
     fn try_intern(&self, value: &str) -> Option<MetaString> {

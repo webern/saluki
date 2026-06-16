@@ -59,6 +59,9 @@ pub struct WorkloadPrivateConfig {
 
     /// Host-mapped cgroupfs root (`container_cgroup_root`), or `None` for the default.
     pub container_cgroup_root: Option<PathBuf>,
+
+    /// Fixed hostname (`hostname`) used by the standalone host provider, or `None`.
+    pub hostname: Option<String>,
 }
 
 /// OTLP context-resolution tuning knobs that the Datadog Agent language does not express.

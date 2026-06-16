@@ -134,6 +134,41 @@ impl ContainerdClient {
         })
     }
 
+    /// Creates a new `ContainerdClient` from a natively-provided socket path.
+    ///
+    /// The connection and query timeouts use the same defaults that the configuration-based constructor resolves to
+    /// (1 second connection timeout, 5 second query timeout).
+    ///
+    /// ## Errors
+    ///
+    /// If the containerd socket path wasn't provided or couldn't be detected, or if the gRPC transport to containerd
+    /// couldn't be created, an error will be returned.
+    pub async fn from_native(socket_path: Option<std::path::PathBuf>) -> Result<Self, GenericError> {
+        let socket_path = ContainerdDetector::detect_grpc_socket_path_native(socket_path).ok_or(generic_error!(
+            "failed to detect containerd socket path; not available at default path and not specified"
+        ))?;
+
+        if !path_exists(&socket_path).await {
+            return Err(generic_error!(
+                "Detected containerd socket path ({}) but path does not exist, or process lacks permissions.",
+                socket_path.to_string_lossy()
+            ));
+        }
+
+        let connection_timeout = Duration::from_secs(default_connection_timeout_secs());
+        let query_timeout = Duration::from_secs(default_query_timeout_secs());
+        let channel = Endpoint::try_from("https://[::]")
+            .unwrap()
+            .connect_timeout(connection_timeout)
+            .connect_with_connector(service_fn(move |_| {
+                let socket_path = socket_path.clone();
+                async move { UnixStream::connect(socket_path).await.map(TokioIo::new) }
+            }))
+            .await?;
+
+        Ok(Self { channel, query_timeout })
+    }
+
     /// Lists all namespaces.
     ///
     /// ## Errors

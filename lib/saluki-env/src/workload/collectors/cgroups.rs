@@ -56,6 +56,26 @@ impl CgroupsMetadataCollector {
 
         Ok(Self { reader, health })
     }
+
+    /// Creates a new `CgroupsMetadataCollector` from the given native inputs.
+    ///
+    /// # Errors
+    ///
+    /// If a valid cgroups hierarchy can not be located at the resolved path, an error will be returned.
+    pub async fn from_native(
+        procfs_root: Option<std::path::PathBuf>, cgroupfs_root: Option<std::path::PathBuf>,
+        feature_detector: FeatureDetector, health: Health, interner: GenericMapInterner,
+    ) -> Result<Self, GenericError> {
+        let cgroups_config = CgroupsConfiguration::from_native(procfs_root, cgroupfs_root, feature_detector)?;
+        let reader = match CgroupsReader::try_from_config(&cgroups_config, interner)? {
+            Some(reader) => reader,
+            None => {
+                return Err(generic_error!("Failed to detect any cgroups v1/v2 hierarchy. "));
+            }
+        };
+
+        Ok(Self { reader, health })
+    }
 }
 
 #[async_trait]

@@ -192,15 +192,30 @@ fn first_party_log_level_filter(level: &str) -> Result<LogLevel, GenericError> {
 ///
 /// The worker relies on dynamic configuration; if it's not enabled, the worker simply idles until shutdown.
 pub struct DynamicLogLevelWorker {
-    config: GenericConfiguration,
+    config: Option<GenericConfiguration>,
     controller: LoggingOverrideController,
 }
 
 impl DynamicLogLevelWorker {
     /// Creates a new `DynamicLogLevelWorker` watching the given configuration.
+    ///
+    /// Transitional: superseded by `new_native` on the native control-plane path.
+    #[allow(dead_code)]
     pub fn new(config: &GenericConfiguration, controller: LoggingOverrideController) -> Self {
         Self {
-            config: config.clone(),
+            config: Some(config.clone()),
+            controller,
+        }
+    }
+
+    /// Creates a `DynamicLogLevelWorker` with no raw-config watcher.
+    ///
+    /// On the native path the configuration system delivers `log_level` updates through a typed,
+    /// scoped handle; until that is wired in, this worker idles (the initial level is applied during
+    /// bootstrap). Holding no `GenericConfiguration` keeps the control plane native.
+    pub fn new_native(controller: LoggingOverrideController) -> Self {
+        Self {
+            config: None,
             controller,
         }
     }
@@ -213,7 +228,7 @@ impl Supervisable for DynamicLogLevelWorker {
     }
 
     async fn initialize(&self, process_shutdown: ShutdownHandle) -> Result<SupervisorFuture, InitializationError> {
-        let mut watcher = self.config.watch_for_updates("log_level");
+        let mut watcher = self.config.as_ref().map(|c| c.watch_for_updates("log_level"));
         let controller = self.controller.clone();
 
         Ok(Box::pin(async move {
@@ -224,7 +239,7 @@ impl Supervisable for DynamicLogLevelWorker {
             loop {
                 select! {
                     _ = &mut process_shutdown => break,
-                    (_, new_log_level) = watcher.changed::<String>() => {
+                    (_, new_log_level) = async { watcher.as_mut().unwrap().changed::<String>().await }, if watcher.is_some() => {
                         match parse_optional_log_level_raw(new_log_level) {
                             Ok(log_level) => {
                                 if let Err(e) = controller.update_base(log_level.as_env_filter()).await {

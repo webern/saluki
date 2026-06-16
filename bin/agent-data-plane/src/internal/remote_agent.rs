@@ -120,6 +120,14 @@ impl RemoteAgentBootstrap {
         }
     }
 
+    /// Returns a clone of the shared Datadog Agent client.
+    ///
+    /// Environment providers and metadata collectors reuse this connection instead of opening their
+    /// own IPC clients (the shared-`DatadogAgentConnection` decision, D1).
+    pub fn client(&self) -> RemoteAgentClient {
+        self.client.clone()
+    }
+
     /// Creates a new `StatusProviderServer` tied to this remote agent.
     pub fn create_status_service(&self) -> StatusProviderServer<RemoteAgentImpl> {
         StatusProviderServer::new(self.build_impl())

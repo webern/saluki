@@ -17,7 +17,7 @@ use serde_json::Value;
 /// State used for the config API handler.
 #[derive(Clone)]
 pub struct ConfigState {
-    config: GenericConfiguration,
+    config: Value,
 }
 
 /// An API handler for returning the current configuration.
@@ -30,18 +30,18 @@ pub struct ConfigAPIHandler {
 }
 
 impl ConfigAPIHandler {
-    fn new(config: GenericConfiguration) -> Self {
+    fn from_value(config: Value) -> Self {
         Self {
             state: ConfigState { config },
         }
     }
 
     async fn config_handler(State(state): State<ConfigState>) -> impl IntoResponse {
-        match state.config.as_typed::<Value>() {
-            Ok(config) => (StatusCode::OK, serde_json::to_string(&config).unwrap()).into_response(),
+        match serde_json::to_string(&state.config) {
+            Ok(body) => (StatusCode::OK, body).into_response(),
             Err(e) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to get configuration: {}", e),
+                format!("Failed to serialize configuration: {}", e),
             )
                 .into_response(),
         }
@@ -72,8 +72,14 @@ pub struct ConfigWorker {
 impl ConfigWorker {
     /// Creates a new [`ConfigWorker`] with the given configuration.
     pub fn new(config: GenericConfiguration) -> Self {
+        let value = config.as_typed::<Value>().unwrap_or(Value::Null);
+        Self::from_value(value)
+    }
+
+    /// Creates a new [`ConfigWorker`] that serves an already-resolved configuration snapshot.
+    pub fn from_value(config: Value) -> Self {
         Self {
-            handler: ConfigAPIHandler::new(config),
+            handler: ConfigAPIHandler::from_value(config),
         }
     }
 }

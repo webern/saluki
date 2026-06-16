@@ -12,7 +12,10 @@
 //! shared-connection question + the `saluki-env`/`saluki-app` changes) is tracked in
 //! `CONFRA_SPIKE_STATUS.md` and `design/spike-2c-claude.md` (D13).
 
+use std::path::PathBuf;
+
 use agent_data_plane_config::SalukiConfiguration;
+use datadog_agent_commons::ipc::config::IpcAuthConfiguration;
 use datadog_agent_commons::platform::PlatformSettings;
 use resource_accounting::ComponentRegistry;
 use saluki_app::bootstrap::BootstrapGuard;
@@ -31,12 +34,18 @@ use crate::internal::{
     TopologyControlSurfaces,
 };
 
-/// The resolved runtime configuration plus the raw-config-backed subsystems not yet made native.
+/// The resolved runtime configuration plus the inputs the control plane needs.
+///
+/// `resolve` extracts these from the raw configuration once; nothing stored here retains a
+/// `GenericConfiguration`.
 pub struct RuntimeShell {
-    config: GenericConfiguration,
     dp_config: DataPlaneConfiguration,
     saluki_config: SalukiConfiguration,
     ra_bootstrap: Option<RemoteAgentBootstrap>,
+    /// Resolved configuration snapshot served by the control-plane `/config` endpoint.
+    config_snapshot: serde_json::Value,
+    /// IPC certificate path used to build the privileged API's server TLS.
+    ipc_cert_path: PathBuf,
 }
 
 impl RuntimeShell {
@@ -113,11 +122,19 @@ impl RuntimeShell {
         )
         .error_context("Failed to translate configuration into the ADP-native model.")?;
 
+        // Extract the control-plane inputs natively before dropping the raw configuration: the
+        // snapshot served by the `/config` endpoint, and the IPC certificate path for server TLS.
+        let config_snapshot = config
+            .as_typed::<serde_json::Value>()
+            .unwrap_or(serde_json::Value::Null);
+        let ipc_cert_path = IpcAuthConfiguration::from_configuration(&config)?.ipc_cert_file_path();
+
         Ok(Some(Self {
-            config,
             dp_config,
             saluki_config,
             ra_bootstrap,
+            config_snapshot,
+            ipc_cert_path,
         }))
     }
 
@@ -131,27 +148,30 @@ impl RuntimeShell {
         &self.dp_config
     }
 
-    /// Builds the environment provider (and its optional supervisor).
+    /// Builds the environment provider (and its optional supervisor) from native configuration.
     ///
-    /// Transitional: consumes the raw configuration pending the shared `DatadogAgentConnection`
-    /// rewrite of the env/workload-collector layer.
+    /// The host/workload/autodiscovery providers reuse the shared Datadog Agent client from the
+    /// remote-agent bootstrap (the D1 shared-connection decision); standalone uses a fixed host
+    /// provider. No raw configuration is consumed.
     pub async fn build_environment(
         &self, component_registry: &ComponentRegistry, health_registry: &HealthRegistry,
     ) -> Result<(ADPEnvironmentProvider, Option<Supervisor>), GenericError> {
-        ADPEnvironmentProvider::from_configuration(&self.config, &self.dp_config, component_registry, health_registry)
+        let shared_client = self.ra_bootstrap.as_ref().map(|ra| ra.client());
+        ADPEnvironmentProvider::from_saluki(&self.saluki_config, shared_client, component_registry, health_registry)
             .await
     }
 
-    /// Builds the internal supervisor (control plane + internal observability).
+    /// Builds the internal supervisor (control plane + internal observability) from native inputs.
     ///
-    /// Transitional: consumes the raw configuration pending the native control-plane rewrite
-    /// (`ConfigWorker`, `DynamicLogLevelWorker`, IPC server TLS) and the Remote Agent service split.
+    /// The control plane is fed the resolved config snapshot (for the `/config` endpoint) and the IPC
+    /// certificate path (for server TLS); no `GenericConfiguration` is consumed.
     pub async fn build_internal_supervisor(
         &mut self, component_registry: &ComponentRegistry, health_registry: HealthRegistry,
         control_surfaces: TopologyControlSurfaces, logging_controller: LoggingOverrideController,
     ) -> Result<Supervisor, GenericError> {
         create_internal_supervisor(
-            &self.config,
+            self.config_snapshot.clone(),
+            self.ipc_cert_path.clone(),
             &self.dp_config,
             component_registry,
             health_registry,

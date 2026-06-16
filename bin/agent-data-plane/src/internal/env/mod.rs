@@ -1,5 +1,7 @@
 use std::future::Future;
 
+use agent_data_plane_config::SalukiConfiguration;
+use datadog_agent_commons::ipc::client::RemoteAgentClient;
 use resource_accounting::ComponentRegistry;
 use saluki_config::GenericConfiguration;
 use saluki_core::health::HealthRegistry;
@@ -50,6 +52,7 @@ impl ADPEnvironmentProvider {
     ///
     /// In standalone mode, no supervisor is returned as all behavior/functionality is either provided via
     /// fixed configuration or operates in a no-op fashion.
+    #[allow(dead_code)]
     pub async fn from_configuration(
         config: &GenericConfiguration, dp_config: &DataPlaneConfiguration, component_registry: &ComponentRegistry,
         health_registry: &HealthRegistry,
@@ -86,6 +89,58 @@ impl ADPEnvironmentProvider {
 
         let (autodiscovery_provider, autodiscovery_supervisor) =
             RemoteAgentAutodiscoveryProvider::from_configuration(config).await?;
+        env_supervisor.add_worker(autodiscovery_supervisor);
+
+        let env = Self {
+            host_provider: BoxedHostProvider::from_provider(host_provider),
+            workload_provider: Some(workload_provider),
+            autodiscovery_provider: Some(BoxedAutodiscoveryProvider::from_provider(autodiscovery_provider)),
+            health_registry: health_registry.clone(),
+        };
+
+        Ok((env, Some(env_supervisor)))
+    }
+
+    /// Creates a new `ADPEnvironmentProvider` from the native [`SalukiConfiguration`].
+    ///
+    /// `shared_client` is the Datadog Agent client from the configuration system's connection; when
+    /// `None` (standalone), a fixed host provider is used and no Agent-backed providers are created.
+    /// Otherwise host/workload/autodiscovery providers reuse the shared client (the D1 decision).
+    pub async fn from_saluki(
+        saluki: &SalukiConfiguration, shared_client: Option<RemoteAgentClient>, component_registry: &ComponentRegistry,
+        health_registry: &HealthRegistry,
+    ) -> Result<(Self, Option<Supervisor>), GenericError> {
+        let Some(client) = shared_client else {
+            warn!("Running without a Datadog Agent connection. Origin detection/enrichment and other Agent-dependent features will not be available.");
+
+            let hostname = saluki.workload.hostname.clone().unwrap_or_default();
+            let env = Self {
+                host_provider: BoxedHostProvider::from_provider(FixedHostProvider::from_hostname(hostname)),
+                workload_provider: None,
+                autodiscovery_provider: None,
+                health_registry: health_registry.clone(),
+            };
+            return Ok((env, None));
+        };
+
+        let mut provider_component = component_registry.get_or_create("env_provider");
+        let mut env_supervisor = Supervisor::new("env-provider")?;
+
+        let host_provider = RemoteAgentHostProvider::from_client(client.clone());
+        provider_component
+            .bounds_builder()
+            .with_subcomponent("host", &host_provider);
+
+        let (workload_provider, workload_supervisor) = RemoteAgentWorkloadProvider::from_native(
+            client.clone(),
+            &saluki.workload,
+            component_registry.get_or_create("workload"),
+            health_registry,
+        )
+        .await?;
+        env_supervisor.add_worker(workload_supervisor);
+
+        let (autodiscovery_provider, autodiscovery_supervisor) = RemoteAgentAutodiscoveryProvider::from_client(client)?;
         env_supervisor.add_worker(autodiscovery_supervisor);
 
         let env = Self {

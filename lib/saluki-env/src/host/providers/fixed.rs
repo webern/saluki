@@ -24,6 +24,11 @@ impl FixedHostProvider {
 
         Ok(Self { hostname })
     }
+
+    /// Creates a new `FixedHostProvider` from a resolved hostname.
+    pub fn from_hostname(hostname: String) -> Self {
+        Self { hostname }
+    }
 }
 
 #[async_trait]

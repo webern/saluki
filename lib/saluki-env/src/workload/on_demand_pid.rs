@@ -87,6 +87,18 @@ impl OnDemandPIDResolver {
         })
     }
 
+    /// Creates a new `OnDemandPIDResolver` from the given native inputs.
+    #[cfg(not(target_os = "linux"))]
+    pub fn from_native(
+        _procfs_root: Option<std::path::PathBuf>, _cgroupfs_root: Option<std::path::PathBuf>,
+        _feature_detector: FeatureDetector, _interner: GenericMapInterner,
+    ) -> Result<Self, GenericError> {
+        // On non-Linux platforms, we don't need to do anything special.
+        Ok(Self {
+            inner: Arc::new(Inner::Noop),
+        })
+    }
+
     /// Creates a new `OnDemandPIDResolver` from the given configuration.
     ///
     /// ## Errors
@@ -104,6 +116,45 @@ impl OnDemandPIDResolver {
             .set(interner.capacity_bytes() as f64);
 
         let cgroups_config = CgroupsConfiguration::from_configuration(config, feature_detector)?;
+        let cgroups_reader = match CgroupsReader::try_from_config(&cgroups_config, interner.clone())? {
+            Some(reader) => reader,
+            None => {
+                return Err(GenericError::msg("Failed to detect any cgroups v1/v2 hierarchy."));
+            }
+        };
+
+        let cache_builder = CacheBuilder::from_identifier("on_demand_pid_resolver")?
+            .with_capacity(NonZeroUsize::new(DEFAULT_PID_CACHE_CACHED_PIDS_LIMIT).unwrap())
+            .with_time_to_idle(Some(DEFAULT_PID_CACHE_IDLE_PID_EXPIRATION));
+
+        let inner = Arc::new(Inner::Linux {
+            cgroups_reader,
+            pid_mappings_cache: cache_builder.build(),
+        });
+
+        tokio::spawn(drive_telemetry(interner.clone(), telemetry.clone()));
+
+        Ok(Self { inner })
+    }
+
+    /// Creates a new `OnDemandPIDResolver` from the given native inputs.
+    ///
+    /// ## Errors
+    ///
+    /// If a cgroups hierarchy can't be found, or the internal cache can't be created, an error is returned.
+    #[cfg(target_os = "linux")]
+    pub fn from_native(
+        procfs_root: Option<std::path::PathBuf>, cgroupfs_root: Option<std::path::PathBuf>,
+        feature_detector: FeatureDetector, interner: GenericMapInterner,
+    ) -> Result<Self, GenericError> {
+        use stringtheory::interning::Interner as _;
+
+        let telemetry = Telemetry::new();
+        telemetry
+            .interner_capacity_bytes()
+            .set(interner.capacity_bytes() as f64);
+
+        let cgroups_config = CgroupsConfiguration::from_native(procfs_root, cgroupfs_root, feature_detector)?;
         let cgroups_reader = match CgroupsReader::try_from_config(&cgroups_config, interner.clone())? {
             Some(reader) => reader,
             None => {

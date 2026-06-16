@@ -54,9 +54,49 @@ impl ContainerdDetector {
         }
     }
 
+    /// Tries to detect the containerd gRPC socket path from a natively-provided socket path.
+    ///
+    /// The socket path can be specified directly, or if it's not present, default paths will be checked for the
+    /// presence of the socket path.
+    ///
+    /// If the socket path is provided or detected, and is a valid Unix domain socket, `Some` is returned with the
+    /// socket path. Otherwise, `None` is returned.
+    #[cfg(unix)]
+    pub fn detect_grpc_socket_path_native(socket_path: Option<PathBuf>) -> Option<PathBuf> {
+        // Try and use the provided socket path, or if it's not present, fall back to the possible default paths we
+        // would expect it to be listening at.
+        let detected_socket_path = match socket_path {
+            Some(socket_path) if !path_empty(&socket_path) => Some(socket_path),
+            _ => {
+                if is_running_inside_docker() {
+                    None
+                } else {
+                    debug!("Containerd socket path not provided. Trying to detect at default paths...");
+
+                    let default_socket_paths = with_host_mount_prefixes([DEFAULT_CONTAINERD_SOCKET_PATH_LINUX]);
+                    find_first_available_unix_socket(default_socket_paths)
+                }
+            }
+        }?;
+
+        // If the path isn't empty, and it contains "containerd", we can assume it's the containerd socket.
+        if !path_empty(&detected_socket_path) && path_contains(&detected_socket_path, "containerd") {
+            debug!(socket_path = %detected_socket_path.to_string_lossy(), "Detected containerd socket path.");
+            Some(detected_socket_path)
+        } else {
+            None
+        }
+    }
+
     /// Returns `None` because containerd Unix socket detection isn't supported on this platform.
     #[cfg(not(unix))]
     pub fn detect_grpc_socket_path(_: &GenericConfiguration) -> Option<PathBuf> {
+        None
+    }
+
+    /// Returns `None` because containerd Unix socket detection isn't supported on this platform.
+    #[cfg(not(unix))]
+    pub fn detect_grpc_socket_path_native(_: Option<PathBuf>) -> Option<PathBuf> {
         None
     }
 }

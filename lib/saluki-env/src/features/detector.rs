@@ -32,6 +32,20 @@ impl FeatureDetector {
         Self { detected_features }
     }
 
+    /// Creates a new `FeatureDetector` that checks for all possible features, using natively-provided inputs.
+    pub fn automatic_native(containerd_socket_path: Option<std::path::PathBuf>) -> Self {
+        Self::for_feature_native(containerd_socket_path, Feature::all_bits())
+    }
+
+    /// Creates a new `FeatureDetector` that checks for the given features, using natively-provided inputs.
+    ///
+    /// Multiple features can be checked for by combining the feature variants in a bitwise OR fashion.
+    pub fn for_feature_native(containerd_socket_path: Option<std::path::PathBuf>, feature_mask: Feature) -> Self {
+        let detected_features = Self::detect_features_native(feature_mask, containerd_socket_path);
+
+        Self { detected_features }
+    }
+
     /// Checks if the given feature was detected and is available.
     pub fn is_feature_available(&self, feature: Feature) -> bool {
         self.detected_features.contains(feature)
@@ -51,6 +65,29 @@ impl FeatureDetector {
         }
 
         if feature_mask.contains(Feature::Containerd) && ContainerdDetector::detect_grpc_socket_path(config).is_some() {
+            info!("Detected presence of containerd.");
+            detected_features |= Feature::Containerd;
+        }
+
+        detected_features
+    }
+
+    fn detect_features_native(feature_mask: Feature, containerd_socket_path: Option<std::path::PathBuf>) -> Feature {
+        let mut detected_features = Feature::none();
+
+        if feature_mask.contains(Feature::HostMappedProcfs) && has_host_mapped_procfs() {
+            info!("Detected presence of host-mapped procfs.");
+            detected_features |= Feature::HostMappedProcfs;
+        }
+
+        if feature_mask.contains(Feature::HostMappedCgroupfs) && has_host_mapped_cgroupfs() {
+            info!("Detected presence of host-mapped cgroupfs.");
+            detected_features |= Feature::HostMappedCgroupfs;
+        }
+
+        if feature_mask.contains(Feature::Containerd)
+            && ContainerdDetector::detect_grpc_socket_path_native(containerd_socket_path).is_some()
+        {
             info!("Detected presence of containerd.");
             detected_features |= Feature::Containerd;
         }

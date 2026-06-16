@@ -34,6 +34,9 @@ use saluki_error::{generic_error, GenericError};
 use stringtheory::interning::GenericMapInterner;
 
 mod api;
+use agent_data_plane_config::WorkloadPrivateConfig;
+use datadog_agent_commons::ipc::client::RemoteAgentClient;
+
 use self::api::RemoteAgentWorkloadAPIWorker;
 
 mod collectors;
@@ -85,6 +88,7 @@ impl RemoteAgentWorkloadProvider {
     ///
     /// If there is an issue with any of the provider configuration, or creating the underlying metadata collectors, an
     /// error is returned.
+    #[allow(dead_code)]
     pub async fn from_configuration(
         config: &GenericConfiguration, component_registry: ComponentRegistry, health_registry: &HealthRegistry,
     ) -> Result<(Self, Supervisor), GenericError> {
@@ -182,6 +186,140 @@ impl RemoteAgentWorkloadProvider {
         let api_worker = RemoteAgentWorkloadAPIWorker::from_state(tags_querier.clone(), eds_resolver);
 
         // Build the workload supervisor.
+        let mut supervisor = Supervisor::new("workload")?
+            .with_restart_strategy(RestartStrategy::one_to_one().with_intensity_and_period(5, Duration::from_secs(30)));
+        supervisor.add_worker(aggregator);
+        for worker in collector_workers {
+            supervisor.add_worker(worker);
+        }
+        supervisor.add_worker(api_worker);
+
+        let provider = Self {
+            tags_querier,
+            origin_resolver,
+            on_demand_pid_resolver,
+        };
+
+        Ok((provider, supervisor))
+    }
+
+    /// Creates a new `RemoteAgentWorkloadProvider` from native configuration and a shared Datadog
+    /// Agent client.
+    ///
+    /// Remote Agent collectors (tagger, workloadmeta) reuse `client`; the containerd/cgroups
+    /// collectors and PID resolver are built from the native workload knobs.
+    pub async fn from_native(
+        client: RemoteAgentClient, workload: &WorkloadPrivateConfig, component_registry: ComponentRegistry,
+        health_registry: &HealthRegistry,
+    ) -> Result<(Self, Supervisor), GenericError> {
+        let mut component_registry = component_registry.get_or_create("remote-agent");
+        let mut provider_bounds = component_registry.bounds_builder();
+
+        let string_interner_size_bytes = workload
+            .string_interner_size_bytes
+            .and_then(NonZeroUsize::new)
+            .unwrap_or(DEFAULT_STRING_INTERNER_SIZE_BYTES);
+        let string_interner = GenericMapInterner::new(string_interner_size_bytes);
+
+        provider_bounds
+            .subcomponent("string_interner")
+            .firm()
+            .with_fixed_amount("string interner", string_interner_size_bytes.get());
+
+        let aggregator_health = health_registry
+            .register_component(format!("{WORKLOAD_HEALTH_PREFIX}remote_agent.aggregator"))
+            .ok_or_else(|| {
+                generic_error!(
+                    "Component '{WORKLOAD_HEALTH_PREFIX}remote_agent.aggregator' already registered in health registry."
+                )
+            })?;
+        let (mut aggregator, operations_tx) = MetadataAggregator::new(aggregator_health);
+
+        let mut collector_bounds = provider_bounds.subcomponent("collectors");
+        let mut collector_workers: Vec<MetadataCollectorWorker> = Vec::new();
+
+        let feature_detector = FeatureDetector::automatic_native(workload.containerd_socket_path.clone());
+
+        #[cfg(unix)]
+        if feature_detector.is_feature_available(Feature::Containerd) {
+            let socket_path = workload.containerd_socket_path.clone();
+            let cri_collector = build_collector("containerd", health_registry, &mut collector_bounds, |health| {
+                ContainerdMetadataCollector::from_native(socket_path, health, string_interner.clone())
+            })
+            .await?;
+            collector_workers.push(MetadataCollectorWorker::new(cri_collector, operations_tx.clone()));
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            let proc_root = workload.container_proc_root.clone();
+            let cgroup_root = workload.container_cgroup_root.clone();
+            let feature_detector = feature_detector.clone();
+            let cgroups_collector = build_collector("cgroups", health_registry, &mut collector_bounds, |health| {
+                CgroupsMetadataCollector::from_native(
+                    proc_root,
+                    cgroup_root,
+                    feature_detector,
+                    health,
+                    string_interner.clone(),
+                )
+            })
+            .await?;
+            collector_workers.push(MetadataCollectorWorker::new(cgroups_collector, operations_tx.clone()));
+        }
+
+        let tags_client = client.clone();
+        let ra_tags_collector = build_collector(
+            "remote-agent-tags",
+            health_registry,
+            &mut collector_bounds,
+            |health| async {
+                Ok(RemoteAgentTaggerMetadataCollector::from_client(
+                    tags_client,
+                    health,
+                    string_interner.clone(),
+                ))
+            },
+        )
+        .await?;
+        collector_workers.push(MetadataCollectorWorker::new(ra_tags_collector, operations_tx.clone()));
+
+        let wmeta_client = client.clone();
+        let ra_wmeta_collector = build_collector(
+            "remote-agent-wmeta",
+            health_registry,
+            &mut collector_bounds,
+            |health| async {
+                Ok(RemoteAgentWorkloadMetadataCollector::from_client(
+                    wmeta_client,
+                    health,
+                    string_interner.clone(),
+                ))
+            },
+        )
+        .await?;
+        collector_workers.push(MetadataCollectorWorker::new(ra_wmeta_collector, operations_tx));
+
+        let tag_store = TagStore::with_entity_limit(DEFAULT_TAG_STORE_ENTITY_LIMIT);
+        let tags_querier = tag_store.querier();
+        aggregator.add_store(tag_store);
+
+        let external_data_store = ExternalDataStore::with_entity_limit(DEFAULT_EXTERNAL_DATA_STORE_ENTITY_LIMIT);
+        let eds_resolver = external_data_store.resolver();
+        aggregator.add_store(external_data_store);
+
+        let on_demand_pid_resolver = OnDemandPIDResolver::from_native(
+            workload.container_proc_root.clone(),
+            workload.container_cgroup_root.clone(),
+            feature_detector,
+            string_interner,
+        )?;
+        let origin_resolver = OriginResolver::new(eds_resolver.clone());
+
+        provider_bounds.with_subcomponent("aggregator", &aggregator);
+
+        let api_worker = RemoteAgentWorkloadAPIWorker::from_state(tags_querier.clone(), eds_resolver);
+
         let mut supervisor = Supervisor::new("workload")?
             .with_restart_strategy(RestartStrategy::one_to_one().with_intensity_and_period(5, Duration::from_secs(30)));
         supervisor.add_worker(aggregator);

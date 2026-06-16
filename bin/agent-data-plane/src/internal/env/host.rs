@@ -23,6 +23,7 @@ impl RemoteAgentHostProvider {
     ///
     /// If the Agent gRPC client can't be created (invalid API endpoint, missing authentication token, etc), or if the
     /// authentication token is invalid, an error will be returned.
+    #[allow(dead_code)]
     pub async fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
         let client = RemoteAgentClient::from_configuration(config).await?;
 
@@ -30,6 +31,14 @@ impl RemoteAgentHostProvider {
             client,
             cached_hostname: OnceCell::new(),
         })
+    }
+
+    /// Creates a new `RemoteAgentHostProvider` from a shared Datadog Agent client.
+    pub fn from_client(client: RemoteAgentClient) -> Self {
+        Self {
+            client,
+            cached_hostname: OnceCell::new(),
+        }
     }
 
     async fn get_or_fetch_hostname(&self) -> Result<String, GenericError> {

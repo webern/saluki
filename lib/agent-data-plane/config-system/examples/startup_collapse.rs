@@ -10,7 +10,7 @@
 //! would consume native slices); it is not run as part of any test. Building it proves the typed
 //! boundary is directly consumable.
 
-use agent_data_plane_config_system::{BootstrapInputs, ConfigUpdateRouter, ConfigurationSystem, StartedAttachments};
+use agent_data_plane_config_system::{BootstrapInputs, ConfigurationSystem, StartedAttachments};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), saluki_error::GenericError> {
@@ -61,24 +61,19 @@ async fn main() -> Result<(), saluki_error::GenericError> {
     }
 
     // Typed dynamic updates: when a stream-backed authority is active, the configuration system owns
-    // the stream and routes typed, scoped deltas to per-component handles. Components hold only their
-    // own handle (for example the forwarder's), so a change elsewhere physically cannot reach them.
+    // the stream and the update router (spawned inside `start()`), and routes typed, scoped deltas to
+    // per-component handles. The binary receives only the typed `DynamicConfigHandles`. Each component
+    // holds only its own handle (for example the forwarder's), so a change elsewhere physically cannot
+    // reach it.
     match started.attachments() {
         StartedAttachments::None => {
             // Local snapshot authority: no live updates.
         }
-        StartedAttachments::DatadogAgentConfigStream { .. } => {
-            let (_started_bootstrap, saluki, attachments) = started.into_parts();
-            let private = agent_data_plane_config::SalukiPrivateConfiguration::for_language(
-                agent_data_plane_config::RuntimeConfigLanguage::DatadogAgent,
-            );
-            if let StartedAttachments::DatadogAgentConfigStream { stream, .. } = attachments {
-                // The initial snapshot value would be retained by the config system; here we seed the
-                // router from a fresh value for illustration.
-                let (router, _handles) = ConfigUpdateRouter::new(&saluki, serde_json::Value::Null, private);
-                tokio::spawn(router.run(stream.into_updates()));
-                // `_handles.forwarder`, `_handles.log_level`, etc. would be handed to their components.
-            }
+        StartedAttachments::DatadogAgentConfigStream { handles, .. } => {
+            // `handles.forwarder`, `handles.prefix_filter`, `handles.tag_filterlist`,
+            // `handles.dogstatsd_source`, and `handles.log_level` would be handed to their components
+            // (for example via `with_dynamic_handle`) so each observes only its own slice's changes.
+            let _ = &handles.forwarder;
         }
     }
 

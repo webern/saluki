@@ -20,6 +20,7 @@ use saluki_error::{generic_error, ErrorContext as _, GenericError};
 
 use crate::bootstrap::{self, BootstrapInputs};
 use crate::datadog_agent::DatadogAgentConnection;
+use crate::dynamic::{ConfigUpdateRouter, DynamicConfigHandles};
 use crate::stream::ConfigStreamHandle;
 use crate::translate::translate_datadog;
 
@@ -84,13 +85,21 @@ impl ConfigurationSystem {
                     .as_typed::<serde_json::Value>()
                     .unwrap_or(serde_json::Value::Null);
 
-                // A separate stream feeds the typed, scoped dynamic-update router.
+                // Build the typed, scoped dynamic-update router, seeded with the initial translation
+                // and snapshot, and run it on a dedicated config stream. The router re-translates
+                // inbound updates and pushes changed slices to per-component handles; the binary
+                // receives only the typed handles, never the raw stream.
+                let mut private = SalukiPrivateConfiguration::for_language(language);
+                private.workload = crate::bootstrap::read_workload_config(&dynamic);
+                let (router, handles) = ConfigUpdateRouter::new(&saluki, snapshot.clone(), private);
                 let stream =
                     ConfigStreamHandle::new(ConfigStreamAuthority::DatadogAgent, connection.create_config_stream());
+                tokio::spawn(router.run(stream.into_updates()));
+
                 (
                     saluki,
                     snapshot,
-                    StartedAttachments::DatadogAgentConfigStream { connection, stream },
+                    StartedAttachments::DatadogAgentConfigStream { connection, handles },
                 )
             }
             RuntimeConfigAuthority::LocalSnapshot(language) => {
@@ -209,7 +218,7 @@ pub enum StartedAttachments {
         /// Datadog Agent connection/session capability.
         connection: DatadogAgentConnection,
 
-        /// Runtime configuration stream handle.
-        stream: ConfigStreamHandle,
+        /// Typed, scoped dynamic-configuration handles for components.
+        handles: DynamicConfigHandles,
     },
 }

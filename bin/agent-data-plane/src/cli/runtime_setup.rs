@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 
 use agent_data_plane_config::SalukiConfiguration;
-use agent_data_plane_config_system::{BootstrapInputs, ConfigurationSystem, StartedAttachments};
+use agent_data_plane_config_system::{BootstrapInputs, ConfigurationSystem, DynamicConfigHandles, StartedAttachments};
 use resource_accounting::ComponentRegistry;
 use saluki_app::bootstrap::BootstrapGuard;
 use saluki_app::logging::LoggingOverrideController;
@@ -28,6 +28,8 @@ use crate::internal::{create_internal_supervisor, TopologyControlSurfaces};
 pub struct RuntimeShell {
     saluki_config: SalukiConfiguration,
     connection: Option<agent_data_plane_config_system::DatadogAgentConnection>,
+    /// Typed, scoped dynamic-configuration handles, present when a config-stream authority is active.
+    dynamic_handles: Option<DynamicConfigHandles>,
     /// Resolved configuration snapshot served by the control-plane `/config` endpoint.
     config_snapshot: serde_json::Value,
     /// IPC certificate path used to build the privileged API's server TLS.
@@ -65,14 +67,15 @@ impl RuntimeShell {
         }
 
         let parts = started.into_parts();
-        let connection = match parts.attachments {
-            StartedAttachments::DatadogAgentConfigStream { connection, .. } => Some(connection),
-            StartedAttachments::None => None,
+        let (connection, dynamic_handles) = match parts.attachments {
+            StartedAttachments::DatadogAgentConfigStream { connection, handles } => (Some(connection), Some(handles)),
+            StartedAttachments::None => (None, None),
         };
 
         Ok(Some(Self {
             saluki_config: parts.saluki,
             connection,
+            dynamic_handles,
             config_snapshot: parts.config_snapshot,
             ipc_cert_path: parts.ipc_cert_path,
         }))
@@ -81,6 +84,11 @@ impl RuntimeShell {
     /// Returns the ADP-native runtime configuration.
     pub fn saluki(&self) -> &SalukiConfiguration {
         &self.saluki_config
+    }
+
+    /// Returns the typed, scoped dynamic-configuration handles, if a config-stream authority is active.
+    pub fn dynamic_handles(&self) -> Option<&DynamicConfigHandles> {
+        self.dynamic_handles.as_ref()
     }
 
     /// Builds the environment provider (and its optional supervisor) from native configuration.

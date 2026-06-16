@@ -33,7 +33,7 @@ use crate::translate::translate_datadog;
 ///
 /// A component can read the latest value and await the next change. Because the channel only ever
 /// carries this slice's type, the component cannot observe another component's configuration.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ScopedConfigHandle<T> {
     rx: watch::Receiver<T>,
 }
@@ -59,7 +59,7 @@ impl<T: Clone> ScopedConfigHandle<T> {
 ///
 /// Each field is an independent channel; this is what makes blast-radius containment physical rather
 /// than conventional.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct DynamicConfigHandles {
     /// Runtime log level.
     pub log_level: ScopedConfigHandle<Option<String>>,

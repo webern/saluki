@@ -8,6 +8,7 @@
 use std::time::{Duration, Instant};
 
 use agent_data_plane_config::SalukiConfiguration;
+use agent_data_plane_config_system::DynamicConfigHandles;
 use datadog_agent_commons::platform::PlatformSettings;
 use resource_accounting::{ComponentBounds, ComponentRegistry};
 use saluki_app::{
@@ -76,7 +77,8 @@ pub async fn handle_run_command(
     let (env_provider, maybe_env_supervisor) = shell.build_environment(&component_registry, &health_registry).await?;
 
     // Create the blueprint for our primary topology, built entirely from the native configuration.
-    let (mut blueprint, control_surfaces) = create_topology(shell.saluki(), &env_provider, &component_registry).await?;
+    let (mut blueprint, control_surfaces) =
+        create_topology(shell.saluki(), shell.dynamic_handles(), &env_provider, &component_registry).await?;
 
     // Run memory bounds validation to ensure that we can launch the topology with our configured memory limit, if any.
     // Built from the native memory configuration rather than the raw map.
@@ -164,7 +166,8 @@ async fn wait_for_sigint() {
 }
 
 async fn create_topology(
-    saluki_config: &SalukiConfiguration, env_provider: &ADPEnvironmentProvider, component_registry: &ComponentRegistry,
+    saluki_config: &SalukiConfiguration, dynamic_handles: Option<&DynamicConfigHandles>,
+    env_provider: &ADPEnvironmentProvider, component_registry: &ComponentRegistry,
 ) -> Result<(TopologyBlueprint, TopologyControlSurfaces), GenericError> {
     let mut blueprint = TopologyBlueprint::new("primary", component_registry);
     let mut control_surfaces = TopologyControlSurfaces::default();
@@ -221,7 +224,8 @@ async fn create_topology(
     }
 
     if data_plane.dogstatsd.enabled() {
-        let dsd_control_surface = add_dsd_pipeline_to_blueprint(&mut blueprint, saluki_config, env_provider).await?;
+        let dsd_control_surface =
+            add_dsd_pipeline_to_blueprint(&mut blueprint, saluki_config, dynamic_handles, env_provider).await?;
         control_surfaces.attach_dogstatsd(dsd_control_surface);
     }
 
@@ -409,7 +413,8 @@ async fn add_baseline_traces_pipeline_to_blueprint(
 }
 
 async fn add_dsd_pipeline_to_blueprint(
-    blueprint: &mut TopologyBlueprint, saluki_config: &SalukiConfiguration, env_provider: &ADPEnvironmentProvider,
+    blueprint: &mut TopologyBlueprint, saluki_config: &SalukiConfiguration,
+    dynamic_handles: Option<&DynamicConfigHandles>, env_provider: &ADPEnvironmentProvider,
 ) -> Result<DogStatsDControlSurface, GenericError> {
     // We're creating the "front half" of the DogStatsD pipeline, which deals solely with accepting DogStatsD payloads,
     // and enriching/processing them in DSD-specific ways, relevant to how the Datadog Agent is expected to behave.
@@ -450,18 +455,28 @@ async fn add_dsd_pipeline_to_blueprint(
         .error_context("Failed to configure DogStatsD source.")?
         .with_workload_provider(env_provider.workload().clone())
         .with_capture_entity_resolver(env_provider.workload().clone());
-    let dsd_prefix_filter_configuration =
+    let mut dsd_prefix_filter_configuration =
         DogStatsDPrefixFilterConfiguration::from_native(&saluki_config.dogstatsd.prefix_filter)?;
+    if let Some(handles) = dynamic_handles {
+        dsd_prefix_filter_configuration =
+            dsd_prefix_filter_configuration.with_dynamic_handle(handles.prefix_filter.clone());
+    }
     let dsd_mapper_config = DogStatsDMapperConfiguration::from_native(&saluki_config.dogstatsd.mapper)?;
     let dsd_enrich_config =
         ChainedConfiguration::default().with_transform_builder("dogstatsd_mapper", dsd_mapper_config);
-    let dsd_tag_filterlist_config = TagFilterlistConfiguration::from_native(&saluki_config.dogstatsd.tag_filterlist)
+    let mut dsd_tag_filterlist_config = TagFilterlistConfiguration::from_native(&saluki_config.dogstatsd.tag_filterlist)
         .error_context("Failed to configure metric tag filterlist transform.")?;
+    if let Some(handles) = dynamic_handles {
+        dsd_tag_filterlist_config = dsd_tag_filterlist_config.with_dynamic_handle(handles.tag_filterlist.clone());
+    }
     let dsd_agg_config = AggregateConfiguration::from_native(&saluki_config.dogstatsd.aggregate)
         .error_context("Failed to configure aggregate transform.")?;
-    let dsd_post_agg_filter_config =
+    let mut dsd_post_agg_filter_config =
         DogStatsDPostAggregateFilterConfiguration::from_native(&saluki_config.dogstatsd.prefix_filter)
             .error_context("Failed to configure DogStatsD post-aggregate filter transform.")?;
+    if let Some(handles) = dynamic_handles {
+        dsd_post_agg_filter_config = dsd_post_agg_filter_config.with_dynamic_handle(handles.prefix_filter.clone());
+    }
     let events_enrich_config = ChainedConfiguration::default().with_transform_builder(
         "host_enrichment",
         HostEnrichmentConfiguration::from_environment_provider(env_provider.clone()),

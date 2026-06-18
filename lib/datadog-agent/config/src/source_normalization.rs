@@ -1,19 +1,20 @@
-//! Datadog-specific configuration providers and remappers.
+//! Datadog source-language normalization metadata: key aliases and the env-var remapper.
+//!
+//! These describe how raw Datadog Agent configuration sources (`datadog.yaml`, `DD_*` env vars)
+//! normalize onto canonical config keys before deserialization into [`DatadogConfiguration`]. They
+//! are Datadog source-adapter concerns and belong in this crate, not in component or runtime code.
+//!
+//! NOTE: An equivalent copy currently lives in `saluki-components` (`src/config/mod.rs`). This is
+//! the authoritative home per the configuration design; the `saluki-components` copy is left in
+//! place for now and is removed when the config-system cutover routes loading through here.
 
-pub mod autoscaling_failover;
-pub mod cluster_agent;
-pub mod mrf;
 use figment::{
     providers::Serialized,
     value::{Dict, Map},
     Error, Metadata, Profile, Provider,
 };
 
-pub use self::autoscaling_failover::AutoscalingFailoverConfiguration;
-pub use self::cluster_agent::ClusterAgentConfiguration;
-pub use self::mrf::MrfConfiguration;
-
-/// Key aliases to pass to [`ConfigurationLoader::with_key_aliases`][saluki_config::ConfigurationLoader::with_key_aliases].
+/// Key aliases to pass to a configuration loader's key-aliasing hook.
 ///
 /// Each entry maps a nested dot-separated path to a flat key name. When the nested path is found in a loaded
 /// config file, its value is also emitted under the flat key—but only if the flat key isn't already
@@ -171,13 +172,12 @@ const ENV_REMAPPINGS: &[(&str, &str)] = &[("http_proxy", "proxy_http"), ("https_
 /// Reads environment variables case-insensitively and maps them to config keys (for example, `HTTP_PROXY` →
 /// `proxy_http`). Values are snapshotted at construction time.
 ///
-/// Add this provider to a [`ConfigurationLoader`][saluki_config::ConfigurationLoader] *after* file-based
-/// providers and *before* vendor-prefixed env providers (for example, `DD_`) to achieve the correct precedence:
+/// Add this provider to a configuration loader *after* file-based providers and *before*
+/// vendor-prefixed env providers (for example, `DD_`) to achieve the correct precedence:
 /// file < remapped env vars < `DD_`-prefixed.
 ///
-/// For YAML key aliasing (for example, `proxy.http` → `proxy_http`), pass [`KEY_ALIASES`] to
-/// [`ConfigurationLoader::with_key_aliases`][saluki_config::ConfigurationLoader::with_key_aliases] instead—
-/// that's handled at file-load time.
+/// For YAML key aliasing (for example, `proxy.http` → `proxy_http`), pass [`KEY_ALIASES`] to the
+/// loader's key-aliasing hook instead—that's handled at file-load time.
 pub struct DatadogRemapper {
     values: serde_json::Map<String, serde_json::Value>,
 }

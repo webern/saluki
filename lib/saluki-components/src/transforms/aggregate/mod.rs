@@ -8,7 +8,7 @@ use ddsketch::DDSketch;
 use hashbrown::{hash_map::Entry, HashMap};
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder, UsageExpr};
 use saluki_common::time::get_unix_timestamp;
-use saluki_config::GenericConfiguration;
+use saluki_component_config::AggregateConfig;
 use saluki_context::Context;
 use saluki_core::{
     components::{transforms::*, ComponentContext},
@@ -188,9 +188,18 @@ pub struct AggregateConfiguration {
 }
 
 impl AggregateConfiguration {
-    /// Creates a new `AggregateConfiguration` from the given configuration.
-    pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
-        Ok(config.as_typed()?)
+    /// Creates a new `AggregateConfiguration` from native config.
+    pub fn from_native(config: AggregateConfig) -> Self {
+        Self {
+            primary_flush_interval: Duration::from_millis(config.flush_interval_millis),
+            flush_open_windows: config.flush_open_windows,
+            passthrough_timestamped_metrics: config.passthrough_timestamped_metrics,
+            hist_config: HistogramConfiguration::with_copy_config(
+                config.histogram_copy_to_distribution,
+                config.histogram_copy_to_distribution_prefix,
+            ),
+            ..Self::with_defaults()
+        }
     }
 
     /// Creates a new `AggregateConfiguration` with default values.
@@ -1519,12 +1528,12 @@ mod tests {
 
 #[cfg(test)]
 mod config_smoke {
+    use datadog_agent_config::{DatadogRemapper, KEY_ALIASES};
     use datadog_agent_config_testing::config_registry::structs;
     use datadog_agent_config_testing::run_config_smoke_tests;
     use serde_json::json;
 
     use super::AggregateConfiguration;
-    use crate::config::{DatadogRemapper, KEY_ALIASES};
 
     #[tokio::test]
     async fn smoke_test() {

@@ -5,7 +5,7 @@ use http::{uri::PathAndQuery, HeaderValue, Method, Uri};
 use protobuf::{rt::WireType, CodedOutputStream};
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
 use saluki_common::iter::ReusableDeduplicator;
-use saluki_config::GenericConfiguration;
+use saluki_component_config::DatadogEventsEncoderConfig;
 use saluki_context::tags::Tag;
 use saluki_core::{
     components::{encoders::*, ComponentContext},
@@ -114,9 +114,15 @@ pub struct DatadogEventsConfiguration {
 }
 
 impl DatadogEventsConfiguration {
-    /// Creates a new `DatadogEventsConfiguration` from the given configuration.
-    pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
-        Ok(config.as_typed()?)
+    /// Creates an events encoder configuration from native config.
+    pub fn from_native(_config: DatadogEventsEncoderConfig) -> Self {
+        Self {
+            max_payload_size: default_max_payload_size(),
+            max_uncompressed_payload_size: default_max_uncompressed_payload_size(),
+            compressor_kind: default_serializer_compressor_kind(),
+            zstd_compressor_level: default_zstd_compressor_level(),
+            log_payloads: default_log_payloads(),
+        }
     }
 }
 
@@ -329,12 +335,12 @@ fn encode_eventd(eventd: &EventD, tags_deduplicator: &mut ReusableDeduplicator<T
 
 #[cfg(test)]
 mod config_smoke {
+    use datadog_agent_config::{DatadogRemapper, KEY_ALIASES};
     use datadog_agent_config_testing::config_registry::structs;
     use datadog_agent_config_testing::run_config_smoke_tests;
     use serde_json::json;
 
     use super::DatadogEventsConfiguration;
-    use crate::config::{DatadogRemapper, KEY_ALIASES};
 
     #[tokio::test]
     async fn smoke_test() {

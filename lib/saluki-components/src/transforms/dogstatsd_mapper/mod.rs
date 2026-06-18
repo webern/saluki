@@ -9,7 +9,7 @@ use bytesize::ByteSize;
 use regex::Regex;
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
 use saluki_common::cache::{Cache, CacheBuilder};
-use saluki_config::GenericConfiguration;
+use saluki_component_config::DogStatsDMapperConfig;
 use saluki_context::tags::SharedTagSet;
 use saluki_context::tags::TagSet;
 use saluki_context::{Context, ContextResolver, ContextResolverBuilder};
@@ -95,6 +95,22 @@ impl FromStr for MapperProfileConfigs {
 impl std::fmt::Display for MapperProfileConfigs {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", serde_json::to_string(&self.0).unwrap_or_default())
+    }
+}
+
+impl DogStatsDMapperConfiguration {
+    /// Creates a DogStatsD mapper configuration from native config.
+    pub fn from_native(config: DogStatsDMapperConfig) -> Self {
+        let profiles = config
+            .profiles
+            .into_iter()
+            .filter_map(|value| serde_json::from_value(value).ok())
+            .collect();
+        Self {
+            context_string_interner_bytes: default_context_string_interner_size(),
+            cache_size: config.cache_size,
+            dogstatsd_mapper_profiles: MapperProfileConfigs(profiles),
+        }
     }
 }
 
@@ -344,13 +360,6 @@ impl MetricMapper {
     #[cfg(test)]
     fn cache_len(&self) -> Option<usize> {
         self.cache.as_ref().map(|c| c.len())
-    }
-}
-
-impl DogStatsDMapperConfiguration {
-    /// Creates a new `DogstatsDMapperConfiguration` from the given configuration.
-    pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
-        Ok(config.as_typed()?)
     }
 }
 
@@ -1164,12 +1173,12 @@ mod tests {
 
 #[cfg(test)]
 mod config_smoke {
+    use datadog_agent_config::{DatadogRemapper, KEY_ALIASES};
     use datadog_agent_config_testing::config_registry::structs;
     use datadog_agent_config_testing::run_config_smoke_tests;
     use serde_json::json;
 
     use super::DogStatsDMapperConfiguration;
-    use crate::config::{DatadogRemapper, KEY_ALIASES};
 
     #[tokio::test]
     async fn smoke_test() {

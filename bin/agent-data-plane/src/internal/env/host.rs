@@ -1,15 +1,11 @@
 use async_trait::async_trait;
 use datadog_agent_commons::ipc::client::RemoteAgentClient;
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
-use saluki_config::GenericConfiguration;
 use saluki_env::HostProvider;
 use saluki_error::GenericError;
 use tokio::sync::OnceCell;
 
 /// Datadog Agent-based host provider.
-///
-/// This provider is based on the internal gRPC API exposed by the Datadog Agent which exposes a way to get the hostname
-/// as detected by the Datadog Agent.
 #[derive(Clone)]
 pub struct RemoteAgentHostProvider {
     client: RemoteAgentClient,
@@ -17,19 +13,12 @@ pub struct RemoteAgentHostProvider {
 }
 
 impl RemoteAgentHostProvider {
-    /// Creates a new `RemoteAgentHostProvider` from the given configuration.
-    ///
-    /// # Errors
-    ///
-    /// If the Agent gRPC client can't be created (invalid API endpoint, missing authentication token, etc), or if the
-    /// authentication token is invalid, an error will be returned.
-    pub async fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
-        let client = RemoteAgentClient::from_configuration(config).await?;
-
-        Ok(Self {
+    /// Creates a host provider from a typed Datadog Agent IPC client.
+    pub fn from_client(client: RemoteAgentClient) -> Self {
+        Self {
             client,
             cached_hostname: OnceCell::new(),
-        })
+        }
     }
 
     async fn get_or_fetch_hostname(&self) -> Result<String, GenericError> {

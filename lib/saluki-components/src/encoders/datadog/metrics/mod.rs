@@ -8,7 +8,7 @@ use http::{uri::PathAndQuery, HeaderValue, Method, Uri};
 use protobuf::{rt::WireType, CodedOutputStream, Enum as _};
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
 use saluki_common::{iter::ReusableDeduplicator, task::HandleExt as _};
-use saluki_config::GenericConfiguration;
+use saluki_component_config::DatadogMetricsEncoderConfig;
 use saluki_context::tags::{SharedTagSet, Tag};
 use saluki_core::{
     components::{encoders::*, ComponentContext},
@@ -284,9 +284,22 @@ pub struct DatadogMetricsConfiguration {
 }
 
 impl DatadogMetricsConfiguration {
-    /// Creates a new `DatadogMetricsConfiguration` from the given configuration.
-    pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
-        Ok(config.as_typed()?)
+    /// Creates a metrics encoder configuration from native config.
+    pub fn from_native(config: DatadogMetricsEncoderConfig) -> Self {
+        Self {
+            max_metrics_per_payload: config.max_metrics_per_payload,
+            max_payload_size: config.max_payload_size,
+            max_uncompressed_payload_size: config.max_uncompressed_payload_size,
+            max_series_payload_size: config.max_series_payload_size,
+            max_series_uncompressed_payload_size: config.max_series_uncompressed_payload_size,
+            max_series_points_per_payload: config.max_series_points_per_payload,
+            flush_timeout_secs: config.flush_timeout_secs,
+            compressor_kind: config.compressor_kind,
+            zstd_compressor_level: config.compression_level,
+            use_v2_api_series: config.use_v2_api_series,
+            log_payloads: config.log_payloads,
+            additional_tags: None,
+        }
     }
 
     /// Sets additional tags to be applied uniformly to all metrics forwarded by this destination.
@@ -1640,12 +1653,12 @@ mod tests {
 
 #[cfg(test)]
 mod config_smoke {
+    use datadog_agent_config::{DatadogRemapper, KEY_ALIASES};
     use datadog_agent_config_testing::config_registry::structs;
     use datadog_agent_config_testing::run_config_smoke_tests;
     use serde_json::json;
 
     use super::DatadogMetricsConfiguration;
-    use crate::config::{DatadogRemapper, KEY_ALIASES};
 
     #[tokio::test]
     async fn smoke_test() {
@@ -1666,11 +1679,12 @@ mod config_smoke {
 
 #[cfg(test)]
 mod use_v2_api_series_default {
-    use saluki_config::ConfigurationLoader;
+    use datadog_agent_config::KEY_ALIASES;
+    use saluki_config_tools::ConfigurationLoader;
     use serde_json::json;
 
     use super::{DatadogMetricsConfiguration, SERIES_V2_COMPRESSED_SIZE_LIMIT, SERIES_V2_UNCOMPRESSED_SIZE_LIMIT};
-    use crate::{common::datadog::clamp_payload_limits, config::KEY_ALIASES};
+    use crate::common::datadog::clamp_payload_limits;
 
     /// `use_v2_api_series` defaults to `true` (preserves V2 protobuf behavior when the flag is absent).
     /// The nested-form (`use_v2_api.series`) and env-var (`DD_USE_V2_API_SERIES`) paths to the flat key

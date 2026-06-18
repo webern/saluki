@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use facet::Facet;
 use http::{uri::PathAndQuery, HeaderValue, Method, Uri};
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
-use saluki_config::GenericConfiguration;
+use saluki_component_config::DatadogServiceChecksEncoderConfig;
 use saluki_core::{
     components::{encoders::*, ComponentContext},
     data_model::{
@@ -110,9 +110,15 @@ pub struct DatadogServiceChecksConfiguration {
 }
 
 impl DatadogServiceChecksConfiguration {
-    /// Creates a new `DatadogServiceChecksConfiguration` from the given configuration.
-    pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
-        Ok(config.as_typed()?)
+    /// Creates a service-check encoder configuration from native config.
+    pub fn from_native(_config: DatadogServiceChecksEncoderConfig) -> Self {
+        Self {
+            max_payload_size: default_max_payload_size(),
+            max_uncompressed_payload_size: default_max_uncompressed_payload_size(),
+            compressor_kind: default_serializer_compressor_kind(),
+            zstd_compressor_level: default_zstd_compressor_level(),
+            log_payloads: default_log_payloads(),
+        }
     }
 }
 
@@ -279,12 +285,12 @@ impl EndpointEncoder for ServiceChecksEndpointEncoder {
 
 #[cfg(test)]
 mod config_smoke {
+    use datadog_agent_config::{DatadogRemapper, KEY_ALIASES};
     use datadog_agent_config_testing::config_registry::structs;
     use datadog_agent_config_testing::run_config_smoke_tests;
     use serde_json::json;
 
     use super::DatadogServiceChecksConfiguration;
-    use crate::config::{DatadogRemapper, KEY_ALIASES};
 
     #[tokio::test]
     async fn smoke_test() {

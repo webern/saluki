@@ -10,7 +10,7 @@ use datadog_protos::agent::{
     TagCardinality, WorkloadmetaEventType, WorkloadmetaFilter, WorkloadmetaKind, WorkloadmetaSource,
     WorkloadmetaStreamRequest, WorkloadmetaStreamResponse,
 };
-use saluki_config::GenericConfiguration;
+use saluki_config_tools::GenericConfiguration;
 use saluki_error::{generic_error, ErrorContext as _, GenericError};
 use saluki_io::net::client::http::HttpsCapableConnectorBuilder;
 use tonic::{
@@ -44,7 +44,15 @@ impl RemoteAgentClient {
     /// authentication token is invalid, an error will be returned.
     pub async fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
         let config = RemoteAgentClientConfiguration::from_configuration(config)?;
+        Self::from_client_configuration(config).await
+    }
 
+    /// Creates a new `RemoteAgentClient` from typed IPC client configuration.
+    ///
+    /// # Errors
+    ///
+    /// If the Agent gRPC client can't be created or authenticated, an error is returned.
+    pub async fn from_client_configuration(config: RemoteAgentClientConfiguration) -> Result<Self, GenericError> {
         // TODO: We need to write a Tower middleware service that allows applying a backoff between failed calls,
         // specifically so that we can throttle reconnection attempts.
         //

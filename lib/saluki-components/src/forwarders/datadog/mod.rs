@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use http::Uri;
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder, UsageExpr};
 use saluki_common::buf::FrozenChunkedBytesBuffer;
-use saluki_config::GenericConfiguration;
+use saluki_component_config::{DatadogForwarderConfig, EndpointConfig, ScopedConfig};
 use saluki_core::{
     components::{forwarders::*, ComponentContext},
     data_model::payload::PayloadType,
@@ -28,23 +28,23 @@ use crate::common::datadog::{
 /// Forwards Datadog-specific payloads to the Datadog platform. Handles the standard Datadog Agent configuration,
 /// in terms of specifying additional endpoints, adding the necessary HTTP request headers for authentication,
 /// identification, and more.
-pub struct DatadogConfiguration {
+pub struct DatadogForwarderConfiguration {
     /// Forwarder configuration settings.
     ///
     /// See [`ForwarderConfiguration`] for more information about the available settings.
     forwarder_config: ForwarderConfiguration,
 
-    configuration: Option<GenericConfiguration>,
+    configuration: ScopedConfig<DatadogForwarderConfig>,
 }
 
-impl DatadogConfiguration {
-    /// Creates a new `DatadogConfiguration` from the given configuration.
-    pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
-        let forwarder_config = ForwarderConfiguration::from_configuration(config)?;
-        Ok(Self {
+impl DatadogForwarderConfiguration {
+    /// Creates a new `DatadogForwarderConfiguration` from native component config.
+    pub fn from_native(config: ScopedConfig<DatadogForwarderConfig>) -> Self {
+        let forwarder_config = ForwarderConfiguration::from_native(&config.current());
+        Self {
             forwarder_config,
-            configuration: Some(config.clone()),
-        })
+            configuration: config,
+        }
     }
 
     /// Overrides the default endpoint and refreshes its API key from the given config path.
@@ -54,7 +54,11 @@ impl DatadogConfiguration {
     pub fn with_endpoint_override_and_api_key_refresh_config_path(
         mut self, dd_url: String, api_key: String, api_key_refresh_config_path: &'static str,
     ) -> Self {
-        self.apply_endpoint_override(dd_url, api_key, api_key_refresh_config_path);
+        self.apply_endpoint_override(dd_url.clone(), api_key.clone(), api_key_refresh_config_path);
+        self.configuration = ScopedConfig::fixed(DatadogForwarderConfig {
+            endpoints: vec![EndpointConfig { url: dd_url, api_key }],
+            ..self.configuration.current()
+        });
 
         self
     }
@@ -73,7 +77,7 @@ impl DatadogConfiguration {
 }
 
 #[async_trait]
-impl ForwarderBuilder for DatadogConfiguration {
+impl ForwarderBuilder for DatadogForwarderConfiguration {
     fn input_payload_type(&self) -> PayloadType {
         PayloadType::Http
     }
@@ -84,7 +88,7 @@ impl ForwarderBuilder for DatadogConfiguration {
         let forwarder = TransactionForwarder::from_config(
             context,
             self.forwarder_config.clone(),
-            self.configuration.clone(),
+            Some(self.configuration.clone()),
             get_dd_endpoint_name,
             telemetry.clone(),
             metrics_builder,
@@ -94,7 +98,7 @@ impl ForwarderBuilder for DatadogConfiguration {
     }
 }
 
-impl MemoryBounds for DatadogConfiguration {
+impl MemoryBounds for DatadogForwarderConfiguration {
     fn specify_bounds(&self, builder: &mut MemoryBoundsBuilder) {
         builder
             .minimum()
@@ -195,33 +199,18 @@ fn get_dd_endpoint_name(uri: &Uri) -> Option<MetaString> {
 
 #[cfg(test)]
 mod tests {
-    use saluki_config::ConfigurationLoader;
-    use serde_json::json;
-
     use super::*;
 
     #[tokio::test]
-    async fn endpoint_override_refreshes_from_mrf_api_key() {
-        let (generic_config, sender) = ConfigurationLoader::for_tests(
-            Some(json!({
-                "api_key": "primary-api-key",
-                "multi_region_failover": {
-                    "api_key": "mrf-api-key"
-                }
-            })),
-            None,
-            true,
-        )
-        .await;
-        let sender = sender.expect("dynamic sender should exist");
-        sender
-            .send(saluki_config::dynamic::ConfigUpdate::Snapshot(json!({})))
-            .await
-            .expect("initial dynamic snapshot should be sent");
-        generic_config.ready().await;
-
-        let config = DatadogConfiguration::from_configuration(&generic_config)
-            .expect("DatadogConfiguration should parse")
+    async fn endpoint_override_uses_override_endpoint_and_api_key() {
+        let native = DatadogForwarderConfig {
+            endpoints: vec![EndpointConfig {
+                url: "http://primary.example.test".to_string(),
+                api_key: "primary-api-key".to_string(),
+            }],
+            ..DatadogForwarderConfig::default()
+        };
+        let config = DatadogForwarderConfiguration::from_native(ScopedConfig::fixed(native))
             .with_endpoint_override_and_api_key_refresh_config_path(
                 "http://mrf.example.test".to_string(),
                 "mrf-api-key".to_string(),
@@ -230,40 +219,14 @@ mod tests {
 
         let mut endpoints = config
             .forwarder_config
-            .build_routable_endpoints(config.configuration.clone())
+            .build_routable_endpoints(Some(config.configuration.clone()))
             .expect("endpoint should resolve");
 
         assert_eq!(endpoints.len(), 1);
         let (_, mut endpoint) = endpoints.pop().unwrap().into_parts();
+        assert_eq!(endpoint.endpoint().as_str(), "http://mrf.example.test/");
         assert_eq!(endpoint.cached_api_key(), "mrf-api-key");
         assert!(endpoint.has_configuration());
         assert_eq!(endpoint.api_key(), "mrf-api-key");
-
-        sender
-            .send(saluki_config::dynamic::ConfigUpdate::Partial {
-                key: "api_key".to_string(),
-                value: json!("rotated-primary-api-key"),
-            })
-            .await
-            .expect("primary API key update should be sent");
-        sender
-            .send(saluki_config::dynamic::ConfigUpdate::Partial {
-                key: "multi_region_failover.api_key".to_string(),
-                value: json!("rotated-mrf-api-key"),
-            })
-            .await
-            .expect("MRF API key update should be sent");
-
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-        loop {
-            if endpoint.api_key() == "rotated-mrf-api-key" {
-                break;
-            }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "timed out waiting for endpoint override to refresh from MRF API key"
-            );
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
     }
 }

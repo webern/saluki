@@ -14,7 +14,7 @@ use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
 use saluki_common::collections::FastHashMap;
 use saluki_common::strings::StringBuilder;
 use saluki_common::task::HandleExt as _;
-use saluki_config::GenericConfiguration;
+use saluki_component_config::DatadogTraceEncoderConfig;
 use saluki_context::tags::TagSet;
 use saluki_core::data_model::event::trace::AttributeValue;
 use saluki_core::topology::{EventsBuffer, PayloadsBuffer};
@@ -128,17 +128,19 @@ pub struct DatadogTraceConfiguration {
 }
 
 impl DatadogTraceConfiguration {
-    /// Creates a new `DatadogTraceConfiguration` from the given configuration.
-    pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
-        let mut trace_config: Self = config.as_typed()?;
-
+    /// Creates a new `DatadogTraceConfiguration` from native values.
+    pub fn from_native(_config: DatadogTraceEncoderConfig) -> Self {
         let app_details = saluki_metadata::get_app_details();
-        trace_config.version = format!("agent-data-plane/{}", app_details.version().raw());
-
-        trace_config.apm_config = ApmConfig::from_configuration(config)?;
-        trace_config.otlp_traces = config.try_get_typed("otlp_config.traces")?.unwrap_or_default();
-
-        Ok(trace_config)
+        Self {
+            compressor_kind: default_serializer_compressor_kind(),
+            zstd_compressor_level: default_zstd_compressor_level(),
+            flush_timeout_secs: default_flush_timeout_secs(),
+            default_hostname: None,
+            version: format!("agent-data-plane/{}", app_details.version().raw()),
+            apm_config: ApmConfig::default(),
+            otlp_traces: TracesConfig::default(),
+            env: default_env(),
+        }
     }
 }
 
@@ -837,30 +839,15 @@ fn append_tags(target: &mut String, tags: &str) {
 mod tests {
     use datadog_protos::traces::AgentPayload;
     use protobuf::Message as _;
-    use saluki_config::ConfigurationLoader;
     use saluki_core::data_model::event::trace::{Span as DdSpan, Trace};
     use stringtheory::MetaString;
 
     use super::*;
     use crate::common::datadog::apm::ApmConfig;
     use crate::common::otlp::config::TracesConfig;
-    use crate::config::{DatadogRemapper, KEY_ALIASES};
 
     async fn make_encoder(ets_enabled: bool) -> TraceEndpointEncoder {
-        let env_vars: Vec<(String, String)> = if ets_enabled {
-            vec![("APM_ERROR_TRACKING_STANDALONE_ENABLED".to_string(), "true".to_string())]
-        } else {
-            vec![]
-        };
-        let (cfg, _) = ConfigurationLoader::for_tests_with_provider_factory(
-            None,
-            Some(&env_vars),
-            false,
-            KEY_ALIASES,
-            DatadogRemapper::new,
-        )
-        .await;
-        let apm_config = ApmConfig::from_configuration(&cfg).expect("ApmConfig should deserialize");
+        let apm_config = ApmConfig::default().with_error_tracking_standalone(ets_enabled);
         TraceEndpointEncoder::new(
             MetaString::from("test-host"),
             "0.0.0".to_string(),
@@ -976,12 +963,12 @@ mod tests {
 
 #[cfg(test)]
 mod config_smoke {
+    use datadog_agent_config::{DatadogRemapper, KEY_ALIASES};
     use datadog_agent_config_testing::config_registry::structs;
     use datadog_agent_config_testing::run_config_smoke_tests;
     use serde_json::json;
 
     use super::DatadogTraceConfiguration;
-    use crate::config::{DatadogRemapper, KEY_ALIASES};
 
     #[tokio::test]
     async fn smoke_test() {

@@ -6,7 +6,6 @@ use std::{
 use async_trait::async_trait;
 use datadog_agent_commons::ipc::client::RemoteAgentClient;
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
-use saluki_config::{DurationString, GenericConfiguration};
 use saluki_context::tags::{SharedTagSet, Tag};
 use saluki_core::{components::transforms::*, topology::EventsBuffer};
 use saluki_core::{components::ComponentContext, data_model::event::metric::Metric};
@@ -17,26 +16,23 @@ use stringtheory::MetaString;
 ///
 /// Temporarily adds host tags to metrics to compensate for backend delays when a new host comes online,
 /// preventing gaps in queryability until the backend starts adding these tags automatically.
+#[allow(dead_code)]
 pub struct HostTagsConfiguration {
     client: RemoteAgentClient,
     expected_tags_duration: Duration,
 }
 
+#[allow(dead_code)]
 const DEFAULT_EXPECTED_TAGS_DURATION: Duration = Duration::ZERO;
 
+#[allow(dead_code)]
 impl HostTagsConfiguration {
-    /// Creates a new `HostTagsConfiguration` from the given configuration.
-    pub async fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
-        let client = RemoteAgentClient::from_configuration(config).await?;
-        let expected_tags_duration = config
-            .try_get_typed::<DurationString>("expected_tags_duration")?
-            .map(|ds| ds.as_duration())
-            .unwrap_or(DEFAULT_EXPECTED_TAGS_DURATION);
-
-        Ok(Self {
+    /// Creates a new `HostTagsConfiguration` from typed inputs.
+    pub fn from_parts(client: RemoteAgentClient, expected_tags_duration: Option<Duration>) -> Self {
+        Self {
             client,
-            expected_tags_duration,
-        })
+            expected_tags_duration: expected_tags_duration.unwrap_or(DEFAULT_EXPECTED_TAGS_DURATION),
+        }
     }
 }
 

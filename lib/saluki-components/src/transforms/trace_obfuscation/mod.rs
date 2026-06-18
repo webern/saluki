@@ -13,7 +13,9 @@ mod sql_tokenizer;
 use async_trait::async_trait;
 use facet::Facet;
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
-use saluki_config::GenericConfiguration;
+use saluki_component_config::{
+    JsonObfuscationConfig as NativeJsonObfuscationConfig, TraceObfuscationConfig as NativeTraceObfuscationConfig,
+};
 use saluki_core::{
     components::{transforms::*, ComponentContext},
     data_model::event::{
@@ -27,7 +29,6 @@ use serde::Deserialize;
 use stringtheory::MetaString;
 
 pub use self::obfuscator::{tags, ObfuscationConfig, Obfuscator};
-use crate::common::datadog::apm::ApmConfig;
 
 const TEXT_NON_PARSABLE_SQL: &str = "Non-parsable SQL query";
 
@@ -41,24 +42,74 @@ pub struct TraceObfuscationConfiguration {
 }
 
 impl TraceObfuscationConfiguration {
-    /// Creates a new `TraceObfuscationConfiguration` from the given generic configuration.
-    pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
-        Self::from_apm_configuration(config)
-    }
-
-    /// Creates a new `TraceObfuscationConfiguration` from the APM configuration section.
-    pub fn from_apm_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
-        let apm_config = ApmConfig::from_configuration(config)?;
-        Ok(Self {
-            config: apm_config.obfuscation().clone(),
-        })
-    }
-
     /// Creates a new `TraceObfuscationConfiguration` with default settings.
     pub fn new() -> Self {
         Self {
             config: ObfuscationConfig::default(),
         }
+    }
+
+    /// Creates a trace obfuscation configuration from native config.
+    pub fn from_native(config: NativeTraceObfuscationConfig) -> Self {
+        Self {
+            config: ObfuscationConfig {
+                credit_cards: credit_cards_from_native(config.credit_cards),
+                http: obfuscator::HttpObfuscationConfig {
+                    remove_path_digits: config.http.remove_paths_with_digits,
+                    remove_query_string: config.http.remove_query_string,
+                },
+                memcached: obfuscator::MemcachedObfuscationConfig {
+                    enabled: config.memcached.enabled,
+                    keep_command: config.memcached.keep_command,
+                },
+                redis: obfuscator::RedisObfuscationConfig {
+                    enabled: config.redis.enabled,
+                    remove_all_args: config.redis.remove_all_args,
+                },
+                valkey: obfuscator::ValkeyObfuscationConfig {
+                    enabled: config.valkey.enabled,
+                    remove_all_args: config.valkey.remove_all_args,
+                },
+                sql: obfuscator::SqlObfuscationConfig::default(),
+                mongo: mongo_from_native(config.mongodb),
+                es: es_from_native(config.elasticsearch),
+                open_search: open_search_from_native(config.opensearch),
+            },
+        }
+    }
+}
+
+fn credit_cards_from_native(
+    config: saluki_component_config::CreditCardObfuscationConfig,
+) -> obfuscator::CreditCardObfuscationConfig {
+    obfuscator::CreditCardObfuscationConfig {
+        enabled: config.enabled,
+        luhn: config.luhn,
+        keep_values: config.keep_values,
+    }
+}
+
+fn es_from_native(config: NativeJsonObfuscationConfig) -> obfuscator::EsObfuscationConfig {
+    obfuscator::EsObfuscationConfig {
+        enabled: config.enabled,
+        keep_values: config.keep_values,
+        obfuscate_sql_values: config.obfuscate_sql_values,
+    }
+}
+
+fn mongo_from_native(config: NativeJsonObfuscationConfig) -> obfuscator::MongoObfuscationConfig {
+    obfuscator::MongoObfuscationConfig {
+        enabled: config.enabled,
+        keep_values: config.keep_values,
+        obfuscate_sql_values: config.obfuscate_sql_values,
+    }
+}
+
+fn open_search_from_native(config: NativeJsonObfuscationConfig) -> obfuscator::OpenSearchObfuscationConfig {
+    obfuscator::OpenSearchObfuscationConfig {
+        enabled: config.enabled,
+        keep_values: config.keep_values,
+        obfuscate_sql_values: config.obfuscate_sql_values,
     }
 }
 
@@ -309,12 +360,19 @@ impl SynchronousTransform for TraceObfuscation {
 
 #[cfg(test)]
 mod config_smoke {
+    use datadog_agent_config::{DatadogRemapper, KEY_ALIASES};
     use datadog_agent_config_testing::config_registry::structs;
     use datadog_agent_config_testing::run_config_smoke_tests;
+    use serde::Deserialize;
     use serde_json::json;
 
-    use super::TraceObfuscationConfiguration;
-    use crate::config::{DatadogRemapper, KEY_ALIASES};
+    use super::{ObfuscationConfig, TraceObfuscationConfiguration};
+
+    #[derive(Deserialize)]
+    struct TestTraceObfuscationConfiguration {
+        #[serde(default, flatten)]
+        config: ObfuscationConfig,
+    }
 
     #[tokio::test]
     async fn smoke_test() {
@@ -323,8 +381,10 @@ mod config_smoke {
             &[],
             json!({}),
             |cfg| {
-                TraceObfuscationConfiguration::from_apm_configuration(&cfg)
-                    .expect("TraceObfuscationConfiguration should deserialize")
+                let parsed = cfg
+                    .as_typed::<TestTraceObfuscationConfiguration>()
+                    .expect("TraceObfuscationConfiguration should deserialize");
+                TraceObfuscationConfiguration { config: parsed.config }
             },
             KEY_ALIASES,
             DatadogRemapper::new,

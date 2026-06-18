@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
-use saluki_config::GenericConfiguration;
+use saluki_config_tools::GenericConfiguration;
 use saluki_error::GenericError;
 
 use crate::HostProvider;
@@ -12,6 +12,13 @@ pub struct FixedHostProvider {
 }
 
 impl FixedHostProvider {
+    /// Creates a new `FixedHostProvider` from a fixed hostname.
+    pub fn from_hostname(hostname: impl Into<String>) -> Self {
+        Self {
+            hostname: hostname.into(),
+        }
+    }
+
     /// Creates a new `FixedHostProvider` from the given configuration.
     ///
     /// Depends on the hostname existing in the given configuration under the `hostname` key.

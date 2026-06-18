@@ -4,7 +4,7 @@ use facet::Facet;
 use http::{uri::PathAndQuery, HeaderValue, Method, Uri};
 use resource_accounting::{MemoryBounds, MemoryBoundsBuilder};
 use saluki_common::iter::ReusableDeduplicator;
-use saluki_config::GenericConfiguration;
+use saluki_component_config::DatadogLogsEncoderConfig;
 use saluki_context::tags::Tag;
 use saluki_core::{
     components::{encoders::*, ComponentContext},
@@ -62,9 +62,12 @@ pub struct DatadogLogsConfiguration {
 }
 
 impl DatadogLogsConfiguration {
-    /// Creates a new `DatadogLogsConfiguration` from the given configuration.
-    pub fn from_configuration(config: &GenericConfiguration) -> Result<Self, GenericError> {
-        Ok(config.as_typed()?)
+    /// Creates a logs encoder configuration from native config.
+    pub fn from_native(_config: DatadogLogsEncoderConfig) -> Self {
+        Self {
+            compressor_kind: default_serializer_compressor_kind(),
+            zstd_compressor_level: default_zstd_compressor_level(),
+        }
     }
 }
 
@@ -263,12 +266,12 @@ impl EndpointEncoder for LogsEndpointEncoder {
 
 #[cfg(test)]
 mod config_smoke {
+    use datadog_agent_config::{DatadogRemapper, KEY_ALIASES};
     use datadog_agent_config_testing::config_registry::structs;
     use datadog_agent_config_testing::run_config_smoke_tests;
     use serde_json::json;
 
     use super::DatadogLogsConfiguration;
-    use crate::config::{DatadogRemapper, KEY_ALIASES};
 
     #[tokio::test]
     async fn smoke_test() {

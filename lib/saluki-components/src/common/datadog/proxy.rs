@@ -4,10 +4,12 @@ use std::sync::Arc;
 use facet::Facet;
 use headers::Authorization;
 use hyper_http_proxy::{Intercept, Proxy};
-use saluki_config::deserialize_space_separated_or_seq;
+use saluki_component_config::ProxyConfig as NativeProxyConfig;
 use saluki_error::GenericError;
 use serde::Deserialize;
 use url::Url;
+
+use crate::common::serde::deserialize_space_separated_or_seq;
 
 #[derive(Clone, Deserialize, Facet)]
 #[cfg_attr(test, derive(Debug, PartialEq, serde::Serialize))]
@@ -67,6 +69,21 @@ const CLOUD_METADATA_ADDRS: &[&str] = &[
 ];
 
 impl ProxyConfiguration {
+    pub(crate) fn from_native(config: &NativeProxyConfig) -> Option<Self> {
+        let has_proxy = config.http.as_ref().is_some_and(|value| !value.trim().is_empty())
+            || config.https.as_ref().is_some_and(|value| !value.trim().is_empty())
+            || !config.no_proxy.is_empty()
+            || config.no_proxy_nonexact_match
+            || config.use_proxy_for_cloud_metadata;
+        has_proxy.then(|| Self {
+            http_server: config.http.clone(),
+            https_server: config.https.clone(),
+            no_proxy: config.no_proxy.clone(),
+            no_proxy_nonexact_match: config.no_proxy_nonexact_match,
+            use_proxy_for_cloud_metadata: config.use_proxy_for_cloud_metadata,
+        })
+    }
+
     /// Builds the configured proxies.
     ///
     /// Each proxy uses a custom intercept that forwards only requests matching the proxy's scheme
@@ -302,12 +319,12 @@ fn ip_in_cidr(network: IpAddr, prefix_len: u8, addr: IpAddr) -> bool {
 
 #[cfg(test)]
 mod config_smoke {
+    use datadog_agent_config::{DatadogRemapper, KEY_ALIASES};
     use datadog_agent_config_testing::config_registry::structs;
     use datadog_agent_config_testing::run_config_smoke_tests;
     use serde_json::json;
 
     use super::ProxyConfiguration;
-    use crate::config::{DatadogRemapper, KEY_ALIASES};
 
     #[tokio::test]
     async fn proxy_configuration_smoke_test() {

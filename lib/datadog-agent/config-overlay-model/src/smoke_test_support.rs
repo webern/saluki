@@ -39,6 +39,12 @@ pub enum ConfigurationStruct {
     /// Keys read via `get_typed` / `try_get_typed` rather than struct deserialization.
     #[serde(rename = "get_typed")]
     GetTyped,
+
+    /// Sentinel for `full` keys that are promoted for the witness and runtime classifier but have
+    /// no config-registry smoke coverage. Must be the sole `used_by` entry. The registry generator
+    /// skips these, so they emit no smoke annotation and never enter the smoke-test universe.
+    #[serde(rename = "NO_SMOKE")]
+    NoSmoke,
 }
 
 impl ConfigurationStruct {
@@ -68,6 +74,7 @@ impl ConfigurationStruct {
             ConfigurationStruct::TagFilterlistConfiguration => "TAG_FILTERLIST_CONFIGURATION",
             ConfigurationStruct::TraceObfuscationConfiguration => "TRACE_OBFUSCATION_CONFIGURATION",
             ConfigurationStruct::GetTyped => "GET_TYPED",
+            ConfigurationStruct::NoSmoke => "NO_SMOKE",
         }
     }
 }

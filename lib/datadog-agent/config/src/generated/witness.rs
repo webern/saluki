@@ -18,6 +18,10 @@ pub trait DatadogConfigWitness {
     fn consume_aggregator_stop_timeout(&mut self, value: i64);
     fn consume_allow_arbitrary_tags(&mut self, value: bool);
     fn consume_api_key(&mut self, value: String);
+    fn consume_apm_config_compute_stats_by_span_kind(&mut self, value: bool);
+    fn consume_apm_config_enable_rare_sampler(&mut self, value: bool);
+    fn consume_apm_config_error_tracking_standalone_enabled(&mut self, value: bool);
+    fn consume_apm_config_errors_per_second(&mut self, value: f64);
     fn consume_apm_config_obfuscation_credit_cards_enabled(&mut self, value: bool);
     fn consume_apm_config_obfuscation_credit_cards_keep_values(&mut self, value: Vec<String>);
     fn consume_apm_config_obfuscation_credit_cards_luhn(&mut self, value: bool);
@@ -38,6 +42,11 @@ pub trait DatadogConfigWitness {
     fn consume_apm_config_obfuscation_redis_remove_all_args(&mut self, value: bool);
     fn consume_apm_config_obfuscation_valkey_enabled(&mut self, value: bool);
     fn consume_apm_config_obfuscation_valkey_remove_all_args(&mut self, value: bool);
+    fn consume_apm_config_peer_tags(&mut self, value: Vec<String>);
+    fn consume_apm_config_peer_tags_aggregation(&mut self, value: bool);
+    fn consume_apm_config_probabilistic_sampler_enabled(&mut self, value: bool);
+    fn consume_apm_config_probabilistic_sampler_sampling_percentage(&mut self, value: f64);
+    fn consume_apm_config_target_traces_per_second(&mut self, value: f64);
     fn consume_autoscaling_failover_enabled(&mut self, value: bool);
     fn consume_autoscaling_failover_metrics(&mut self, value: Vec<String>);
     fn consume_bind_host(&mut self, value: String);
@@ -50,14 +59,20 @@ pub trait DatadogConfigWitness {
     fn consume_cri_query_timeout(&mut self, value: i64);
     fn consume_data_plane_api_listen_address(&mut self, value: String);
     fn consume_data_plane_dogstatsd_aggregator_tag_filter_cache_capacity(&mut self, value: i64);
+    fn consume_data_plane_dogstatsd_enabled(&mut self, value: bool);
+    fn consume_data_plane_enabled(&mut self, value: bool);
     fn consume_data_plane_log_file(&mut self, value: String);
+    fn consume_data_plane_otlp_enabled(&mut self, value: bool);
+    fn consume_data_plane_otlp_proxy_enabled(&mut self, value: bool);
     fn consume_data_plane_otlp_proxy_logs_enabled(&mut self, value: bool);
     fn consume_data_plane_otlp_proxy_metrics_enabled(&mut self, value: bool);
+    fn consume_data_plane_otlp_proxy_receiver_protocols_grpc_endpoint(&mut self, value: String);
     fn consume_data_plane_otlp_proxy_traces_enabled(&mut self, value: bool);
     fn consume_data_plane_remote_agent_enabled(&mut self, value: bool);
     fn consume_data_plane_secure_api_listen_address(&mut self, value: String);
     fn consume_data_plane_use_new_config_stream_endpoint(&mut self, value: bool);
     fn consume_dd_url(&mut self, value: String);
+    fn consume_disable_file_logging(&mut self, value: bool);
     fn consume_dogstatsd_buffer_size(&mut self, value: i64);
     fn consume_dogstatsd_capture_depth(&mut self, value: i64);
     fn consume_dogstatsd_capture_path(&mut self, value: String);
@@ -65,6 +80,7 @@ pub trait DatadogConfigWitness {
     fn consume_dogstatsd_disable_verbose_logs(&mut self, value: bool);
     fn consume_dogstatsd_entity_id_precedence(&mut self, value: bool);
     fn consume_dogstatsd_eol_required(&mut self, value: Vec<String>);
+    fn consume_dogstatsd_expiry_seconds(&mut self, value: i64);
     fn consume_dogstatsd_flush_incomplete_buckets(&mut self, value: bool);
     fn consume_dogstatsd_log_file(&mut self, value: String);
     fn consume_dogstatsd_log_file_max_rolls(&mut self, value: i64);
@@ -91,6 +107,7 @@ pub trait DatadogConfigWitness {
     fn consume_enable_payloads_service_checks(&mut self, value: bool);
     fn consume_enable_payloads_sketches(&mut self, value: bool);
     fn consume_env(&mut self, value: String);
+    fn consume_expected_tags_duration(&mut self, value: f64);
     fn consume_forwarder_apikey_validation_interval(&mut self, value: i64);
     fn consume_forwarder_backoff_base(&mut self, value: i64);
     fn consume_forwarder_backoff_factor(&mut self, value: i64);
@@ -115,11 +132,18 @@ pub trait DatadogConfigWitness {
     fn consume_histogram_aggregates(&mut self, value: Vec<String>);
     fn consume_histogram_copy_to_distribution(&mut self, value: bool);
     fn consume_histogram_copy_to_distribution_prefix(&mut self, value: String);
+    fn consume_histogram_percentiles(&mut self, value: Vec<String>);
+    fn consume_log_file_max_rolls(&mut self, value: i64);
+    fn consume_log_file_max_size(&mut self, value: String);
+    fn consume_log_format_json(&mut self, value: bool);
     fn consume_log_format_rfc3339(&mut self, value: bool);
     fn consume_log_level(&mut self, value: String);
     fn consume_log_payloads(&mut self, value: bool);
+    fn consume_log_to_console(&mut self, value: bool);
+    fn consume_log_to_syslog(&mut self, value: bool);
     fn consume_metric_filterlist(&mut self, value: Vec<String>);
     fn consume_metric_filterlist_match_prefix(&mut self, value: bool);
+    fn consume_metric_tag_filterlist(&mut self, value: Vec<::serde_json::Value>);
     fn consume_min_tls_version(&mut self, value: String);
     fn consume_multi_region_failover_api_key(&mut self, value: String);
     fn consume_multi_region_failover_dd_url(&mut self, value: String);
@@ -187,6 +211,12 @@ pub fn drive(config: &DatadogConfiguration, consumer: &mut impl DatadogConfigWit
     consumer.consume_aggregator_stop_timeout(config.aggregator_stop_timeout.clone());
     consumer.consume_allow_arbitrary_tags(config.allow_arbitrary_tags.clone());
     consumer.consume_api_key(config.api_key.clone());
+    consumer.consume_apm_config_compute_stats_by_span_kind(config.apm_config.compute_stats_by_span_kind.clone());
+    consumer.consume_apm_config_enable_rare_sampler(config.apm_config.enable_rare_sampler.clone());
+    consumer.consume_apm_config_error_tracking_standalone_enabled(
+        config.apm_config.error_tracking_standalone.enabled.clone(),
+    );
+    consumer.consume_apm_config_errors_per_second(config.apm_config.errors_per_second.clone());
     consumer.consume_apm_config_obfuscation_credit_cards_enabled(
         config.apm_config.obfuscation.credit_cards.enabled.clone(),
     );
@@ -235,6 +265,13 @@ pub fn drive(config: &DatadogConfiguration, consumer: &mut impl DatadogConfigWit
     consumer.consume_apm_config_obfuscation_valkey_remove_all_args(
         config.apm_config.obfuscation.valkey.remove_all_args.clone(),
     );
+    consumer.consume_apm_config_peer_tags(config.apm_config.peer_tags.clone());
+    consumer.consume_apm_config_peer_tags_aggregation(config.apm_config.peer_tags_aggregation.clone());
+    consumer.consume_apm_config_probabilistic_sampler_enabled(config.apm_config.probabilistic_sampler.enabled.clone());
+    consumer.consume_apm_config_probabilistic_sampler_sampling_percentage(
+        config.apm_config.probabilistic_sampler.sampling_percentage.clone(),
+    );
+    consumer.consume_apm_config_target_traces_per_second(config.apm_config.target_traces_per_second.clone());
     consumer.consume_autoscaling_failover_enabled(config.autoscaling.failover.enabled.clone());
     consumer.consume_autoscaling_failover_metrics(config.autoscaling.failover.metrics.clone());
     consumer.consume_bind_host(config.bind_host.clone());
@@ -249,15 +286,23 @@ pub fn drive(config: &DatadogConfiguration, consumer: &mut impl DatadogConfigWit
     consumer.consume_data_plane_dogstatsd_aggregator_tag_filter_cache_capacity(
         config.data_plane.dogstatsd.aggregator_tag_filter_cache_capacity.clone(),
     );
+    consumer.consume_data_plane_dogstatsd_enabled(config.data_plane.dogstatsd.enabled.clone());
+    consumer.consume_data_plane_enabled(config.data_plane.enabled.clone());
     consumer.consume_data_plane_log_file(config.data_plane.log_file.clone());
+    consumer.consume_data_plane_otlp_enabled(config.data_plane.otlp.enabled.clone());
+    consumer.consume_data_plane_otlp_proxy_enabled(config.data_plane.otlp.proxy.enabled.clone());
     consumer.consume_data_plane_otlp_proxy_logs_enabled(config.data_plane.otlp.proxy.logs.enabled.clone());
     consumer.consume_data_plane_otlp_proxy_metrics_enabled(config.data_plane.otlp.proxy.metrics.enabled.clone());
+    consumer.consume_data_plane_otlp_proxy_receiver_protocols_grpc_endpoint(
+        config.data_plane.otlp.proxy.receiver.protocols.grpc.endpoint.clone(),
+    );
     consumer.consume_data_plane_otlp_proxy_traces_enabled(config.data_plane.otlp.proxy.traces.enabled.clone());
     consumer.consume_data_plane_remote_agent_enabled(config.data_plane.remote_agent_enabled.clone());
     consumer.consume_data_plane_secure_api_listen_address(config.data_plane.secure_api_listen_address.clone());
     consumer
         .consume_data_plane_use_new_config_stream_endpoint(config.data_plane.use_new_config_stream_endpoint.clone());
     consumer.consume_dd_url(config.dd_url.clone());
+    consumer.consume_disable_file_logging(config.disable_file_logging.clone());
     consumer.consume_dogstatsd_buffer_size(config.dogstatsd_buffer_size.clone());
     consumer.consume_dogstatsd_capture_depth(config.dogstatsd_capture_depth.clone());
     consumer.consume_dogstatsd_capture_path(config.dogstatsd_capture_path.clone());
@@ -265,6 +310,7 @@ pub fn drive(config: &DatadogConfiguration, consumer: &mut impl DatadogConfigWit
     consumer.consume_dogstatsd_disable_verbose_logs(config.dogstatsd_disable_verbose_logs.clone());
     consumer.consume_dogstatsd_entity_id_precedence(config.dogstatsd_entity_id_precedence.clone());
     consumer.consume_dogstatsd_eol_required(config.dogstatsd_eol_required.clone());
+    consumer.consume_dogstatsd_expiry_seconds(config.dogstatsd_expiry_seconds.clone());
     consumer.consume_dogstatsd_flush_incomplete_buckets(config.dogstatsd_flush_incomplete_buckets.clone());
     consumer.consume_dogstatsd_log_file(config.dogstatsd_log_file.clone());
     consumer.consume_dogstatsd_log_file_max_rolls(config.dogstatsd_log_file_max_rolls.clone());
@@ -291,6 +337,7 @@ pub fn drive(config: &DatadogConfiguration, consumer: &mut impl DatadogConfigWit
     consumer.consume_enable_payloads_service_checks(config.enable_payloads.service_checks.clone());
     consumer.consume_enable_payloads_sketches(config.enable_payloads.sketches.clone());
     consumer.consume_env(config.env.clone());
+    consumer.consume_expected_tags_duration(config.expected_tags_duration.clone());
     consumer.consume_forwarder_apikey_validation_interval(config.forwarder_apikey_validation_interval.clone());
     consumer.consume_forwarder_backoff_base(config.forwarder_backoff_base.clone());
     consumer.consume_forwarder_backoff_factor(config.forwarder_backoff_factor.clone());
@@ -317,11 +364,18 @@ pub fn drive(config: &DatadogConfiguration, consumer: &mut impl DatadogConfigWit
     consumer.consume_histogram_aggregates(config.histogram_aggregates.clone());
     consumer.consume_histogram_copy_to_distribution(config.histogram_copy_to_distribution.clone());
     consumer.consume_histogram_copy_to_distribution_prefix(config.histogram_copy_to_distribution_prefix.clone());
+    consumer.consume_histogram_percentiles(config.histogram_percentiles.clone());
+    consumer.consume_log_file_max_rolls(config.log_file_max_rolls.clone());
+    consumer.consume_log_file_max_size(config.log_file_max_size.clone());
+    consumer.consume_log_format_json(config.log_format_json.clone());
     consumer.consume_log_format_rfc3339(config.log_format_rfc3339.clone());
     consumer.consume_log_level(config.log_level.clone());
     consumer.consume_log_payloads(config.log_payloads.clone());
+    consumer.consume_log_to_console(config.log_to_console.clone());
+    consumer.consume_log_to_syslog(config.log_to_syslog.clone());
     consumer.consume_metric_filterlist(config.metric_filterlist.clone());
     consumer.consume_metric_filterlist_match_prefix(config.metric_filterlist_match_prefix.clone());
+    consumer.consume_metric_tag_filterlist(config.metric_tag_filterlist.clone());
     consumer.consume_min_tls_version(config.min_tls_version.clone());
     consumer.consume_multi_region_failover_api_key(config.multi_region_failover.api_key.clone());
     consumer.consume_multi_region_failover_dd_url(config.multi_region_failover.dd_url.clone());

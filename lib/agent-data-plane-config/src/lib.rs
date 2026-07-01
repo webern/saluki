@@ -39,8 +39,8 @@ pub struct SalukiConfiguration {
 
 // COVERAGE
 //
-// Classification of all 237 inventoried source keys against the vendored schema. 224 map to a model
-// field (154 witnessed directly, 24 promoted to witnessed, 46 seeded as Saluki-only); 13 have no
+// Classification of all 251 inventoried source keys against the vendored schema. 238 map to a model
+// field (154 witnessed directly, 37 promoted to witnessed, 47 seeded as Saluki-only); 13 have no
 // field (4 deferred, 4 excluded, 5 subsumed).
 //
 // Notable modeling decisions:
@@ -55,12 +55,17 @@ pub struct SalukiConfiguration {
 //     generated source model folds one into the other via a serde alias).
 //   - expected_tags_duration is typed as a number but its schema default is a Go-duration string
 //     ("0s"); the source generator rewrites that default to 0.0.
+//   - The V3 metrics-intake keys (serializer_experimental_use_v3_api.*, use_v3_api.series.*, and the
+//     opw/vector use_v3_api.series flags) are witnessed into shared.metrics_encoding.v3_api /
+//     .v3_series_mode and shared.endpoints.{opw,vector}_intake.use_v3_series. The ADP-only gate
+//     data_plane.metrics.v3.series.enabled is absent from the schema, so it is seeded into
+//     shared.metrics_encoding.v3_series_enabled.
 //
-// Seeded Saluki-only fields (46) group by destination as: control (6), shared (3),
-// domains.dogstatsd (16), domains.otlp (5), domains.traces (15), domains.checks (1). Seven of the
+// Seeded Saluki-only fields (47) group by destination as: control (6), shared (4),
+// domains.dogstatsd (16), domains.otlp (5), domains.traces (15), domains.checks (1). Eight of the
 // seeded fields use nested apm_config.* / data_plane.* paths that ADP reads from config but that are
 // absent from the vendored schema (default_env, error_sampling_enabled, the three rare_sampler
-// knobs, checks, standalone_mode), so they are seeded rather than driven.
+// knobs, checks, standalone_mode, and the V3 series gate), so they are seeded rather than driven.
 //
 // No-field keys (13):
 //   - Deferred (4): owned by saluki-env and not cut over here (hostname, container_proc_root,

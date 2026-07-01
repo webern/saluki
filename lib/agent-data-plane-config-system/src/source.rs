@@ -75,6 +75,9 @@ pub struct EncodersSalukiOnly {
     pub flush_timeout_secs: Option<u64>,
     /// Maximum metrics per payload (`serializer_max_metrics_per_payload`).
     pub serializer_max_metrics_per_payload: Option<usize>,
+    /// ADP-only safety gate authorizing V3 series (`data_plane.metrics.v3.series.enabled`, absent
+    /// from the Datadog Agent config schema).
+    pub v3_series_enabled: Option<bool>,
 }
 
 /// DogStatsD listener, context, and aggregation Saluki-schema-only knobs.
@@ -247,6 +250,9 @@ impl SalukiOnly {
         }
         if let Some(v) = self.encoders.serializer_max_metrics_per_payload {
             config.shared.metrics_encoding.max_metrics_per_payload = v;
+        }
+        if let Some(v) = self.encoders.v3_series_enabled {
+            config.shared.metrics_encoding.v3_series_enabled = v;
         }
 
         let dsd = &mut config.domains.dogstatsd;

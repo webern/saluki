@@ -396,6 +396,65 @@ impl DatadogConfigWitness for SalukiConfigBuilder {
         self.config.shared.metrics_encoding.histogram.percentiles = value;
     }
 
+    fn consume_serializer_experimental_use_v3_api_compression_level(&mut self, value: i64) {
+        self.config.shared.metrics_encoding.v3_api.compression_level = value as i32;
+    }
+
+    fn consume_serializer_experimental_use_v3_api_series_endpoints(&mut self, value: Vec<String>) {
+        self.config.shared.metrics_encoding.v3_api.series.endpoints = value;
+    }
+
+    fn consume_serializer_experimental_use_v3_api_series_validate(&mut self, value: bool) {
+        self.config.shared.metrics_encoding.v3_api.series.validate = value;
+    }
+
+    fn consume_serializer_experimental_use_v3_api_series_use_beta(&mut self, value: bool) {
+        self.config.shared.metrics_encoding.v3_api.series.use_beta = value;
+    }
+
+    fn consume_serializer_experimental_use_v3_api_series_beta_route(&mut self, value: String) {
+        self.config.shared.metrics_encoding.v3_api.series.beta_route = value;
+    }
+
+    fn consume_serializer_experimental_use_v3_api_series_shadow_sample_rate(&mut self, value: f64) {
+        self.config.shared.metrics_encoding.v3_api.series.shadow_sample_rate = value;
+    }
+
+    fn consume_serializer_experimental_use_v3_api_series_shadow_sites(&mut self, value: Vec<String>) {
+        self.config.shared.metrics_encoding.v3_api.series.shadow_sites = value;
+    }
+
+    fn consume_serializer_experimental_use_v3_api_sketches_endpoints(&mut self, value: Vec<String>) {
+        self.config.shared.metrics_encoding.v3_api.sketches.endpoints = value;
+    }
+
+    fn consume_serializer_experimental_use_v3_api_sketches_validate(&mut self, value: bool) {
+        self.config.shared.metrics_encoding.v3_api.sketches.validate = value;
+    }
+
+    fn consume_use_v3_api_series_enabled(&mut self, value: String) {
+        // TODO: consider modeling as an enum.
+        self.config.shared.metrics_encoding.v3_series_mode.mode = value;
+    }
+
+    fn consume_use_v3_api_series_endpoints(&mut self, value: ::serde_json::Map<String, ::serde_json::Value>) {
+        self.config.shared.metrics_encoding.v3_series_mode.endpoint_modes = value
+            .into_iter()
+            .map(|(endpoint, mode)| {
+                let mode = mode.as_str().map(str::to_string).unwrap_or_else(|| mode.to_string());
+                (endpoint, mode)
+            })
+            .collect();
+    }
+
+    fn consume_observability_pipelines_worker_metrics_use_v3_api_series(&mut self, value: bool) {
+        self.config.shared.endpoints.opw_intake.use_v3_series = value;
+    }
+
+    fn consume_vector_metrics_use_v3_api_series(&mut self, value: bool) {
+        self.config.shared.endpoints.vector_intake.use_v3_series = value;
+    }
+
     fn consume_cluster_agent_enabled(&mut self, value: bool) {
         self.config.shared.cluster_agent.enabled = value;
     }

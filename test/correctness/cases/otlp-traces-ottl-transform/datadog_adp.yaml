@@ -36,11 +36,11 @@ ottl_transform_config:
   trace_statements:
     - 'set(attributes["test_attr"], "test-val")'
 
-# Enable OTLP receiver on gRPC port 4317
+# Enable OTLP receiver on gRPC port 54317 (54317/54318 avoid the Core Agent's OTLP ports in connected mode)
 otlp_config:
   receiver:
     protocols:
       grpc:
-        endpoint: "0.0.0.0:4317"
+        endpoint: "0.0.0.0:54317"
   traces:
     enable_otlp_compute_top_level_by_span_kind: true

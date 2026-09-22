@@ -1368,6 +1368,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "datadog-agent-remote-config"
+version = "0.1.0"
+dependencies = [
+ "datadog-agent-commons",
+ "saluki-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "datadog-intake"
 version = "0.1.0"
 dependencies = [

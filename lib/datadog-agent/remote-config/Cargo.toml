@@ -6,10 +6,15 @@ license = { workspace = true }
 repository = { workspace = true }
 
 [dependencies]
+datadog-agent-commons = { workspace = true }
+saluki-core = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-saluki-core = { workspace = true }
-datadog-agent-commons = { workspace = true }
+serde_variant = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+tokio-test = { workspace = true }
 
 [build-dependencies]
 

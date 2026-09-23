@@ -1,18 +1,24 @@
 use serde::Serialize;
 use serde_variant::to_variant_name;
 
-use crate::{ApplyError, Payloads};
+use crate::{AsApplyError, Payloads};
 
 /// Decodes and validates a product's complete configuration snapshot.
-// TODO: settle the trait and method names.
 pub trait ProductConfiguration: Sized {
+    /// The error this product's decoding and validation produces.
+    ///
+    /// Use [`ApplyError`](crate::ApplyError) when there is nothing richer to report; a product that wants to attribute
+    /// a failure more precisely for its own diagnostics defines its own type instead.
+    type Error: AsApplyError + Send + Sync + 'static;
+
     /// Decodes the assigned payloads into an accepted configuration.
     ///
     /// # Errors
     ///
-    /// Returns [`ApplyError`] when the snapshot cannot be decoded or fails validation. The client uses the error
-    /// to report rejection to the Agent; the subscriber does not acknowledge configurations separately.
-    fn decode(payloads: Payloads<'_>) -> Result<Self, ApplyError>;
+    /// Returns [`Self::Error`] when the snapshot cannot be decoded or fails validation. The client reports the
+    /// rejection to the Agent and delivers the error to subscribers; the subscriber does not acknowledge
+    /// configurations separately.
+    fn decode(payloads: Payloads<'_>) -> Result<Self, Self::Error>;
 }
 
 /// Represents product strings, such as `APM_SEMANTIC_CORE_DD`.

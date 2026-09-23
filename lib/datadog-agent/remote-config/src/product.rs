@@ -11,9 +11,8 @@ pub enum ProductId {
 
     /// Datadog-managed semantic convention mappings.
     ApmSemanticCoreDd,
-
-    // TODO: This is annoying but if we are missing a product ID I think we may need a way for the user to provide it. Sucks. Should I just use constants instead of an enum so that this is more usable broadly?
-    Other(String),
+    // TODO: how can users specify a product we haven't added as "first-class" yet?
+    // Other(String),
 }
 
 impl AsRef<str> for ProductId {

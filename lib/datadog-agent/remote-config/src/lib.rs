@@ -4,8 +4,8 @@
 
 use datadog_agent_commons::ipc::client::RemoteAgentClient;
 
+mod decoder;
 mod error;
-mod payloads;
 mod product;
 mod protocol;
 mod subscription;
@@ -13,9 +13,9 @@ mod subscription;
 mod tests;
 mod worker;
 
+pub use decoder::ProductDecoder;
 pub use error::{ApplyError, AsApplyError, Error, Result};
-pub use payloads::{Json, Payloads};
-pub use product::{ProductConfiguration, ProductId};
+pub use product::{ConfigId, ProductId};
 pub use subscription::Subscription;
 pub use worker::RemoteConfigurationWorker;
 
@@ -42,10 +42,10 @@ impl RemoteConfigurationClient {
         todo!()
     }
 
-    /// Subscribes to a product, decoding its complete configuration snapshot into `T`.
+    /// Subscribes to a product, decoding its assigned configurations with `P`.
     ///
-    /// Subscriptions can be added while the worker runs. Decoding accepts or rejects each snapshot and supplies the
-    /// information needed for the client to report apply status to the Agent.
+    /// The decoder is named here, where how a product is read is the subject; the returned subscription is typed by the
+    /// snapshot that decoder builds. Subscriptions can be added while the worker runs.
     ///
     /// A product may be subscribed only once per client. Several consumers of one product therefore share a single
     /// [`Subscription`] by cloning it, rather than each subscribing for themselves.
@@ -55,9 +55,9 @@ impl RemoteConfigurationClient {
     /// Returns [`Error::AlreadySubscribed`] when the product is already subscribed on this client, which indicates
     /// that the caller should be receiving a clone of the existing subscription instead.
     // TODO: define the unsubscribe mechanism.
-    pub fn subscribe<T>(&self, _product_id: ProductId) -> Result<Subscription<T>>
+    pub fn subscribe<P>(&self, _product_id: ProductId) -> Result<Subscription<P::Snapshot, P::Error>>
     where
-        T: ProductConfiguration + Send + Sync + 'static,
+        P: ProductDecoder,
     {
         todo!()
     }

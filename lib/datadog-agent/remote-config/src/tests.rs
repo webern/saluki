@@ -1,23 +1,40 @@
-use std::collections::HashMap;
+//! Exercises the two product shapes a [`ProductDecoder`] has to serve.
+//!
+//! A product's configurations are either several instances of one schema under arbitrary IDs, or a known set of IDs each
+//! with a schema of its own. These tests implement one decoder of each kind and drive them the way the client will, so
+//! that a change to the trait has to keep both shapes expressible.
 
-use serde::de::value::{BorrowedBytesDeserializer, Error};
+use std::collections::BTreeMap;
+
+use serde::de::DeserializeOwned;
 use serde::Deserialize;
-use serde_json::json;
+use snafu::Snafu;
 
-use crate::Json;
+use crate::{ApplyError, AsApplyError, ConfigId, ProductDecoder};
 
-#[derive(Debug, Deserialize)]
-struct ExampleConfiguration {
-    #[serde(rename = "attributes.v1")]
-    attributes: Json<AttributeMappings>,
+/// Stands in for the client's decoding loop: a fresh decoder, one `decode` per assigned configuration in ascending ID
+/// order, then `build`. Returns the configurations the decoder rejected alongside the outcome of `build`.
+fn drive<P: ProductDecoder>(assigned: &[(&str, &[u8])]) -> (Vec<String>, Result<P::Snapshot, P::Error>) {
+    let mut sorted = assigned.to_vec();
+    sorted.sort_by_key(|(id, _)| *id);
 
-    #[serde(rename = "metrics.v1")]
-    metrics: Json<MetricMappings>,
+    let mut decoder = P::default();
+    let mut rejected = Vec::new();
+    for (id, payload) in sorted {
+        let id = ConfigId { id: id.to_string() };
+        if decoder.decode(&id, payload).is_err() {
+            rejected.push(id.id);
+        }
+    }
+
+    (rejected, decoder.build())
 }
+
+// A product whose configuration IDs are known in advance and each carry a different schema.
 
 #[derive(Debug, Deserialize)]
 struct AttributeMappings {
-    rename: HashMap<String, String>,
+    rename: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -25,66 +42,153 @@ struct MetricMappings {
     drop: Vec<String>,
 }
 
-/// Stands in for the map that `Payloads` presents: configuration ID to raw contents.
-// TODO: drive these tests through the `Payloads` deserializer once it exists, which presents contents as bytes rather
-// than as strings.
-fn assigned(contents: &[(&str, serde_json::Value)]) -> serde_json::Value {
-    contents
-        .iter()
-        .map(|(id, value)| ((*id).to_string(), json!(value.to_string())))
-        .collect()
+/// The assembled snapshot: attribute mappings are required, metric mappings are not.
+struct SemanticCore {
+    attributes: AttributeMappings,
+    metrics: Option<MetricMappings>,
+}
+
+#[derive(Debug, Snafu)]
+enum SemanticCoreError {
+    #[snafu(display("Configuration {id} is not one this product knows."))]
+    UnknownConfiguration { id: String },
+
+    #[snafu(display("Configuration {id} is not valid JSON: {source}"))]
+    MalformedConfiguration { id: String, source: serde_json::Error },
+
+    #[snafu(display("No attribute mappings were assigned."))]
+    MissingAttributes,
+}
+
+impl AsApplyError for SemanticCoreError {
+    fn as_apply_error(&self) -> ApplyError {
+        ApplyError
+    }
+}
+
+#[derive(Default)]
+struct SemanticCoreDecoder {
+    attributes: Option<AttributeMappings>,
+    metrics: Option<MetricMappings>,
+}
+
+impl ProductDecoder for SemanticCoreDecoder {
+    type Snapshot = SemanticCore;
+
+    type Error = SemanticCoreError;
+
+    fn decode(&mut self, id: &ConfigId, payload: &[u8]) -> Result<(), Self::Error> {
+        match id.id.as_str() {
+            "attributes.v1" => self.attributes = Some(from_json(id, payload)?),
+            "metrics.v1" => self.metrics = Some(from_json(id, payload)?),
+            _ => return Err(SemanticCoreError::UnknownConfiguration { id: id.id.clone() }),
+        }
+
+        Ok(())
+    }
+
+    fn build(self) -> Result<Self::Snapshot, Self::Error> {
+        let attributes = self.attributes.ok_or(SemanticCoreError::MissingAttributes)?;
+
+        Ok(SemanticCore {
+            attributes,
+            metrics: self.metrics,
+        })
+    }
+}
+
+fn from_json<T: DeserializeOwned>(id: &ConfigId, payload: &[u8]) -> Result<T, SemanticCoreError> {
+    serde_json::from_slice(payload).map_err(|source| SemanticCoreError::MalformedConfiguration {
+        id: id.id.clone(),
+        source,
+    })
+}
+
+// A product assigned any number of configurations of one schema, keeping the last valid one.
+
+#[derive(Debug, Deserialize)]
+struct Registry {
+    rename: BTreeMap<String, String>,
+}
+
+#[derive(Default)]
+struct LastValidRegistry {
+    chosen: Option<Registry>,
+}
+
+impl ProductDecoder for LastValidRegistry {
+    type Snapshot = Registry;
+
+    type Error = ApplyError;
+
+    fn decode(&mut self, _id: &ConfigId, payload: &[u8]) -> Result<(), Self::Error> {
+        self.chosen = Some(serde_json::from_slice(payload).map_err(|_| ApplyError)?);
+
+        Ok(())
+    }
+
+    fn build(self) -> Result<Self::Snapshot, Self::Error> {
+        self.chosen.ok_or(ApplyError)
+    }
 }
 
 #[test]
-fn deserializes_named_configurations() {
-    let payloads = assigned(&[
-        ("attributes.v1", json!({ "rename": { "http.host": "server.address" } })),
-        ("metrics.v1", json!({ "drop": ["runtime.jvm.gc.count"] })),
+fn decodes_configurations_of_differing_shapes() {
+    let (rejected, snapshot) = drive::<SemanticCoreDecoder>(&[
+        ("attributes.v1", br#"{"rename":{"http.host":"server.address"}}"#),
+        ("metrics.v1", br#"{"drop":["runtime.jvm.gc.count"]}"#),
     ]);
+    let snapshot = snapshot.expect("should build");
 
-    let configuration: ExampleConfiguration = serde_json::from_value(payloads).expect("should deserialize");
-
+    assert!(rejected.is_empty());
     assert_eq!(
         Some(&"server.address".to_string()),
-        configuration.attributes.0.rename.get("http.host")
+        snapshot.attributes.rename.get("http.host")
     );
-    assert_eq!(vec!["runtime.jvm.gc.count".to_string()], configuration.metrics.0.drop);
-}
-
-#[test]
-fn deserializes_json_bytes() {
-    let payload = BorrowedBytesDeserializer::<Error>::new(br#"{"rename":{"http.host":"server.address"}}"#);
-
-    let attributes = Json::<AttributeMappings>::deserialize(payload).expect("should deserialize");
-
     assert_eq!(
-        Some(&"server.address".to_string()),
-        attributes.0.rename.get("http.host")
+        vec!["runtime.jvm.gc.count".to_string()],
+        snapshot.metrics.expect("should decode metrics").drop
     );
 }
 
 #[test]
-fn rejects_malformed_json_payload() {
-    let payload = BorrowedBytesDeserializer::<Error>::new(b"{");
-
-    let error = Json::<AttributeMappings>::deserialize(payload).expect_err("should reject malformed JSON");
-
-    assert!(error.to_string().contains("EOF"));
-}
-
-#[test]
-fn deserializes_unnamed_configurations() {
-    let payloads = assigned(&[
-        ("attributes.v1", json!({ "rename": {} })),
-        ("attributes.v2", json!({ "rename": { "host": "host.name" } })),
+fn rejects_one_configuration_and_keeps_the_rest() {
+    let (rejected, snapshot) = drive::<SemanticCoreDecoder>(&[
+        ("attributes.v1", br#"{"rename":{"http.host":"server.address"}}"#),
+        ("metrics.v1", b"{"),
     ]);
+    let snapshot = snapshot.expect("should build without the malformed configuration");
 
-    let attributes: HashMap<String, Json<AttributeMappings>> =
-        serde_json::from_value(payloads).expect("should deserialize");
+    assert_eq!(vec!["metrics.v1".to_string()], rejected);
+    assert!(snapshot.attributes.rename.contains_key("http.host"));
+    assert!(snapshot.metrics.is_none());
+}
 
-    assert_eq!(2, attributes.len());
-    assert_eq!(
-        Some(&"host.name".to_string()),
-        attributes["attributes.v2"].0.rename.get("host")
-    );
+#[test]
+fn rejects_a_snapshot_missing_a_required_configuration() {
+    let (rejected, snapshot) = drive::<SemanticCoreDecoder>(&[("metrics.v1", br#"{"drop":[]}"#)]);
+
+    assert!(rejected.is_empty());
+    assert!(matches!(snapshot, Err(SemanticCoreError::MissingAttributes)));
+}
+
+#[test]
+fn rejects_an_empty_assignment_when_configuration_is_required() {
+    let (rejected, snapshot) = drive::<SemanticCoreDecoder>(&[]);
+
+    assert!(rejected.is_empty());
+    assert!(matches!(snapshot, Err(SemanticCoreError::MissingAttributes)));
+}
+
+#[test]
+fn reduces_configurations_of_one_shape_in_ascending_order() {
+    let (rejected, snapshot) = drive::<LastValidRegistry>(&[
+        ("registry.v3", br#"{"rename":{"host":"host.name"}}"#),
+        ("registry.v1", br#"{"rename":{}}"#),
+        ("registry.v2", b"{"),
+    ]);
+    let snapshot = snapshot.expect("should build from the valid configurations");
+
+    assert_eq!(vec!["registry.v2".to_string()], rejected);
+    assert_eq!(Some(&"host.name".to_string()), snapshot.rename.get("host"));
 }

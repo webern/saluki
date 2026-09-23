@@ -1,26 +1,6 @@
 use serde::Serialize;
 use serde_variant::to_variant_name;
 
-use crate::{AsApplyError, Payloads};
-
-/// Decodes and validates a product's complete configuration snapshot.
-pub trait ProductConfiguration: Sized {
-    /// The error this product's decoding and validation produces.
-    ///
-    /// Use [`ApplyError`](crate::ApplyError) when there is nothing richer to report; a product that wants to attribute
-    /// a failure more precisely for its own diagnostics defines its own type instead.
-    type Error: AsApplyError + Send + Sync + 'static;
-
-    /// Decodes the assigned payloads into an accepted configuration.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Self::Error`] when the snapshot cannot be decoded or fails validation. The client reports the
-    /// rejection to the Agent and delivers the error to subscribers; the subscriber does not acknowledge
-    /// configurations separately.
-    fn decode(payloads: Payloads<'_>) -> Result<Self, Self::Error>;
-}
-
 /// Represents product strings, such as `APM_SEMANTIC_CORE_DD`.
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -39,6 +19,18 @@ impl AsRef<str> for ProductId {
     fn as_ref(&self) -> &str {
         to_variant_name(self).unwrap_or("UNKNOWN")
     }
+}
+
+/// Identifies one configuration assigned to a product.
+///
+/// Ordering is the order in which the client presents a product's configurations to its decoder.
+// TODO: the shape of this identity is an open design detail: whether it carries the trailing name segment of the
+// configuration's path in addition to the configuration ID, and whether a decoder also sees the configuration's
+// version and length.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[non_exhaustive]
+pub struct ConfigId {
+    pub(crate) id: String,
 }
 
 #[cfg(test)]

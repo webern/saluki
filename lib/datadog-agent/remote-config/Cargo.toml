@@ -12,10 +12,12 @@ saluki-common = { workspace = true }
 saluki-core = { workspace = true }
 saluki-error = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
-serde_json = { workspace = true }
 serde_variant = { workspace = true }
 snafu = { workspace = true }
 tokio = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

@@ -1,6 +1,20 @@
 use serde::Serialize;
 use serde_variant::to_variant_name;
 
+use crate::{ApplyError, Payloads};
+
+/// Decodes and validates a product's complete configuration snapshot.
+// TODO: settle the trait and method names.
+pub trait ProductConfiguration: Sized {
+    /// Decodes the assigned payloads into an accepted configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ApplyError`] when the snapshot cannot be decoded or fails validation. The client uses the error
+    /// to report rejection to the Agent; the subscriber does not acknowledge configurations separately.
+    fn decode(payloads: Payloads<'_>) -> Result<Self, ApplyError>;
+}
+
 /// Represents product strings, such as `APM_SEMANTIC_CORE_DD`.
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -22,7 +36,7 @@ impl AsRef<str> for ProductId {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use crate::product::ProductId;
 
     #[test]

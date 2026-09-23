@@ -1373,12 +1373,14 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "datadog-agent-commons",
+ "saluki-common",
  "saluki-core",
+ "saluki-error",
  "serde",
  "serde_json",
  "serde_variant",
+ "snafu",
  "tokio",
- "tokio-test",
 ]
 
 [[package]]

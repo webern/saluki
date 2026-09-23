@@ -1,11 +1,10 @@
 //! Provides a client for remote configuration.
 
-use std::fmt;
-use std::marker::PhantomData;
+#![deny(missing_docs)]
+
 use std::sync::Arc;
 
-use serde::de::{DeserializeOwned, Deserializer, Visitor};
-use serde::Deserialize;
+use datadog_agent_commons::ipc::client::RemoteAgentClient;
 use tokio::sync::watch;
 
 mod error;
@@ -13,51 +12,38 @@ mod payloads;
 mod product;
 mod protocol;
 #[cfg(test)]
-mod test;
+mod tests;
+mod worker;
 
-pub use error::{Error, Result};
-pub use product::ProductId;
+pub use error::{ApplyError, Error, Result};
+pub use payloads::{Json, Payloads};
+pub use product::{ProductConfiguration, ProductId};
+pub use worker::RemoteConfigurationWorker;
 
-/// Polls the Datadog Agent for Remote Configuration product updates.
+/// A cloneable handle for subscribing to Remote Configuration products.
+#[derive(Clone)]
+#[non_exhaustive]
 pub struct RemoteConfigurationClient {}
 
 impl RemoteConfigurationClient {
-    /// Creates a client without connecting to the Datadog Agent.
-    pub fn from_configuration(_configuration: ()) -> Result<Self> {
+    /// Creates a client and its worker from a connected Datadog Agent client.
+    ///
+    /// The connection must be dedicated to Remote Configuration. Construction does not spawn the worker or probe
+    /// Remote Configuration availability; the caller schedules the worker through a supervisor or its `run` method.
+    pub fn new(_agent_client: RemoteAgentClient) -> (Self, RemoteConfigurationWorker) {
         todo!()
     }
 
-    /// Subscribes to a product, deserializing its configurations into `T`.
+    /// Subscribes to a product, decoding its complete configuration snapshot into `T`.
     ///
-    /// `T` is deserialized from a map whose keys are configuration IDs and whose values are the raw configuration
-    /// contents. Name the IDs as fields when they're known, or use a map type when they aren't:
-    ///
-    /// ```ignore
-    /// #[derive(Deserialize)]
-    /// struct SemanticCore {
-    ///     #[serde(rename = "semantic_core.v1")]
-    ///     core: Json<Mappings>,
-    /// }
-    ///
-    /// type Sampling = HashMap<String, Json<Rates>>;
-    /// ```
-    ///
-    /// The returned receiver holds the current value: a subscriber that arrives late still sees it. Deserializing `T`
-    /// is what acknowledges the configuration upstream, so a failure is reported as an error against the offending
-    /// configuration and the receiver keeps its previous value.
-    ///
-    /// Dropping every receiver for a product unsubscribes from it.
+    /// Subscriptions can be added while the worker runs. Decoding accepts or rejects each snapshot and supplies the
+    /// information needed for the client to report apply status to the Agent.
+    // TODO: settle the return type, initial absence of a value, and delivery of decoding errors to subscribers.
+    // TODO: define the unsubscribe mechanism.
     pub fn subscribe<T>(&self, _product_id: ProductId) -> Result<watch::Receiver<Arc<T>>>
     where
-        T: DeserializeOwned + Send + Sync + 'static,
+        T: ProductConfiguration + Send + Sync + 'static,
     {
-        todo!()
-    }
-
-    /// Creates a client with a test transport.
-    // TODO: use this constructor when tests introduce a mock transport.
-    #[allow(dead_code)]
-    pub(crate) fn for_testing(_configuration: (), _mock: ()) -> Result<Self> {
         todo!()
     }
 }

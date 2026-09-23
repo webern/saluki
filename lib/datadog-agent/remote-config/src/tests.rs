@@ -1,16 +1,13 @@
-//! complicated tests requiring a mock type etc go here
-
 use std::collections::HashMap;
 
+use serde::de::value::{BorrowedBytesDeserializer, Error};
 use serde::Deserialize;
 use serde_json::json;
 
 use crate::Json;
 
-/// A subscriber's type for `APM_SEMANTIC_CORE_DD`, naming the configuration IDs it expects.
-// TODO: replace these placeholder configuration IDs with the ones the product actually assigns.
 #[derive(Debug, Deserialize)]
-struct SemanticCore {
+struct ExampleConfiguration {
     #[serde(rename = "attributes.v1")]
     attributes: Json<AttributeMappings>,
 
@@ -45,23 +42,34 @@ fn deserializes_named_configurations() {
         ("metrics.v1", json!({ "drop": ["runtime.jvm.gc.count"] })),
     ]);
 
-    let semantic_core: SemanticCore = serde_json::from_value(payloads).expect("should deserialize");
+    let configuration: ExampleConfiguration = serde_json::from_value(payloads).expect("should deserialize");
 
     assert_eq!(
         Some(&"server.address".to_string()),
-        semantic_core.attributes.0.rename.get("http.host")
+        configuration.attributes.0.rename.get("http.host")
     );
-    assert_eq!(vec!["runtime.jvm.gc.count".to_string()], semantic_core.metrics.0.drop);
+    assert_eq!(vec!["runtime.jvm.gc.count".to_string()], configuration.metrics.0.drop);
 }
 
 #[test]
-fn reports_a_missing_configuration() {
-    let payloads = assigned(&[("attributes.v1", json!({ "rename": {} }))]);
+fn deserializes_json_bytes() {
+    let payload = BorrowedBytesDeserializer::<Error>::new(br#"{"rename":{"http.host":"server.address"}}"#);
 
-    let error = serde_json::from_value::<SemanticCore>(payloads).expect_err("should not deserialize");
+    let attributes = Json::<AttributeMappings>::deserialize(payload).expect("should deserialize");
 
-    // This message is what the subscriber reports upstream against the configuration.
-    assert!(error.to_string().contains("metrics.v1"));
+    assert_eq!(
+        Some(&"server.address".to_string()),
+        attributes.0.rename.get("http.host")
+    );
+}
+
+#[test]
+fn rejects_malformed_json_payload() {
+    let payload = BorrowedBytesDeserializer::<Error>::new(b"{");
+
+    let error = Json::<AttributeMappings>::deserialize(payload).expect_err("should reject malformed JSON");
+
+    assert!(error.to_string().contains("EOF"));
 }
 
 #[test]

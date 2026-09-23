@@ -20,6 +20,15 @@ pub use payloads::{Json, Payloads};
 pub use product::{ProductConfiguration, ProductId};
 pub use worker::RemoteConfigurationWorker;
 
+/// Configuration for the Remote Configuration Client.
+///
+/// Sorry for the weird name but it seemed better that RemoteConfigurationClientConfiguration!
+pub struct RcClientConfiguration {
+    /// The remote agent client
+    pub remote_agent_client: RemoteAgentClient,
+    // TODO: poll frequency? any other fields?
+}
+
 /// A cloneable handle for subscribing to Remote Configuration products.
 #[derive(Clone)]
 #[non_exhaustive]
@@ -30,7 +39,7 @@ impl RemoteConfigurationClient {
     ///
     /// The connection must be dedicated to Remote Configuration. Construction does not spawn the worker or probe
     /// Remote Configuration availability; the caller schedules the worker through a supervisor or its `run` method.
-    pub fn new(_agent_client: RemoteAgentClient) -> (Self, RemoteConfigurationWorker) {
+    pub fn new(settings: RcClientConfiguration) -> (Self, RemoteConfigurationWorker) {
         todo!()
     }
 

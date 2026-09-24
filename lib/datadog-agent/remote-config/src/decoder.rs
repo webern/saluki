@@ -49,9 +49,15 @@ pub trait ProductDecoder: Default + Send + 'static {
     /// assigned nothing at all is built from a default decoder that received no calls to [`decode`](Self::decode), so
     /// whether an empty assignment is acceptable is this method's decision.
     ///
+    /// The client acknowledges successfully decoded configurations only when this method succeeds.
+    ///
     /// # Errors
     ///
-    /// Returns [`Self::Error`] to reject the snapshot as a whole, which leaves subscribers holding the last snapshot
-    /// that was accepted.
+    /// Returns [`Self::Error`] to reject the snapshot. The client rejects every successfully decoded configuration
+    /// with this error's apply reason; configurations rejected by [`decode`](Self::decode) keep their own errors.
+    /// No new snapshot is published, and subscribers retain the last accepted snapshot.
+    ///
+    /// This method cannot reject selected configurations while publishing the rest. Selective rejection belongs in
+    /// [`decode`](Self::decode).
     fn build(self) -> Result<Self::Snapshot, Self::Error>;
 }

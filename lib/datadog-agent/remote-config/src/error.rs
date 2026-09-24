@@ -24,8 +24,12 @@ pub enum Error {
     },
 }
 
-/// A rejection of a product's configuration snapshot, as reported to the Agent.
-// TODO: define structured attribution and reasons, including missing payloads and cross-payload failures.
+/// A rejection reason reported to the Agent.
+///
+/// The client determines which configurations are rejected: a [`decode`](crate::ProductDecoder::decode) error rejects
+/// that configuration, while a [`build`](crate::ProductDecoder::build) error rejects every successfully decoded
+/// configuration. Build errors do not replace individual decode errors.
+// TODO: define the representation of rejection reasons.
 #[derive(Clone, Debug, Snafu)]
 #[snafu(display("Remote configuration was rejected."))]
 #[non_exhaustive]

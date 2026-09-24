@@ -34,6 +34,9 @@ pub trait ProductDecoder: Default + Send + 'static {
 
     /// Accumulates one of the product's assigned configurations.
     ///
+    /// The client calls this at most once per distinct `id` within a single snapshot, so a decoder may hold one slot per
+    /// configuration ID without a second configuration silently displacing the first.
+    ///
     /// # Errors
     ///
     /// Returns [`Self::Error`] to reject this configuration alone. The client attributes the rejection to it and skips

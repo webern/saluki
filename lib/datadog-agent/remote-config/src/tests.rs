@@ -14,6 +14,9 @@ use crate::{ApplyError, AsApplyError, ConfigId, ProductDecoder};
 
 /// Stands in for the client's decoding loop: a fresh decoder, one `decode` per assigned configuration in ascending ID
 /// order, then `build`. Returns the configurations the decoder rejected alongside the outcome of `build`.
+///
+/// Callers pass distinct IDs because the client guarantees that: several assigned files collapsing to one configuration
+/// ID are rejected as a set before any of them reaches a decoder.
 fn drive<P: ProductDecoder>(assigned: &[(&str, &[u8])]) -> (Vec<String>, Result<P::Snapshot, P::Error>) {
     let mut sorted = assigned.to_vec();
     sorted.sort_by_key(|(id, _)| *id);
@@ -21,9 +24,9 @@ fn drive<P: ProductDecoder>(assigned: &[(&str, &[u8])]) -> (Vec<String>, Result<
     let mut decoder = P::default();
     let mut rejected = Vec::new();
     for (id, payload) in sorted {
-        let id = ConfigId { id: id.to_string() };
+        let id = ConfigId(id.to_string());
         if decoder.decode(&id, payload).is_err() {
-            rejected.push(id.id);
+            rejected.push(id.to_string());
         }
     }
 
@@ -78,10 +81,10 @@ impl ProductDecoder for SemanticCoreDecoder {
     type Error = SemanticCoreError;
 
     fn decode(&mut self, id: &ConfigId, payload: &[u8]) -> Result<(), Self::Error> {
-        match id.id.as_str() {
+        match &**id {
             "attributes.v1" => self.attributes = Some(from_json(id, payload)?),
             "metrics.v1" => self.metrics = Some(from_json(id, payload)?),
-            _ => return Err(SemanticCoreError::UnknownConfiguration { id: id.id.clone() }),
+            _ => return Err(SemanticCoreError::UnknownConfiguration { id: id.to_string() }),
         }
 
         Ok(())
@@ -99,7 +102,7 @@ impl ProductDecoder for SemanticCoreDecoder {
 
 fn from_json<T: DeserializeOwned>(id: &ConfigId, payload: &[u8]) -> Result<T, SemanticCoreError> {
     serde_json::from_slice(payload).map_err(|source| SemanticCoreError::MalformedConfiguration {
-        id: id.id.clone(),
+        id: id.to_string(),
         source,
     })
 }

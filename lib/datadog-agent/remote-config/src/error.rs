@@ -24,16 +24,29 @@ pub enum Error {
     },
 }
 
-/// A rejection reason reported to the Agent.
+/// A rejection message reported unchanged to the Agent.
+///
+/// Structured error categories belong in the subscriber's own error type, which implements [`AsApplyError`] to choose
+/// this message. Messages must not contain secrets or raw payloads.
 ///
 /// The client determines which configurations are rejected: a [`decode`](crate::ProductDecoder::decode) error rejects
 /// that configuration, while a [`build`](crate::ProductDecoder::build) error rejects every successfully decoded
 /// configuration. Build errors do not replace individual decode errors.
-// TODO: define the representation of rejection reasons.
 #[derive(Clone, Debug, Snafu)]
-#[snafu(display("Remote configuration was rejected."))]
+#[snafu(display("{message}"))]
 #[non_exhaustive]
-pub struct ApplyError;
+pub struct ApplyError {
+    message: String,
+}
+
+impl ApplyError {
+    /// Creates a rejection reason, preserving the supplied message unchanged.
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
 
 /// Converts a subscriber's decoding error into the client's wire-facing rejection.
 ///

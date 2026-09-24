@@ -44,6 +44,7 @@ pub struct RcClientConfiguration {
 #[non_exhaustive]
 pub struct RemoteConfigurationClient {}
 
+// TODO: consider opt-in health notifications when a subscriber needs them (e.g. CWS enforcement).
 impl RemoteConfigurationClient {
     /// Creates a client and its worker from a connected Datadog Agent client.
     ///

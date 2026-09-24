@@ -65,7 +65,7 @@ enum SemanticCoreError {
 
 impl AsApplyError for SemanticCoreError {
     fn as_apply_error(&self) -> ApplyError {
-        ApplyError
+        ApplyError::new(self.to_string())
     }
 }
 
@@ -125,14 +125,42 @@ impl ProductDecoder for LastValidRegistry {
     type Error = ApplyError;
 
     fn decode(&mut self, _id: &ConfigId, payload: &[u8]) -> Result<(), Self::Error> {
-        self.chosen = Some(serde_json::from_slice(payload).map_err(|_| ApplyError)?);
+        self.chosen = Some(
+            serde_json::from_slice(payload)
+                .map_err(|_| ApplyError::new("Registry configuration is not valid JSON."))?,
+        );
 
         Ok(())
     }
 
     fn build(self) -> Result<Self::Snapshot, Self::Error> {
-        self.chosen.ok_or(ApplyError)
+        self.chosen
+            .ok_or_else(|| ApplyError::new("No registry configuration was assigned."))
     }
+}
+
+#[test]
+fn apply_error_preserves_message() {
+    for message in ["Required configuration is missing.", "", "  details\nwith whitespace  "] {
+        let error = ApplyError::new(message);
+        let owned_error = ApplyError::new(message.to_string());
+
+        assert_eq!(error.to_string(), message);
+        assert_eq!(owned_error.to_string(), message);
+        assert_eq!(error.clone().to_string(), message);
+        assert_eq!(error.as_apply_error().to_string(), message);
+        assert!(std::error::Error::source(&error).is_none());
+    }
+}
+
+#[test]
+fn converts_structured_error_to_apply_error() {
+    let error = SemanticCoreError::MissingAttributes;
+
+    assert_eq!(
+        error.as_apply_error().to_string(),
+        "No attribute mappings were assigned."
+    );
 }
 
 #[test]

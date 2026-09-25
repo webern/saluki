@@ -74,16 +74,12 @@ pub trait ProductDecoder: Default + Send + 'static {
 }
 
 /// What one run of a decoder over a product's assignment produced.
-// TODO: remove dead_code guard once the worker evaluates assignments.
-#[allow(dead_code)]
 pub(crate) struct Evaluation<T, E> {
     pub(crate) outcome: Outcome<T, E>,
     /// Each assigned configuration's rejection, if any, in ascending ID order.
     pub(crate) verdicts: Vec<(ConfigId, Option<String>)>,
 }
 
-// TODO: remove dead_code guard once the worker evaluates assignments.
-#[allow(dead_code)]
 pub(crate) enum Outcome<T, E> {
     /// `build` succeeded; the snapshot is published.
     Accepted(T),
@@ -101,8 +97,6 @@ pub(crate) enum Outcome<T, E> {
 /// [`TestPublisher::assign`](crate::TestPublisher::assign), so that what a subscriber tests is what production runs:
 /// configurations in ascending [`ConfigId`] order, a rejected configuration skipped while the rest are still decoded,
 /// then `build`, with a panic in either caught.
-// TODO: remove dead_code guard once the worker evaluates assignments.
-#[allow(dead_code)]
 pub(crate) fn evaluate<P: ProductDecoder>(mut assignment: Vec<(ConfigId, &[u8])>) -> Evaluation<P::Snapshot, P::Error> {
     assignment.sort_by(|(left, _), (right, _)| left.cmp(right));
 

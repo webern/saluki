@@ -1,17 +1,23 @@
 //! Exercises the two product shapes a [`ProductDecoder`] has to serve.
 //!
 //! A product's configurations are either several instances of one schema under arbitrary IDs, or a known set of IDs each
-//! with a schema of its own. These tests exercise both through the client's evaluation and subscription paths.
+//! with a schema of its own. These tests exercise both through the client's evaluation and subscription paths, and
+//! exercise the client's subscription registry without starting the polling loop.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
+use datadog_protos::remote_config::{ClientGetConfigsRequest, ClientGetConfigsResponse};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use snafu::Snafu;
 
 use crate::decoder::{evaluate, Outcome};
-use crate::source::FetchError;
-use crate::{ApplyError, ConfigId, ProductDecoder, TestPublisher};
+use crate::source::{FetchError, RcAgent};
+use crate::{
+    ApplyError, ConfigId, Error, ProductDecoder, ProductId, RcClientConfiguration, RemoteConfigurationClient,
+    RemoteConfigurationWorker, TestPublisher,
+};
 
 // A product whose configuration IDs are known in advance and each carry a different schema.
 
@@ -296,7 +302,7 @@ async fn panics_reject_every_configuration_without_publishing() {
         assert!(evaluated
             .verdicts
             .iter()
-            .all(|(_, reason)| reason.as_ref().unwrap().to_string() == "Product decoder panicked."));
+            .all(|(_, reason)| reason.as_deref() == Some("Product decoder panicked.")));
 
         publisher.assign::<PanickingDecoder>([("first", "ok"), ("second", panic_at)]);
         assert!(
@@ -417,13 +423,157 @@ fn settings_reject_max_backoff_below_poll_interval() {
     assert_eq!(settings.poll_interval, settings.max_backoff);
 }
 
-/// Shows the two ways to name a product when subscribing. Only compiled, never run, because `subscribe` is unimplemented.
-#[allow(dead_code)]
-fn subscribe_names_products_by_variant_or_string(client: &crate::RemoteConfigurationClient) {
-    // A product this crate knows about.
-    let _semantic_core: crate::Result<crate::Subscription<SemanticCore, SemanticCoreError>> =
-        client.subscribe::<SemanticCoreDecoder>(crate::ProductId::ApmSemanticCoreDd);
+/// Stands in for the Agent in tests that never start the polling loop.
+struct NoAgent;
 
-    // A product this crate has no variant for.
-    let _registry: crate::Result<crate::Subscription<Registry>> = client.subscribe::<LastValidRegistry>("FOO_MINE_DD");
+#[async_trait::async_trait]
+impl RcAgent for NoAgent {
+    async fn get_configs(&mut self, _request: ClientGetConfigsRequest) -> Result<ClientGetConfigsResponse, FetchError> {
+        unreachable!("these tests never start the polling loop")
+    }
+}
+
+fn client() -> (RemoteConfigurationClient, RemoteConfigurationWorker) {
+    RemoteConfigurationClient::with_agent(Box::new(NoAgent), RcClientConfiguration::default())
+}
+
+fn registry_payload() -> Vec<(ConfigId, &'static [u8])> {
+    vec![(ConfigId::new("registry.v1"), br#"{"rename":{"host":"host.name"}}"#)]
+}
+
+fn assert_already_subscribed<T>(result: crate::Result<T>, expected: &str) {
+    match result {
+        Err(Error::AlreadySubscribed { product }) => assert_eq!(product, expected),
+        Err(error) => panic!("expected AlreadySubscribed, got {error}"),
+        Ok(_) => panic!("expected AlreadySubscribed, got a subscription"),
+    }
+}
+
+#[test]
+fn a_product_variant_and_its_string_are_one_product() {
+    let (client, _worker) = client();
+
+    let _semantic_core = client
+        .subscribe::<SemanticCoreDecoder>(ProductId::ApmSemanticCoreDd)
+        .unwrap();
+    assert_already_subscribed(
+        client.subscribe::<SemanticCoreDecoder>("APM_SEMANTIC_CORE_DD"),
+        "APM_SEMANTIC_CORE_DD",
+    );
+
+    let _sampling = client.subscribe::<LastValidRegistry>("APM_SAMPLING").unwrap();
+    assert_already_subscribed(
+        client.subscribe::<LastValidRegistry>(ProductId::ApmSampling),
+        "APM_SAMPLING",
+    );
+}
+
+#[test]
+fn a_second_live_subscription_is_rejected_whatever_its_decoder() {
+    let (client, _worker) = client();
+    let subscription = client.subscribe::<LastValidRegistry>("FOO_MINE_DD").unwrap();
+
+    assert_already_subscribed(client.subscribe::<LastValidRegistry>("FOO_MINE_DD"), "FOO_MINE_DD");
+    assert_already_subscribed(client.subscribe::<PanickingDecoder>("FOO_MINE_DD"), "FOO_MINE_DD");
+    assert_already_subscribed(
+        client.clone().subscribe::<LastValidRegistry>("FOO_MINE_DD"),
+        "FOO_MINE_DD",
+    );
+
+    // A surviving clone keeps the product subscribed.
+    let clone = subscription.clone();
+    drop(subscription);
+    assert_already_subscribed(client.subscribe::<LastValidRegistry>("FOO_MINE_DD"), "FOO_MINE_DD");
+    drop(clone);
+    client.subscribe::<LastValidRegistry>("FOO_MINE_DD").unwrap();
+}
+
+#[tokio::test]
+async fn resubscribing_starts_without_an_accepted_snapshot() {
+    let (client, worker) = client();
+    let mut first = client.subscribe::<LastValidRegistry>("FOO_MINE_DD").unwrap();
+    worker.shared.assign("FOO_MINE_DD", registry_payload()).unwrap();
+    assert!(first.changed().await.is_ok());
+    drop(first);
+
+    // The replacement may use a different decoder, and inherits nothing from the subscription it replaces.
+    let mut second = client.subscribe::<PanickingDecoder>("FOO_MINE_DD").unwrap();
+    assert!(second.current().is_none());
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(10), second.changed())
+            .await
+            .is_err()
+    );
+
+    let verdicts = worker
+        .shared
+        .assign("FOO_MINE_DD", vec![(ConfigId::new("first"), b"ok")])
+        .unwrap();
+    assert_eq!(verdicts.len(), 1);
+    assert!(verdicts[0].1.is_none());
+    assert!(second.changed().await.is_ok());
+}
+
+#[tokio::test]
+async fn the_worker_delivers_into_subscriptions_made_by_any_client_handle() {
+    let (client, worker) = client();
+    assert!(Arc::ptr_eq(&client.shared, &worker.shared));
+
+    let mut registry = client.clone().subscribe::<LastValidRegistry>("FOO_MINE_DD").unwrap();
+    let verdicts = worker
+        .shared
+        .assign(
+            "FOO_MINE_DD",
+            vec![
+                (ConfigId::new("registry.v2"), b"{"),
+                (ConfigId::new("registry.v1"), br#"{"rename":{"host":"host.name"}}"#),
+            ],
+        )
+        .unwrap();
+
+    let snapshot = registry.changed().await.unwrap();
+    assert_eq!(Some(&"host.name".to_string()), snapshot.rename.get("host"));
+    assert_eq!(verdicts[0], (ConfigId::new("registry.v1"), None));
+    assert_eq!(
+        verdicts[1],
+        (
+            ConfigId::new("registry.v2"),
+            Some("Registry configuration is not valid JSON.".to_owned())
+        )
+    );
+
+    assert!(worker.shared.assign("APM_SAMPLING", registry_payload()).is_none());
+}
+
+#[test]
+fn each_client_has_its_own_random_id() {
+    let (first, _first_worker) = client();
+    let (second, _second_worker) = client();
+
+    let id = uuid::Uuid::parse_str(&first.shared.client_id).unwrap();
+    assert_eq!(id.get_version(), Some(uuid::Version::Random));
+    assert_ne!(first.shared.client_id, second.shared.client_id);
+    assert_eq!(first.shared.client_id, first.clone().shared.client_id);
+}
+
+#[tokio::test]
+async fn subscribing_wakes_the_worker_once() {
+    let (client, worker) = client();
+    let _registry = client.subscribe::<LastValidRegistry>("FOO_MINE_DD").unwrap();
+    let _sampling = client.subscribe::<LastValidRegistry>("APM_SAMPLING").unwrap();
+
+    worker.shared.wake.notified().await;
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(10), worker.shared.wake.notified())
+            .await
+            .is_err()
+    );
+
+    // A rejected subscribe does not wake the worker.
+    assert_already_subscribed(client.subscribe::<LastValidRegistry>("FOO_MINE_DD"), "FOO_MINE_DD");
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(10), worker.shared.wake.notified())
+            .await
+            .is_err()
+    );
 }

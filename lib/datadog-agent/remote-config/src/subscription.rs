@@ -4,12 +4,13 @@ use std::sync::Arc;
 
 use tokio::sync::watch;
 
+use crate::decoder::{evaluate, Outcome};
+use crate::{ConfigId, ProductDecoder};
+
 /// The published state of one product.
 ///
 /// A rejection never evicts `accepted`, so retaining the last known-good configuration is the client's behavior rather
 /// than each consumer's bookkeeping.
-// TODO: remove dead_code guard once the worker publishes snapshots.
-#[allow(dead_code)]
 pub(crate) struct Snapshot<T, E> {
     /// The most recently accepted configuration, absent until the first snapshot is accepted.
     pub(crate) accepted: Option<Arc<T>>,
@@ -79,5 +80,60 @@ impl<T, E> Clone for Subscription<T, E> {
         Self {
             receiver: self.receiver.clone(),
         }
+    }
+}
+
+/// The publishing side of one product's [`Subscription`] and its clones.
+///
+/// The client's registry and [`TestPublisher`](crate::TestPublisher) both publish through this, so a subscription
+/// behaves the same in a subscriber's test as in production.
+pub(crate) struct Publisher<T, E> {
+    sender: watch::Sender<Snapshot<T, E>>,
+}
+
+impl<T, E> Publisher<T, E> {
+    /// Creates a publisher and a subscription with no accepted snapshot.
+    pub(crate) fn new() -> (Self, Subscription<T, E>) {
+        let (sender, receiver) = watch::channel(Snapshot {
+            accepted: None,
+            rejection: None,
+        });
+        (Self { sender }, Subscription { receiver })
+    }
+
+    pub(crate) fn accept(&self, snapshot: T) {
+        self.sender.send_modify(|state| {
+            state.accepted = Some(Arc::new(snapshot));
+            state.rejection = None;
+        });
+    }
+
+    pub(crate) fn reject(&self, error: E) {
+        self.sender.send_modify(|state| {
+            state.rejection = Some(Arc::new(error));
+        });
+    }
+
+    /// Decodes `assignment` with `P`, publishes the outcome, and returns each configuration's rejection, if any.
+    ///
+    /// A panicking decoder publishes nothing.
+    pub(crate) fn assign<P>(&self, assignment: Vec<(ConfigId, &[u8])>) -> Vec<(ConfigId, Option<String>)>
+    where
+        P: ProductDecoder<Snapshot = T, Error = E>,
+    {
+        let evaluation = evaluate::<P>(assignment);
+        match evaluation.outcome {
+            Outcome::Accepted(snapshot) => self.accept(snapshot),
+            Outcome::Rejected(error) => self.reject(error),
+            Outcome::Panicked => {}
+        }
+        evaluation.verdicts
+    }
+
+    /// Returns whether any clone of the subscription is still alive.
+    ///
+    /// Once this is false it stays false: a subscription can only be cloned from a live one.
+    pub(crate) fn is_subscribed(&self) -> bool {
+        self.sender.receiver_count() > 0
     }
 }

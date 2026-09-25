@@ -1,11 +1,6 @@
 //! Test support for subscribers, enabled by the `test-util` feature.
 
-use std::sync::Arc;
-
-use tokio::sync::watch;
-
-use crate::decoder::{evaluate, Outcome};
-use crate::subscription::Snapshot;
+use crate::subscription::Publisher;
 use crate::{ConfigId, ProductDecoder, Subscription};
 
 /// Publishes into a [`Subscription`] by hand, so a subscriber can test its component without an Agent.
@@ -33,7 +28,7 @@ use crate::{ConfigId, ProductDecoder, Subscription};
 /// ```
 #[non_exhaustive]
 pub struct TestPublisher<T, E = String> {
-    sender: watch::Sender<Snapshot<T, E>>,
+    publisher: Publisher<T, E>,
 }
 
 impl<T, E> TestPublisher<T, E> {
@@ -42,21 +37,15 @@ impl<T, E> TestPublisher<T, E> {
     /// The subscription starts with no accepted snapshot, so [`current`](Subscription::current) returns `None` until
     /// the first successful publish.
     pub fn new() -> (Self, Subscription<T, E>) {
-        let (sender, receiver) = watch::channel(Snapshot {
-            accepted: None,
-            rejection: None,
-        });
-        (Self { sender }, Subscription { receiver })
+        let (publisher, subscription) = Publisher::new();
+        (Self { publisher }, subscription)
     }
 
     /// Publishes an accepted snapshot.
     ///
     /// [`current`](Subscription::current) returns this snapshot. Subscribers waiting for a change are notified.
     pub fn accept(&self, snapshot: T) {
-        self.sender.send_modify(|state| {
-            state.accepted = Some(Arc::new(snapshot));
-            state.rejection = None;
-        });
+        self.publisher.accept(snapshot);
     }
 
     /// Publishes a rejection.
@@ -64,9 +53,7 @@ impl<T, E> TestPublisher<T, E> {
     /// Subscribers waiting for a change receive the error from [`changed`](Subscription::changed), and
     /// [`current`](Subscription::current) keeps returning the last accepted snapshot.
     pub fn reject(&self, error: E) {
-        self.sender.send_modify(|state| {
-            state.rejection = Some(Arc::new(error));
-        });
+        self.publisher.reject(error);
     }
 
     /// Runs `P` over an assignment of configurations and publishes the outcome, exactly as the client's worker would.
@@ -108,10 +95,6 @@ impl<T, E> TestPublisher<T, E> {
             .iter()
             .map(|(id, payload)| (id.clone(), payload.as_slice()))
             .collect();
-        match evaluate::<P>(assignment).outcome {
-            Outcome::Accepted(snapshot) => self.accept(snapshot),
-            Outcome::Rejected(error) => self.reject(error),
-            Outcome::Panicked => {}
-        }
+        self.publisher.assign::<P>(assignment);
     }
 }

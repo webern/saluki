@@ -19,6 +19,7 @@
 
 #![deny(missing_docs)]
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use datadog_agent_commons::ipc::client::RemoteAgentClient;
@@ -27,6 +28,7 @@ mod decoder;
 mod error;
 mod product;
 mod protocol;
+mod registry;
 mod source;
 mod subscription;
 #[cfg(test)]
@@ -109,9 +111,12 @@ impl Default for RcClientConfiguration {
 }
 
 /// A cloneable handle for subscribing to Remote Configuration products.
+///
+/// Every clone shares one set of subscriptions and one client identity with the worker.
 #[derive(Clone)]
-#[non_exhaustive]
-pub struct RemoteConfigurationClient {}
+pub struct RemoteConfigurationClient {
+    shared: Arc<registry::Shared>,
+}
 
 // TODO: consider opt-in health notifications when a subscriber needs them (e.g. CWS enforcement).
 // TODO: consider a per-product option to keep the last configuration when the Agent reports it expired.
@@ -123,9 +128,18 @@ impl RemoteConfigurationClient {
     ///
     /// The client's identity is private and chosen here: a random ID kept for the life of the client, and the
     /// application name and version of the running binary.
-    // TODO: generate the client ID with `uuid` (v4) and read the name and version from `saluki_metadata`.
-    pub fn new(_agent_client: RemoteAgentClient, _config: RcClientConfiguration) -> (Self, RemoteConfigurationWorker) {
-        todo!()
+    // TODO: read the name and version from `saluki_metadata` when the worker builds requests.
+    pub fn new(agent_client: RemoteAgentClient, config: RcClientConfiguration) -> (Self, RemoteConfigurationWorker) {
+        Self::with_agent(Box::new(agent_client), config)
+    }
+
+    /// Creates a client and its worker around any [`RcAgent`](source::RcAgent), so tests can replace the Agent.
+    pub(crate) fn with_agent(
+        agent: Box<dyn source::RcAgent>, config: RcClientConfiguration,
+    ) -> (Self, RemoteConfigurationWorker) {
+        let shared = Arc::new(registry::Shared::new());
+        let worker = RemoteConfigurationWorker::new(Arc::clone(&shared), agent, config);
+        (Self { shared }, worker)
     }
 
     /// Subscribes to a product, decoding its assigned configurations with `P`.
@@ -139,7 +153,8 @@ impl RemoteConfigurationClient {
     ///
     /// A product may have only one live subscription per client. Several consumers of one product therefore share a
     /// single [`Subscription`] by cloning it, rather than each subscribing for themselves. Dropping the last clone
-    /// unsubscribes, after which the product may be subscribed again.
+    /// unsubscribes, after which the product may be subscribed again immediately. The new subscription
+    /// starts with no accepted snapshot.
     ///
     /// Subscribing wakes the worker to poll immediately rather than at its next scheduled poll. A product no other
     /// client of the Agent has requested may still take up to the Agent's own backend refresh interval to arrive.
@@ -148,11 +163,10 @@ impl RemoteConfigurationClient {
     ///
     /// Returns [`Error::AlreadySubscribed`] when the product still has a live subscription on this client, which
     /// indicates that the caller should be receiving a clone of the existing subscription instead.
-    // TODO: replace a registry entry whose last clone was dropped before the worker noticed.
-    pub fn subscribe<P>(&self, _product_id: impl AsRef<str>) -> Result<Subscription<P::Snapshot, P::Error>>
+    pub fn subscribe<P>(&self, product_id: impl AsRef<str>) -> Result<Subscription<P::Snapshot, P::Error>>
     where
         P: ProductDecoder,
     {
-        todo!()
+        self.shared.subscribe::<P>(product_id.as_ref())
     }
 }

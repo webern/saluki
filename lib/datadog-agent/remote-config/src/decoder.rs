@@ -1,6 +1,8 @@
 //! The subscriber's decoding contract.
 
-use crate::{AsApplyError, ConfigId};
+use std::panic::{catch_unwind, AssertUnwindSafe};
+
+use crate::{ApplyError, AsApplyError, ConfigId};
 
 /// Decodes one product's assigned configurations into a snapshot.
 ///
@@ -72,9 +74,17 @@ pub trait ProductDecoder: Default + Send + 'static {
 }
 
 /// What one run of a decoder over a product's assignment produced.
-// TODO: remove dead_code guard once the worker and `TestPublisher::assign` evaluate through `evaluate`.
+// TODO: remove dead_code guard once the worker evaluates assignments.
 #[allow(dead_code)]
-pub(crate) enum Evaluation<T, E> {
+pub(crate) struct Evaluation<T, E> {
+    pub(crate) outcome: Outcome<T, E>,
+    /// Each assigned configuration's rejection, if any, in ascending ID order.
+    pub(crate) verdicts: Vec<(ConfigId, Option<ApplyError>)>,
+}
+
+// TODO: remove dead_code guard once the worker evaluates assignments.
+#[allow(dead_code)]
+pub(crate) enum Outcome<T, E> {
     /// `build` succeeded; the snapshot is published.
     Accepted(T),
 
@@ -91,8 +101,42 @@ pub(crate) enum Evaluation<T, E> {
 /// [`TestPublisher::assign`](crate::TestPublisher::assign), so that what a subscriber tests is what production runs:
 /// configurations in ascending [`ConfigId`] order, a rejected configuration skipped while the rest are still decoded,
 /// then `build`, with a panic in either caught.
-// TODO: return the per-configuration verdicts alongside the evaluation, which the worker reports to the Agent.
+// TODO: remove dead_code guard once the worker evaluates assignments.
 #[allow(dead_code)]
-pub(crate) fn evaluate<P: ProductDecoder>(_assignment: Vec<(ConfigId, &[u8])>) -> Evaluation<P::Snapshot, P::Error> {
-    todo!()
+pub(crate) fn evaluate<P: ProductDecoder>(mut assignment: Vec<(ConfigId, &[u8])>) -> Evaluation<P::Snapshot, P::Error> {
+    assignment.sort_by(|(left, _), (right, _)| left.cmp(right));
+
+    let mut verdicts = Vec::with_capacity(assignment.len());
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let mut decoder = P::default();
+        for (id, payload) in &assignment {
+            let rejection = decoder.decode(id, payload).err().map(|error| error.as_apply_error());
+            verdicts.push((id.clone(), rejection));
+        }
+        match decoder.build() {
+            Ok(snapshot) => Outcome::Accepted(snapshot),
+            Err(error) => {
+                let reason = error.as_apply_error();
+                for (_, rejection) in &mut verdicts {
+                    if rejection.is_none() {
+                        *rejection = Some(reason.clone());
+                    }
+                }
+                Outcome::Rejected(error)
+            }
+        }
+    }));
+
+    let outcome = match result {
+        Ok(outcome) => outcome,
+        Err(_) => {
+            verdicts = assignment
+                .into_iter()
+                .map(|(id, _)| (id, Some(ApplyError::new("Product decoder panicked."))))
+                .collect();
+            Outcome::Panicked
+        }
+    };
+
+    Evaluation { outcome, verdicts }
 }

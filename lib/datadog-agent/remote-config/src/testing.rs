@@ -1,15 +1,18 @@
 //! Test support for subscribers, enabled by the `test-util` feature.
 
-use std::marker::PhantomData;
+use std::sync::Arc;
 
-use crate::{ApplyError, ProductDecoder, Subscription};
+use tokio::sync::watch;
+
+use crate::decoder::{evaluate, Outcome};
+use crate::subscription::Snapshot;
+use crate::{ApplyError, ConfigId, ProductDecoder, Subscription};
 
 /// Publishes into a [`Subscription`] by hand, so a subscriber can test its component without an Agent.
 ///
-/// The subscription returned alongside the publisher is the production type, so it behaves as it does in production:
-/// [`current`](Subscription::current) keeps the last accepted snapshot through a rejection, a clone observes every
-/// publish, and once the publisher is dropped [`changed`](Subscription::changed) never resolves, as when the client's
-/// worker has stopped.
+/// The subscription returned alongside the publisher is the production type: [`current`](Subscription::current) keeps
+/// the last accepted snapshot through a rejection. After the publisher is dropped and pending publications are
+/// observed, [`changed`](Subscription::changed) waits indefinitely. Slow consumers may skip intermediate publications.
 ///
 /// A component under test should take a [`Subscription`] rather than a
 /// [`RemoteConfigurationClient`](crate::RemoteConfigurationClient). Production wiring subscribes once per product and
@@ -28,10 +31,9 @@ use crate::{ApplyError, ProductDecoder, Subscription};
 /// // Or publish whatever the product's decoder makes of these payloads:
 /// publisher.assign::<SemanticCoreDecoder>([("semantic.v1", payload), ("metrics.v1", other)]);
 /// ```
-// TODO: hold the `watch::Sender` whose receiver backs the returned subscription.
 #[non_exhaustive]
 pub struct TestPublisher<T, E = ApplyError> {
-    _snapshot: PhantomData<fn(T, E)>,
+    sender: watch::Sender<Snapshot<T, E>>,
 }
 
 impl<T, E> TestPublisher<T, E> {
@@ -40,22 +42,31 @@ impl<T, E> TestPublisher<T, E> {
     /// The subscription starts with no accepted snapshot, so [`current`](Subscription::current) returns `None` until
     /// the first successful publish.
     pub fn new() -> (Self, Subscription<T, E>) {
-        todo!()
+        let (sender, receiver) = watch::channel(Snapshot {
+            accepted: None,
+            rejection: None,
+        });
+        (Self { sender }, Subscription { receiver })
     }
 
     /// Publishes an accepted snapshot.
     ///
-    /// Every clone of the subscription is notified, and [`current`](Subscription::current) returns this snapshot.
-    pub fn accept(&self, _snapshot: T) {
-        todo!()
+    /// [`current`](Subscription::current) returns this snapshot. Subscribers waiting for a change are notified.
+    pub fn accept(&self, snapshot: T) {
+        self.sender.send_modify(|state| {
+            state.accepted = Some(Arc::new(snapshot));
+            state.rejection = None;
+        });
     }
 
     /// Publishes a rejection.
     ///
-    /// Every clone of the subscription receives the error from [`changed`](Subscription::changed), and
+    /// Subscribers waiting for a change receive the error from [`changed`](Subscription::changed), and
     /// [`current`](Subscription::current) keeps returning the last accepted snapshot.
-    pub fn reject(&self, _error: E) {
-        todo!()
+    pub fn reject(&self, error: E) {
+        self.sender.send_modify(|state| {
+            state.rejection = Some(Arc::new(error));
+        });
     }
 
     /// Runs `P` over an assignment of configurations and publishes the outcome, exactly as the client's worker would.
@@ -79,10 +90,28 @@ impl<T, E> TestPublisher<T, E> {
     ///
     /// Panics if two items share a configuration ID. Configuration IDs are unique within a product's assignment, so a
     /// duplicate indicates a mistake in the test.
-    pub fn assign<P>(&self, _assignment: impl IntoIterator<Item = (impl AsRef<str>, impl AsRef<[u8]>)>)
+    pub fn assign<P>(&self, assignment: impl IntoIterator<Item = (impl AsRef<str>, impl AsRef<[u8]>)>)
     where
         P: ProductDecoder<Snapshot = T, Error = E>,
     {
-        todo!()
+        let mut assignment: Vec<_> = assignment
+            .into_iter()
+            .map(|(id, payload)| (ConfigId::new(id.as_ref()), payload.as_ref().to_vec()))
+            .collect();
+        assignment.sort_by(|(left, _), (right, _)| left.cmp(right));
+        assert!(
+            assignment.windows(2).all(|pair| pair[0].0 != pair[1].0),
+            "duplicate configuration ID"
+        );
+
+        let assignment = assignment
+            .iter()
+            .map(|(id, payload)| (id.clone(), payload.as_slice()))
+            .collect();
+        match evaluate::<P>(assignment).outcome {
+            Outcome::Accepted(snapshot) => self.accept(snapshot),
+            Outcome::Rejected(error) => self.reject(error),
+            Outcome::Panicked => {}
+        }
     }
 }

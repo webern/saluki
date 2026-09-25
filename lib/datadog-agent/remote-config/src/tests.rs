@@ -223,3 +223,11 @@ fn reduces_configurations_of_one_shape_in_ascending_order() {
     assert_eq!(vec!["registry.v2".to_string()], rejected);
     assert_eq!(Some(&"host.name".to_string()), snapshot.rename.get("host"));
 }
+
+#[test]
+fn settings_default_to_the_upstream_poll_schedule() {
+    let config = crate::RcClientConfiguration::default();
+
+    assert_eq!(std::time::Duration::from_secs(5), config.poll_interval);
+    assert_eq!(std::time::Duration::from_secs(90), config.max_backoff);
+}

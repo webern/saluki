@@ -6,7 +6,7 @@ use crate::ProductId;
 #[derive(Debug, Snafu)]
 #[non_exhaustive]
 pub enum Error {
-    /// The product already has a subscription on this client.
+    /// The product already has a live subscription on this client.
     ///
     /// A product carries one apply status per configuration, so only one subscriber may decode it. To drive several
     /// consumers from one product, subscribe once where those consumers are wired together and give each of them a

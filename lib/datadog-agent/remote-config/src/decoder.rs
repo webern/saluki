@@ -9,6 +9,15 @@ use crate::{AsApplyError, ConfigId};
 /// [`build`](Self::build). Ascending order is part of the contract, so a reduction that keeps the last valid
 /// configuration is well defined.
 ///
+/// A product is decoded again only when its assigned configurations or their contents change, so a rejected
+/// assignment is not retried until it changes. When the Agent reports its configuration expired, every product is
+/// decoded as an empty assignment.
+///
+/// Decoding runs on the client's worker task and delays polling for every product while it runs, so implementations
+/// **MUST NOT** block. A panic in [`decode`](Self::decode) or [`build`](Self::build) is caught: the client discards the
+/// decoder, rejects every configuration in the assignment, and publishes nothing, so subscribers keep the last accepted
+/// snapshot and are not notified.
+///
 /// # Design
 ///
 /// A product's assignment is several configurations, each with its own payload, and the protocol carries an apply

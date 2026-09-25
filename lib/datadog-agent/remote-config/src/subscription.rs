@@ -31,7 +31,7 @@ struct Snapshot<T, E> {
 /// consumer that only awaited `changed` would wait for a snapshot that may never arrive.
 ///
 /// Cloning shares one subscription between several consumers: each clone tracks its own position and observes every
-/// snapshot, while decoding still happens once per snapshot.
+/// snapshot, while decoding still happens once per snapshot. Dropping the last clone unsubscribes the product.
 // TODO: remove dead_code guard once subscriptions are wired to the worker.
 #[allow(dead_code)]
 pub struct Subscription<T, E = ApplyError> {
@@ -51,6 +51,9 @@ impl<T, E> Subscription<T, E> {
     /// Waits for the next published snapshot.
     ///
     /// Never resolves once the client's worker has stopped, so a caller may `select!` on it unconditionally.
+    ///
+    /// A published snapshot is not guaranteed to differ from the previous one: after the worker restarts, it decodes
+    /// every product again.
     ///
     /// # Errors
     ///

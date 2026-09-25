@@ -70,3 +70,29 @@ pub trait ProductDecoder: Default + Send + 'static {
     /// [`decode`](Self::decode).
     fn build(self) -> Result<Self::Snapshot, Self::Error>;
 }
+
+/// What one run of a decoder over a product's assignment produced.
+// TODO: remove dead_code guard once the worker and `TestPublisher::assign` evaluate through `evaluate`.
+#[allow(dead_code)]
+pub(crate) enum Evaluation<T, E> {
+    /// `build` succeeded; the snapshot is published.
+    Accepted(T),
+
+    /// `build` failed; the error is published as a rejection and `current` keeps the last accepted snapshot.
+    Rejected(E),
+
+    /// `decode` or `build` panicked; nothing is published and subscribers are not notified.
+    Panicked,
+}
+
+/// Runs a fresh decoder over one product's assignment exactly as the client does.
+///
+/// This is the only implementation of the decoding rules, shared by the worker and by
+/// [`TestPublisher::assign`](crate::TestPublisher::assign), so that what a subscriber tests is what production runs:
+/// configurations in ascending [`ConfigId`] order, a rejected configuration skipped while the rest are still decoded,
+/// then `build`, with a panic in either caught.
+// TODO: return the per-configuration verdicts alongside the evaluation, which the worker reports to the Agent.
+#[allow(dead_code)]
+pub(crate) fn evaluate<P: ProductDecoder>(_assignment: Vec<(ConfigId, &[u8])>) -> Evaluation<P::Snapshot, P::Error> {
+    todo!()
+}

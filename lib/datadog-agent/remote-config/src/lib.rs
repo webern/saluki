@@ -5,6 +5,12 @@
 //! payloads, and receives typed snapshots through a [`Subscription`]. The client's identity, its protocol cursor, its
 //! cache advertisement, the paths configurations arrive under, and the numeric apply states it reports are all private.
 //!
+//! # Testing
+//!
+//! With the `test-util` feature enabled, [`TestPublisher`] creates a [`Subscription`] that a test publishes into by
+//! hand, either with finished snapshots and rejections or by running a decoder over payloads exactly as the client
+//! does. A component that takes a `Subscription` can therefore be tested without an Agent.
+//!
 //! # Trust
 //!
 //! The client performs no TUF signature verification. It trusts the Agent, reached over an authenticated local IPC
@@ -21,7 +27,10 @@ mod decoder;
 mod error;
 mod product;
 mod protocol;
+mod source;
 mod subscription;
+#[cfg(any(test, feature = "test-util"))]
+mod testing;
 #[cfg(test)]
 mod tests;
 mod worker;
@@ -30,6 +39,8 @@ pub use decoder::ProductDecoder;
 pub use error::{ApplyError, AsApplyError, Error, Result};
 pub use product::{ConfigId, ProductId};
 pub use subscription::Subscription;
+#[cfg(any(test, feature = "test-util"))]
+pub use testing::TestPublisher;
 pub use worker::RemoteConfigurationWorker;
 
 /// Settings for a [`RemoteConfigurationClient`].
@@ -94,6 +105,10 @@ impl RemoteConfigurationClient {
 
     /// Subscribes to a product, decoding its assigned configurations with `P`.
     ///
+    /// The product is named by its protocol string. Pass a [`ProductId`] for a product this crate knows about, or the
+    /// string itself, such as `"APM_SAMPLING"`, for one it does not. The two spellings name the same product, so they
+    /// share the one-subscription limit below.
+    ///
     /// The decoder is named here, where how a product is read is the subject; the returned subscription is typed by the
     /// snapshot that decoder builds. Subscriptions can be added while the worker runs.
     ///
@@ -109,7 +124,7 @@ impl RemoteConfigurationClient {
     /// Returns [`Error::AlreadySubscribed`] when the product still has a live subscription on this client, which
     /// indicates that the caller should be receiving a clone of the existing subscription instead.
     // TODO: replace a registry entry whose last clone was dropped before the worker noticed.
-    pub fn subscribe<P>(&self, _product_id: ProductId) -> Result<Subscription<P::Snapshot, P::Error>>
+    pub fn subscribe<P>(&self, _product_id: impl AsRef<str>) -> Result<Subscription<P::Snapshot, P::Error>>
     where
         P: ProductDecoder,
     {

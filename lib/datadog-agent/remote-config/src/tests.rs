@@ -12,6 +12,7 @@ use snafu::Snafu;
 
 use crate::{ApplyError, AsApplyError, ConfigId, ProductDecoder};
 
+// TODO: replace `drive` with `TestPublisher::assign` once `decoder::evaluate` is implemented.
 /// Stands in for the client's decoding loop: a fresh decoder, one `decode` per assigned configuration in ascending ID
 /// order, then `build`. Returns the configurations the decoder rejected alongside the outcome of `build`.
 ///
@@ -230,4 +231,27 @@ fn settings_default_to_the_upstream_poll_schedule() {
 
     assert_eq!(std::time::Duration::from_secs(5), config.poll_interval);
     assert_eq!(std::time::Duration::from_secs(90), config.max_backoff);
+}
+
+/// Shows the two ways to name a product when subscribing. Only compiled, never run, because `subscribe` is unimplemented.
+#[allow(dead_code)]
+fn subscribe_names_products_by_variant_or_string(client: &crate::RemoteConfigurationClient) {
+    // A product this crate knows about.
+    let _semantic_core: crate::Result<crate::Subscription<SemanticCore, SemanticCoreError>> =
+        client.subscribe::<SemanticCoreDecoder>(crate::ProductId::ApmSemanticCoreDd);
+
+    // A product this crate has no variant for.
+    let _registry: crate::Result<crate::Subscription<Registry>> = client.subscribe::<LastValidRegistry>("FOO_MINE_DD");
+}
+
+/// Shows a subscriber driving its component's subscription by hand. Only compiled, never run, because the publisher is
+/// unimplemented.
+#[allow(dead_code)]
+fn test_publisher_drives_a_subscription(payload: &[u8]) {
+    let (publisher, subscription) = crate::TestPublisher::<SemanticCore, SemanticCoreError>::new();
+    let _component_input: crate::Subscription<SemanticCore, SemanticCoreError> = subscription;
+
+    publisher.reject(SemanticCoreError::MissingAttributes);
+    publisher.assign::<SemanticCoreDecoder>([("attributes", payload), ("metrics", payload)]);
+    publisher.assign::<SemanticCoreDecoder>(Vec::<(String, Vec<u8>)>::new());
 }

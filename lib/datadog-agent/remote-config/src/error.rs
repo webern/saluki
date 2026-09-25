@@ -1,7 +1,5 @@
 use snafu::Snafu;
 
-use crate::ProductId;
-
 /// An error produced by the remote configuration client.
 #[derive(Debug, Snafu)]
 #[non_exhaustive]
@@ -17,10 +15,10 @@ pub enum Error {
     /// asks for is the type the first caller subscribed with. This error therefore means the call sites need
     /// restructuring so that one of them owns the subscription and passes clones to the others, rather than that the
     /// call should be retried.
-    #[snafu(display("Product {} is already subscribed on this client.", product.as_ref()))]
+    #[snafu(display("Product {product} is already subscribed on this client."))]
     AlreadySubscribed {
-        /// The product that is already subscribed.
-        product: ProductId,
+        /// The name of the product that is already subscribed, such as `APM_SEMANTIC_CORE_DD`.
+        product: String,
     },
 }
 

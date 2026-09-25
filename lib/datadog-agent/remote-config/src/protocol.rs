@@ -1,6 +1,6 @@
 //! Private types that users should not need to worry about.
 
-use crate::{ConfigId, ProductId};
+use crate::ConfigId;
 
 /// The full path a configuration arrives under.
 ///
@@ -18,8 +18,10 @@ pub(crate) struct ConfigPath {
     /// The path exactly as it appeared on the wire, which is the form cache advertisement must echo back.
     pub(crate) raw: String,
 
-    /// The product the configuration belongs to.
-    pub(crate) product: ProductId,
+    /// The name of the product the configuration belongs to, which may be one without a [`ProductId`] variant.
+    ///
+    /// [`ProductId`]: crate::ProductId
+    pub(crate) product: String,
 
     /// The configuration ID, which is the only segment a subscriber sees.
     pub(crate) config_id: ConfigId,

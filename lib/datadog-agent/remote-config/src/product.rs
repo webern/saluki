@@ -4,7 +4,11 @@ use std::ops::Deref;
 use serde::Serialize;
 use serde_variant::to_variant_name;
 
-/// Represents product strings, such as `APM_SEMANTIC_CORE_DD`.
+/// Names the products this crate knows about, such as `APM_SEMANTIC_CORE_DD`.
+///
+/// Subscribing accepts any `AsRef<str>`, so a product missing here can still be subscribed by its string name. A
+/// variant and its string name are the same product: [`ProductId::ApmSampling`] and `"APM_SAMPLING"` share one
+/// subscription.
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 #[non_exhaustive]
@@ -14,8 +18,6 @@ pub enum ProductId {
 
     /// Datadog-managed semantic convention mappings.
     ApmSemanticCoreDd,
-    // TODO: how can users specify a product we haven't added as "first-class" yet?
-    // Other(String),
 }
 
 impl AsRef<str> for ProductId {
@@ -34,6 +36,16 @@ impl AsRef<str> for ProductId {
 /// Ordering is the order in which the client presents a product's configurations to its decoder.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ConfigId(pub(crate) String);
+
+impl ConfigId {
+    /// Creates a configuration ID, such as `semantic.v1`, for calling a decoder directly in tests.
+    ///
+    /// The client creates every ID a decoder receives in production; nothing in this crate accepts a `ConfigId` from a
+    /// subscriber, so an ID created here cannot reach the client. Any string is accepted.
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+}
 
 impl Deref for ConfigId {
     type Target = str;
@@ -62,7 +74,7 @@ mod tests {
 
     #[test]
     fn config_id_derefs_to_str_for_matching() {
-        let config_id = ConfigId("semantic.v1".to_string());
+        let config_id = ConfigId::new("semantic.v1");
 
         assert!(matches!(&*config_id, "semantic.v1"));
         assert_eq!("semantic.v1", config_id.to_string());

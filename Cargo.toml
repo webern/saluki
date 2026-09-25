@@ -1,46 +1,47 @@
 [workspace]
 members = [
-  "bin/agent-data-plane",
-  "bin/correctness/airlock",
-  "bin/correctness/datadog-intake",
-  "bin/correctness/millstone",
-  "bin/correctness/panoramic",
-  "bin/correctness/stele",
-  "lib/agent-data-plane-config",
-  "lib/agent-data-plane-config-system",
-  "lib/datadog-agent/commons",
-  "lib/datadog-agent/config",
-  "lib/datadog-agent/config-overlay-model",
-  "lib/datadog-agent/config-testing",
-  "lib/datadog-agent/metrics-v3",
-  "lib/ddsketch",
-  "lib/go-duration",
-  "lib/ottl",
-  "lib/process-memory",
-  "lib/prometheus-exposition",
-  "lib/protos/containerd",
-  "lib/protos/datadog",
-  "lib/protos/otlp",
-  "lib/saluki-antithesis",
-  "lib/saluki-api",
-  "lib/saluki-app",
-  "lib/saluki-common",
-  "lib/saluki-components",
-  "lib/saluki-config",
-  "lib/saluki-context",
-  "lib/saluki-core",
-  "lib/saluki-env",
-  "lib/saluki-error",
-  "lib/saluki-io",
-  "lib/saluki-metadata",
-  "lib/saluki-metrics",
-  "lib/saluki-metrics-macros",
-  "lib/saluki-tls",
-  "lib/stringtheory",
-  "test/antithesis/harness",
-  "test/antithesis/intake",
-  "test/antithesis/scenarios/differential",
-  "test/antithesis/scenarios/general",
+    "bin/agent-data-plane",
+    "bin/correctness/airlock",
+    "bin/correctness/datadog-intake",
+    "bin/correctness/millstone",
+    "bin/correctness/panoramic",
+    "bin/correctness/stele",
+    "lib/agent-data-plane-config",
+    "lib/agent-data-plane-config-system",
+    "lib/datadog-agent/commons",
+    "lib/datadog-agent/config",
+    "lib/datadog-agent/config-overlay-model",
+    "lib/datadog-agent/config-testing",
+    "lib/datadog-agent/metrics-v3",
+    "lib/datadog-agent/remote-config",
+    "lib/ddsketch",
+    "lib/go-duration",
+    "lib/ottl",
+    "lib/process-memory",
+    "lib/prometheus-exposition",
+    "lib/protos/containerd",
+    "lib/protos/datadog",
+    "lib/protos/otlp",
+    "lib/saluki-antithesis",
+    "lib/saluki-api",
+    "lib/saluki-app",
+    "lib/saluki-common",
+    "lib/saluki-components",
+    "lib/saluki-config",
+    "lib/saluki-context",
+    "lib/saluki-core",
+    "lib/saluki-env",
+    "lib/saluki-error",
+    "lib/saluki-io",
+    "lib/saluki-metadata",
+    "lib/saluki-metrics",
+    "lib/saluki-metrics-macros",
+    "lib/saluki-tls",
+    "lib/stringtheory",
+    "test/antithesis/harness",
+    "test/antithesis/intake",
+    "test/antithesis/scenarios/differential",
+    "test/antithesis/scenarios/general",
 ]
 resolver = "2"
 
@@ -98,24 +99,24 @@ axum = { version = "0.8", default-features = false }
 bytes = { version = "1", default-features = false }
 clap = { version = "4", default-features = false, features = [] }
 protobuf = { version = "3.7", default-features = false, features = [
-  "with-bytes",
+    "with-bytes",
 ] }
 protobuf-codegen = { version = "3.7", default-features = false }
 piecemeal = { git = "https://github.com/tobz/piecemeal" }
 piecemeal-build = { git = "https://github.com/tobz/piecemeal" }
 libdd-trace-obfuscation = { git = "https://github.com/DataDog/libdatadog.git", rev = "3c2afd0cabe165c97c6f0eefa7a667352cec14dc", default-features = false }
 serde = { version = "1", default-features = false, features = [
-  "derive",
-  "std",
+    "derive",
+    "std",
 ] }
 snafu = { version = "0.9", default-features = false, features = ["std"] }
 tinytemplate = { version = "1", default-features = false }
 tokio = { version = "1.52.2", default-features = false }
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 async-compression = { version = "0.4.42", default-features = false, features = [
-  "gzip",
-  "zlib",
-  "zstd",
+    "gzip",
+    "zlib",
+    "zstd",
 ] }
 zstd = { version = "0.14.0", default-features = false }
 bitmask-enum = { version = "2.2", default-features = false }
@@ -128,12 +129,12 @@ http-body = { version = "1", default-features = false }
 http-body-util = { version = "0.1", default-features = false }
 hyper = { version = "1", default-features = false }
 hyper-http-proxy = { version = "1.2", default-features = false, features = [
-  "rustls-tls-native-roots",
+    "rustls-tls-native-roots",
 ] }
 hyper-rustls = { version = "0.27", default-features = false, features = [
-  "http1",
-  "http2",
-  "rustls-native-certs",
+    "http1",
+    "http2",
+    "rustls-native-certs",
 ] }
 hyper-util = { version = "0.1.20", default-features = false }
 indexmap = { version = "2", default-features = false }
@@ -159,12 +160,12 @@ k8s-openapi = { version = "0.28", default-features = false, features = ["v1_33"]
 kube = { version = "4.0", default-features = false }
 regex = { version = "1.12", default-features = false }
 rustls = { version = "0.23", default-features = false, features = [
-  "logging",
-  "std",
-  "tls12",
+    "logging",
+    "std",
+    "tls12",
 ] }
 rustls-cng-crypto = { version = "0.2.0", git = "https://github.com/DataDog/rustls-cng-crypto", rev = "2498c870c949335cb70dc79ed558917b96e4ff72", default-features = false, features = [
-  "tls12",
+    "tls12",
 ] }
 rustls-webpki = { version = "0.103", default-features = false }
 schemars = { version = "0.8", default-features = false }
@@ -189,11 +190,12 @@ async-stream = { version = "0.3.6", default-features = false }
 futures = { version = "0.3.32", default-features = false }
 prost-types = { version = "0.14", default-features = false }
 serde_json = { version = "1.0.149", default-features = false, features = [
-  "std",
+    "std",
 ] }
+serde_variant = { version = "0.1", default-features = false }
 faster-hex = { version = "0.10", default-features = false }
 rustls-pki-types = { version = "1.14", default-features = false, features = [
-  "alloc",
+    "alloc",
 ] }
 tokio-rustls = { version = "0.26", default-features = false }
 tokio-vsock = { version = "0.7", default-features = false }
@@ -208,16 +210,16 @@ trybuild = { version = "1", default-features = false }
 tokio-test = { version = "0.4.5", default-features = false }
 simdutf8 = { version = "0.1.5", default-features = false }
 smallvec = { version = "1.15", default-features = false, features = [
-  "const_generics",
-  "drain_filter",
-  "union",
+    "const_generics",
+    "drain_filter",
+    "union",
 ] }
 windows-sys = { version = "0.61", default-features = false }
 rustls-native-certs = { version = "0.8", default-features = false }
 hashbrown = { version = "0.17", default-features = false }
 quick_cache = { version = "0.7", default-features = false }
 crossbeam-queue = { version = "0.3", default-features = false, features = [
-  "alloc",
+    "alloc",
 ] }
 float-cmp = { version = "0.10", default-features = false }
 tower-http = { version = "0.7", default-features = false }
@@ -227,7 +229,7 @@ reqwest = { version = "0.13", default-features = false }
 lading-payload = { git = "https://github.com/DataDog/lading", rev = "c61c51c5fbb1d0ebcf1b12de847c042522c8c7a7" }
 serde_yaml = { version = "0.9", default-features = false }
 serde_with = { version = "3.18.0", default-features = false, features = [
-  "macros",
+    "macros",
 ] }
 triomphe = { version = "0.1.15", default-features = false }
 chrono-tz = { version = "0.10", default-features = false }

@@ -1,6 +1,6 @@
 //! Provides a client for remote configuration.
 //!
-//! Configuration assigned to this deployment is delivered by polling the Datadog Agent, which relays it from the Datadog
+//! Configuration assigned to this deployment is delivered by polling the Datadog Agent, which fetches it from the Datadog
 //! backend. This crate hides that protocol: a subscriber names a product, supplies a [`ProductDecoder`] for its
 //! payloads, and receives typed snapshots through a [`Subscription`]. The client's identity, its protocol cursor, its
 //! cache advertisement, the paths configurations arrive under, and the numeric apply states it reports are all private.
@@ -15,7 +15,7 @@
 //!
 //! The client performs no TUF signature verification. It trusts the Agent, reached over an authenticated local IPC
 //! channel, to have verified already. It does validate that each payload matches the length and SHA-256 hash published
-//! in the accompanying targets metadata, which guards against a relaying bug rather than against an adversary.
+//! in the accompanying targets metadata, which guards against a bug in delivery rather than against an adversary.
 
 #![deny(missing_docs)]
 

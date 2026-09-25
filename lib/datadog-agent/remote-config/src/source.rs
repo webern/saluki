@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use datadog_agent_commons::ipc::client::RemoteAgentClient;
 use datadog_protos::remote_config::{ClientGetConfigsRequest, ClientGetConfigsResponse};
 use saluki_error::GenericError;
+use tonic::{Code, Status};
 
 /// Answers the worker's configuration polls.
 ///
@@ -12,14 +13,13 @@ use saluki_error::GenericError;
 /// polling, integrity checks, status reporting, and backoff can be tested without an Agent, and under a paused clock.
 ///
 /// This trait is private. Subscribers never see it: [`RemoteConfigurationClient::new`] takes a [`RemoteAgentClient`],
-/// and the worker holds the source as a `Box<dyn ConfigSource>` so that no public type gains a type parameter.
+/// and the worker holds the source as a `Box<dyn RcAgent>` so that no public type gains a type parameter.
 ///
 /// [`RemoteConfigurationClient::new`]: crate::RemoteConfigurationClient::new
-// TODO: name not locked.
 // TODO: remove dead_code guard once the worker polls through this trait.
 #[allow(dead_code)]
 #[async_trait]
-pub(crate) trait ConfigSource: Send + 'static {
+pub(crate) trait RcAgent: Send + 'static {
     /// Sends one poll and returns the Agent's response.
     async fn get_configs(&mut self, request: ClientGetConfigsRequest) -> Result<ClientGetConfigsResponse, FetchError>;
 }
@@ -27,22 +27,29 @@ pub(crate) trait ConfigSource: Send + 'static {
 /// Why a poll produced no response.
 ///
 /// The worker's reaction depends only on which of these occurred, so the gRPC status codes stay inside the production
-/// [`ConfigSource`].
-// TODO: remove dead_code guard once the worker polls through `ConfigSource`.
+/// [`RcAgent`].
+// TODO: remove dead_code guard once the worker polls through `RcAgent`.
 #[allow(dead_code)]
 pub(crate) enum FetchError {
-    /// The Agent has Remote Configuration disabled; the worker waits `max_backoff` between attempts.
-    Unimplemented,
+    /// The Agent does not support Remote Configuration or this RPC; the worker waits `max_backoff` between attempts.
+    Unimplemented(GenericError),
 
-    /// Any other failure; the worker retries with backoff.
-    Transport(GenericError),
+    /// Another RPC failure; the worker retries with backoff.
+    Rpc(GenericError),
+}
+
+impl From<Status> for FetchError {
+    fn from(status: Status) -> Self {
+        match status.code() {
+            Code::Unimplemented => Self::Unimplemented(status.into()),
+            _ => Self::Rpc(status.into()),
+        }
+    }
 }
 
 #[async_trait]
-impl ConfigSource for RemoteAgentClient {
-    async fn get_configs(&mut self, _request: ClientGetConfigsRequest) -> Result<ClientGetConfigsResponse, FetchError> {
-        // TODO: forward to `RemoteAgentClient::client_get_configs`, mapping `Code::Unimplemented` to
-        // `FetchError::Unimplemented` and every other status to `FetchError::Transport`.
-        todo!()
+impl RcAgent for RemoteAgentClient {
+    async fn get_configs(&mut self, request: ClientGetConfigsRequest) -> Result<ClientGetConfigsResponse, FetchError> {
+        self.client_get_configs(request).await.map_err(FetchError::from)
     }
 }

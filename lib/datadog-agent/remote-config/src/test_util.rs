@@ -6,7 +6,7 @@ use tokio::sync::watch;
 
 use crate::decoder::{evaluate, Outcome};
 use crate::subscription::Snapshot;
-use crate::{ApplyError, ConfigId, ProductDecoder, Subscription};
+use crate::{ConfigId, ProductDecoder, Subscription};
 
 /// Publishes into a [`Subscription`] by hand, so a subscriber can test its component without an Agent.
 ///
@@ -32,7 +32,7 @@ use crate::{ApplyError, ConfigId, ProductDecoder, Subscription};
 /// publisher.assign::<SemanticCoreDecoder>([("semantic.v1", payload), ("metrics.v1", other)]);
 /// ```
 #[non_exhaustive]
-pub struct TestPublisher<T, E = ApplyError> {
+pub struct TestPublisher<T, E = String> {
     sender: watch::Sender<Snapshot<T, E>>,
 }
 

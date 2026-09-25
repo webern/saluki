@@ -2,7 +2,7 @@
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use crate::{ApplyError, AsApplyError, ConfigId};
+use crate::{ApplyError, ConfigId};
 
 /// Decodes one product's assigned configurations into a snapshot.
 ///
@@ -39,9 +39,9 @@ pub trait ProductDecoder: Default + Send + 'static {
 
     /// The error this product's decoding and validation produces.
     ///
-    /// Use [`ApplyError`](crate::ApplyError) when there is nothing richer to report; a product that wants to describe a
-    /// failure more precisely for its own diagnostics defines its own type instead.
-    type Error: AsApplyError + Send + Sync + 'static;
+    /// Use [`String`] when there is nothing richer to report; a product that wants to describe a failure more
+    /// precisely for its own diagnostics defines its own type and implements [`ApplyError`] for it.
+    type Error: ApplyError + Send + Sync + 'static;
 
     /// Accumulates one of the product's assigned configurations.
     ///
@@ -79,7 +79,7 @@ pub trait ProductDecoder: Default + Send + 'static {
 pub(crate) struct Evaluation<T, E> {
     pub(crate) outcome: Outcome<T, E>,
     /// Each assigned configuration's rejection, if any, in ascending ID order.
-    pub(crate) verdicts: Vec<(ConfigId, Option<ApplyError>)>,
+    pub(crate) verdicts: Vec<(ConfigId, Option<String>)>,
 }
 
 // TODO: remove dead_code guard once the worker evaluates assignments.
@@ -110,13 +110,13 @@ pub(crate) fn evaluate<P: ProductDecoder>(mut assignment: Vec<(ConfigId, &[u8])>
     let result = catch_unwind(AssertUnwindSafe(|| {
         let mut decoder = P::default();
         for (id, payload) in &assignment {
-            let rejection = decoder.decode(id, payload).err().map(|error| error.as_apply_error());
+            let rejection = decoder.decode(id, payload).err().map(|error| error.apply_error());
             verdicts.push((id.clone(), rejection));
         }
         match decoder.build() {
             Ok(snapshot) => Outcome::Accepted(snapshot),
             Err(error) => {
-                let reason = error.as_apply_error();
+                let reason = error.apply_error();
                 for (_, rejection) in &mut verdicts {
                     if rejection.is_none() {
                         *rejection = Some(reason.clone());
@@ -132,7 +132,7 @@ pub(crate) fn evaluate<P: ProductDecoder>(mut assignment: Vec<(ConfigId, &[u8])>
         Err(_) => {
             verdicts = assignment
                 .into_iter()
-                .map(|(id, _)| (id, Some(ApplyError::new("Product decoder panicked."))))
+                .map(|(id, _)| (id, Some("Product decoder panicked.".to_owned())))
                 .collect();
             Outcome::Panicked
         }

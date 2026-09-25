@@ -18,11 +18,12 @@ saluki-core = { workspace = true }
 saluki-error = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_variant = { workspace = true }
-snafu = { workspace = true }
 tokio = { workspace = true }
+tonic = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
+snafu = { workspace = true }
 
 [lints]
 workspace = true

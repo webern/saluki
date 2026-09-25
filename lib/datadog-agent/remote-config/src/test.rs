@@ -10,7 +10,8 @@ use serde::Deserialize;
 use snafu::Snafu;
 
 use crate::decoder::{evaluate, Outcome};
-use crate::{ApplyError, AsApplyError, ConfigId, ProductDecoder, TestPublisher};
+use crate::source::FetchError;
+use crate::{ApplyError, ConfigId, ProductDecoder, TestPublisher};
 
 // A product whose configuration IDs are known in advance and each carry a different schema.
 
@@ -42,9 +43,9 @@ enum SemanticCoreError {
     MissingAttributes,
 }
 
-impl AsApplyError for SemanticCoreError {
-    fn as_apply_error(&self) -> ApplyError {
-        ApplyError::new(self.to_string())
+impl ApplyError for SemanticCoreError {
+    fn apply_error(&self) -> String {
+        self.to_string()
     }
 }
 
@@ -101,34 +102,25 @@ struct LastValidRegistry {
 impl ProductDecoder for LastValidRegistry {
     type Snapshot = Registry;
 
-    type Error = ApplyError;
+    type Error = String;
 
     fn decode(&mut self, _id: &ConfigId, payload: &[u8]) -> Result<(), Self::Error> {
-        self.chosen = Some(
-            serde_json::from_slice(payload)
-                .map_err(|_| ApplyError::new("Registry configuration is not valid JSON."))?,
-        );
+        self.chosen =
+            Some(serde_json::from_slice(payload).map_err(|_| "Registry configuration is not valid JSON.".to_owned())?);
 
         Ok(())
     }
 
     fn build(self) -> Result<Self::Snapshot, Self::Error> {
         self.chosen
-            .ok_or_else(|| ApplyError::new("No registry configuration was assigned."))
+            .ok_or_else(|| "No registry configuration was assigned.".to_owned())
     }
 }
 
 #[test]
-fn apply_error_preserves_message() {
+fn string_apply_error_preserves_message() {
     for message in ["Required configuration is missing.", "", "  details\nwith whitespace  "] {
-        let error = ApplyError::new(message);
-        let owned_error = ApplyError::new(message.to_string());
-
-        assert_eq!(error.to_string(), message);
-        assert_eq!(owned_error.to_string(), message);
-        assert_eq!(error.clone().to_string(), message);
-        assert_eq!(error.as_apply_error().to_string(), message);
-        assert!(std::error::Error::source(&error).is_none());
+        assert_eq!(message.to_owned().apply_error(), message);
     }
 }
 
@@ -136,10 +128,7 @@ fn apply_error_preserves_message() {
 fn converts_structured_error_to_apply_error() {
     let error = SemanticCoreError::MissingAttributes;
 
-    assert_eq!(
-        error.as_apply_error().to_string(),
-        "No attribute mappings were assigned."
-    );
+    assert_eq!(error.apply_error(), "No attribute mappings were assigned.");
 }
 
 #[tokio::test]
@@ -274,7 +263,7 @@ struct PanickingDecoder {
 
 impl ProductDecoder for PanickingDecoder {
     type Snapshot = ();
-    type Error = ApplyError;
+    type Error = String;
 
     fn decode(&mut self, _id: &ConfigId, payload: &[u8]) -> Result<(), Self::Error> {
         match payload {
@@ -328,7 +317,7 @@ async fn clones_observe_latest_state_and_closed_subscriptions_wait() {
     assert_eq!(*subscription.changed().await.unwrap(), 2);
     assert_eq!(*clone.changed().await.unwrap(), 2);
 
-    publisher.reject(ApplyError::new("invalid"));
+    publisher.reject("invalid".to_owned());
     assert_eq!(subscription.changed().await.unwrap_err().to_string(), "invalid");
     assert_eq!(clone.changed().await.unwrap_err().to_string(), "invalid");
     assert_eq!(*subscription.current().unwrap(), 2);
@@ -364,11 +353,68 @@ fn test_publisher_rejects_duplicate_ids() {
 }
 
 #[test]
+fn fetch_error_retains_unimplemented_status() {
+    let error = FetchError::from(tonic::Status::unimplemented("Remote Configuration is disabled"));
+    let FetchError::Unimplemented(cause) = error else {
+        panic!("expected an unimplemented RPC");
+    };
+
+    let status = cause
+        .downcast_ref::<tonic::Status>()
+        .expect("original status is retained");
+    assert_eq!(status.code(), tonic::Code::Unimplemented);
+    assert_eq!(status.message(), "Remote Configuration is disabled");
+}
+
+#[test]
+fn fetch_error_retains_other_rpc_statuses() {
+    for code in [
+        tonic::Code::Unavailable,
+        tonic::Code::Unauthenticated,
+        tonic::Code::InvalidArgument,
+    ] {
+        let error = FetchError::from(tonic::Status::new(code, "poll failed"));
+        let FetchError::Rpc(cause) = error else {
+            panic!("expected an RPC failure");
+        };
+
+        let status = cause
+            .downcast_ref::<tonic::Status>()
+            .expect("original status is retained");
+        assert_eq!(status.code(), code);
+        assert_eq!(status.message(), "poll failed");
+    }
+}
+
+#[test]
 fn settings_default_to_the_upstream_poll_schedule() {
     let config = crate::RcClientConfiguration::default();
 
     assert_eq!(std::time::Duration::from_secs(5), config.poll_interval);
     assert_eq!(std::time::Duration::from_secs(90), config.max_backoff);
+}
+
+#[test]
+fn settings_reject_invalid_poll_intervals() {
+    use std::time::Duration;
+
+    for poll_interval in [Duration::ZERO, Duration::from_millis(999)] {
+        let error = crate::RcClientConfiguration::new(poll_interval, Duration::from_secs(90)).unwrap_err();
+        assert!(matches!(error, crate::Error::InvalidPollInterval { .. }));
+        assert!(error.to_string().contains("poll_interval must be at least one second"));
+    }
+}
+
+#[test]
+fn settings_reject_max_backoff_below_poll_interval() {
+    use std::time::Duration;
+
+    let error = crate::RcClientConfiguration::new(Duration::from_secs(5), Duration::from_secs(4)).unwrap_err();
+    assert!(matches!(error, crate::Error::InvalidMaxBackoff { .. }));
+    assert!(error.to_string().contains("max_backoff must be at least poll_interval"));
+
+    let settings = crate::RcClientConfiguration::new(Duration::from_secs(1), Duration::from_secs(1)).unwrap();
+    assert_eq!(settings.poll_interval, settings.max_backoff);
 }
 
 /// Shows the two ways to name a product when subscribing. Only compiled, never run, because `subscribe` is unimplemented.

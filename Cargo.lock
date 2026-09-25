@@ -1382,6 +1382,7 @@ dependencies = [
  "serde_variant",
  "snafu",
  "tokio",
+ "tonic",
 ]
 
 [[package]]

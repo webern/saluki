@@ -14,7 +14,7 @@ use saluki_error::GenericError;
 /// A restart keeps every subscription and each product's last accepted snapshot, and discards the protocol state, so
 /// the restarted worker fetches and decodes everything again. Subscribers may therefore see a snapshot equal to the one
 /// they already hold.
-// TODO: poll through a `Box<dyn ConfigSource>` rather than `RemoteAgentClient` directly, with a crate-private
+// TODO: poll through a `Box<dyn RcAgent>` rather than `RemoteAgentClient` directly, with a crate-private
 // constructor that lets tests supply a scripted source.
 // TODO: hold the subscription registry and client ID behind an `Arc` shared with the client, so they survive restarts.
 // TODO: poll on the schedule documented on `RcClientConfiguration`, using `saluki_io`'s `ExponentialBackoff`, and poll

@@ -4,8 +4,6 @@ use std::sync::Arc;
 
 use tokio::sync::watch;
 
-use crate::ApplyError;
-
 /// The published state of one product.
 ///
 /// A rejection never evicts `accepted`, so retaining the last known-good configuration is the client's behavior rather
@@ -24,7 +22,7 @@ pub(crate) struct Snapshot<T, E> {
 ///
 /// `T` is the snapshot the product's [`ProductDecoder`](crate::ProductDecoder) builds and `E` is the error it produces,
 /// so a subscription reads as the value it delivers rather than as the decoder that produced it. A product with nothing
-/// richer to report leaves `E` at its default of [`ApplyError`].
+/// richer to report leaves `E` at its default of [`String`].
 ///
 /// A consumer reads [`current`](Self::current) and then loops on [`changed`](Self::changed). A subscription created
 /// after the client has already published treats that value as observed and receives no notification for it, so a
@@ -33,7 +31,7 @@ pub(crate) struct Snapshot<T, E> {
 /// Cloning shares one subscription between several consumers: each clone tracks its own position, while decoding
 /// happens once per snapshot. Slow consumers may skip intermediate publications and observe only the latest state.
 /// Dropping the last clone unsubscribes the product.
-pub struct Subscription<T, E = ApplyError> {
+pub struct Subscription<T, E = String> {
     pub(crate) receiver: watch::Receiver<Snapshot<T, E>>,
 }
 

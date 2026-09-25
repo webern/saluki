@@ -29,48 +29,74 @@ mod product;
 mod protocol;
 mod source;
 mod subscription;
-#[cfg(any(test, feature = "test-util"))]
-mod testing;
 #[cfg(test)]
-mod tests;
+mod test;
+#[cfg(any(test, feature = "test-util"))]
+mod test_util;
 mod worker;
 
 pub use decoder::ProductDecoder;
-pub use error::{ApplyError, AsApplyError, Error, Result};
+pub use error::{ApplyError, Error, Result};
 pub use product::{ConfigId, ProductId};
 pub use subscription::Subscription;
 #[cfg(any(test, feature = "test-util"))]
-pub use testing::TestPublisher;
+pub use test_util::TestPublisher;
 pub use worker::RemoteConfigurationWorker;
 
 /// Settings for a [`RemoteConfigurationClient`].
 ///
 /// Sorry for the weird name but it seemed better that RemoteConfigurationClientConfiguration.
 ///
-/// Start from [`Default`] and assign the fields to change. Out-of-range values are clamped rather than rejected, so
-/// construction stays infallible.
+/// Use [`new`](Self::new) to set the polling schedule, or [`Default`] for the standard schedule. Invalid intervals are
+/// rejected at construction.
 ///
 /// Whatever the settings, the worker polls once immediately when it starts, and retries every second until its first
 /// successful poll.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
+// TODO: remove dead_code guard when the worker reads the validated settings.
+#[allow(dead_code)]
 pub struct RcClientConfiguration {
     /// How long the worker waits between successful polls.
     ///
     /// Shorter intervals deliver changes sooner at the cost of more requests to the Agent. The Agent refreshes from the
-    /// backend far less often than this, so lowering it rarely helps. Values below one second are raised to one second.
+    /// backend far less often than this, so lowering it rarely helps. Must be at least one second.
     ///
     /// Defaults to 5 seconds.
-    pub poll_interval: Duration,
+    poll_interval: Duration,
 
     /// The longest the worker waits between polls while polls are failing.
     ///
     /// After consecutive failures the wait doubles, with jitter, from `poll_interval` up to this ceiling, and resets
     /// on the next success. The worker also waits this long between attempts when the Agent has remote configuration
-    /// disabled. Values below `poll_interval` are raised to `poll_interval`.
+    /// disabled. Must be at least `poll_interval`.
     ///
     /// Defaults to 90 seconds.
-    pub max_backoff: Duration,
+    max_backoff: Duration,
+}
+
+impl RcClientConfiguration {
+    /// Creates settings for polling the Agent.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidPollInterval`] if `poll_interval` is shorter than one second, or
+    /// [`Error::InvalidMaxBackoff`] if `max_backoff` is shorter than `poll_interval`.
+    pub fn new(poll_interval: Duration, max_backoff: Duration) -> Result<Self> {
+        if poll_interval < Duration::from_secs(1) {
+            return Err(Error::InvalidPollInterval { poll_interval });
+        }
+        if max_backoff < poll_interval {
+            return Err(Error::InvalidMaxBackoff {
+                poll_interval,
+                max_backoff,
+            });
+        }
+        Ok(Self {
+            poll_interval,
+            max_backoff,
+        })
+    }
 }
 
 impl Default for RcClientConfiguration {
@@ -98,7 +124,6 @@ impl RemoteConfigurationClient {
     /// The client's identity is private and chosen here: a random ID kept for the life of the client, and the
     /// application name and version of the running binary.
     // TODO: generate the client ID with `uuid` (v4) and read the name and version from `saluki_metadata`.
-    // TODO: clamp `poll_interval` and `max_backoff` as documented on `RcClientConfiguration`.
     pub fn new(_agent_client: RemoteAgentClient, _config: RcClientConfiguration) -> (Self, RemoteConfigurationWorker) {
         todo!()
     }

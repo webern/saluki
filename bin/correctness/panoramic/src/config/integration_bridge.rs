@@ -216,74 +216,11 @@ mod tests {
         config::{
             build_runners,
             case::{CaseConfig, CaseSchema},
-            tests::{write_case, PARTICIPANT_FIELDS},
+            tests::{write_case, LOGGING_INTEGRATION, LOGGING_PARTICIPANT, PARTICIPANT_FIELDS},
             Need, LINUX_RUNTIME, MAC_RUNTIME, WINDOWS_RUNTIME,
         },
         test::TestSuite,
     };
-
-    const LOGGING_PARTICIPANT: &str = r#"description: Portable logging assertions
-timeout: 120s
-subject_os: [linux, macos, windows]
-participants:
-  adp:
-    type: agent-adp
-    subject: true
-    config:
-      env:
-        DD_API_KEY: "0000"
-        DD_LOG_FILE: /tmp/core.log
-procedure:
-  - step: log_contains
-    on: adp
-    pattern: Initial configuration received.
-    timeout: 30s
-  - parallel:
-      - step: log_not_contains
-        on: adp
-        pattern: panic|PANIC
-        regex: true
-        during: 10s
-      - step: file_contains
-        on: adp
-        path: /tmp/core.log
-        pattern: CORE
-        timeout: 20s
-  - step: file_contains
-    on: adp
-    path: 'C:\adp\adp.log'
-    pattern: DATAPLANE.*ready
-    regex: true
-    timeout: 60s
-"#;
-
-    const LOGGING_INTEGRATION: &str = r#"type: integration
-name: alpha
-description: Portable logging assertions
-timeout: 120s
-runtimes: [linux, mac, windows]
-env:
-  DD_API_KEY: "0000"
-  DD_LOG_FILE: /tmp/core.log
-procedure:
-  - assertion: log_contains
-    pattern: Initial configuration received.
-    timeout: 30s
-  - parallel:
-      - assertion: log_not_contains
-        pattern: panic|PANIC
-        regex: true
-        during: 10s
-      - assertion: file_contains
-        path: /tmp/core.log
-        pattern: CORE
-        timeout: 20s
-  - assertion: file_contains
-    path: 'C:\adp\adp.log'
-    pattern: DATAPLANE.*ready
-    regex: true
-    timeout: 60s
-"#;
 
     #[test]
     fn participant_cases_build_the_same_integration_config_as_their_integration_twins() {

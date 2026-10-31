@@ -9,17 +9,20 @@ configuration. Use it to check coverage when changing case schemas or runners.
 
 - **Case:** the discovered name, including the variant suffix for a matrix.
 - **Suite:** integration or correctness.
-- **Subject OS:** Linux, macOS or Windows; independent of the host running the inventory test. Every integration
-  case must declare `runtimes` explicitly because the loader's default depends on the host OS.
+- **Subject OS:** Linux, macOS or Windows; independent of the host running the inventory test. A file with
+  `type: integration` must declare `runtimes` explicitly because the loader's default depends on the host OS.
+  A participant case must declare `subject_os`.
 - **Runtime:** the loader's runtime identifier (`mac` means macOS; correctness uses `docker` or `kubernetes_in_docker`).
 - **Status:** selected by CI discovery, or disabled in the case file.
 - **CI job:** the job that selects this row. Correctness jobs belong to the `run-correctness-tests` child pipeline.
   Disabled rows have no job. macOS rows list both architectures.
-- **Schema:** the file's `type` value.
-- **Execution:** `old` identifies the integration and correctness runners.
+- **Schema:** the file's `type` value, or `participants` for a file that declares participants.
+- **Execution:** `old` identifies the integration and correctness runners. A participant case is translated to an
+  integration case and runs on the integration runner, so it is `old` too.
 - **Steps:** assertions and actions, including assertions inside parallel blocks, or the correctness comparison mode.
-- **Ignored:** number of key paths the loader drops without error. Replacing each value with either a map or a
-  string must leave the loaded configuration unchanged. Paths are listed in the JSON.
+- **Ignored:** number of key paths the loader drops without error. The probe loads each modified file through the
+  case loader and, for a participant case, the translation. Replacing each value with either a map or a string must
+  leave the recorded configuration unchanged. Paths are listed in the JSON.
 
 The [JSON inventory](./panoramic-architecture-inventory.json) also records source paths, timeouts, images before CLI
 image overrides, correctness CI mixins, and a `cases` map keyed by `<suite>/<name>`. Each case contains the effective
@@ -68,8 +71,9 @@ fail-fast shell options, ignored-key detection, and migration-proof references.
 ## Effective configuration scope
 
 The JSON records the loader's configuration with defaults and matrix environments applied, before CLI image
-overrides. Paths and template values remain as configured. Use product `config_dump` output from CI runs to compare
-effective product configurations.
+overrides. For a participant case, the JSON records the integration configuration it is translated to.
+Paths and template values remain as configured. Use product `config_dump` output from CI runs to compare effective
+product configurations.
 
 <!-- coverage-inventory:begin -->
 

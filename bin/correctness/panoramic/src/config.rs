@@ -878,6 +878,69 @@ pub(crate) mod tests {
     pub(crate) const NO_PARTICIPANT_FIELDS: &str =
         "timeout: 1s\nsubject_os: [linux]\nparticipants: {}\nprocedure: []\n";
 
+    pub(crate) const LOGGING_PARTICIPANT: &str = r#"description: Portable logging assertions
+timeout: 120s
+subject_os: [linux, macos, windows]
+participants:
+  adp:
+    type: agent-adp
+    subject: true
+    config:
+      env:
+        DD_API_KEY: "0000"
+        DD_LOG_FILE: /tmp/core.log
+procedure:
+  - step: log_contains
+    on: adp
+    pattern: Initial configuration received.
+    timeout: 30s
+  - parallel:
+      - step: log_not_contains
+        on: adp
+        pattern: panic|PANIC
+        regex: true
+        during: 10s
+      - step: file_contains
+        on: adp
+        path: /tmp/core.log
+        pattern: CORE
+        timeout: 20s
+  - step: file_contains
+    on: adp
+    path: 'C:\adp\adp.log'
+    pattern: DATAPLANE.*ready
+    regex: true
+    timeout: 60s
+"#;
+
+    pub(crate) const LOGGING_INTEGRATION: &str = r#"type: integration
+name: alpha
+description: Portable logging assertions
+timeout: 120s
+runtimes: [linux, mac, windows]
+env:
+  DD_API_KEY: "0000"
+  DD_LOG_FILE: /tmp/core.log
+procedure:
+  - assertion: log_contains
+    pattern: Initial configuration received.
+    timeout: 30s
+  - parallel:
+      - assertion: log_not_contains
+        pattern: panic|PANIC
+        regex: true
+        during: 10s
+      - assertion: file_contains
+        path: /tmp/core.log
+        pattern: CORE
+        timeout: 20s
+  - assertion: file_contains
+    path: 'C:\adp\adp.log'
+    pattern: DATAPLANE.*ready
+    regex: true
+    timeout: 60s
+"#;
+
     fn load_case<T, P>(path: P) -> Result<T, GenericError>
     where
         T: LoadedFrom + DeserializeOwned,

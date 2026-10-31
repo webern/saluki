@@ -14,6 +14,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use saluki_error::GenericError;
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -21,8 +22,8 @@ use super::{
     build_runners,
     case::{CaseConfig, CaseSchema, Os},
     discover_cases,
-    tests::write_case,
-    AssertionStep, CorrectnessConfig, IntegrationConfig, MatrixVariants, LINUX_RUNTIME, MAC_RUNTIME, WINDOWS_RUNTIME,
+    tests::{write_case, LOGGING_INTEGRATION, LOGGING_PARTICIPANT, PARTICIPANT_FIELDS},
+    AssertionStep, IntegrationConfig, LINUX_RUNTIME, MAC_RUNTIME, WINDOWS_RUNTIME,
 };
 use crate::{
     correctness::analysis::AnalysisMode,
@@ -38,6 +39,7 @@ const PROOFS_END: &str = "<!-- migration-proofs:end -->";
 const REGENERATE: &str = "PANORAMIC_WRITE_COVERAGE_INVENTORY=1 cargo nextest run -p panoramic coverage_inventory";
 const INTEGRATION: &str = "integration";
 const CORRECTNESS: &str = "correctness";
+const PARTICIPANTS: &str = "participants";
 const SELECTED: &str = "selected";
 const DISABLED: &str = "disabled";
 const OLD: &str = "old";
@@ -131,11 +133,11 @@ impl Row {
         schemas: &BTreeMap<String, String>,
     ) -> Self {
         let source = relative_path(root, case.source());
-        let schema = schemas[&source].clone();
-        let suite = match case.suite() {
-            TestSuite::Integration => INTEGRATION,
-            TestSuite::Correctness => CORRECTNESS,
+        let schema = match case.schema() {
+            CaseSchema::Participants { .. } => PARTICIPANTS.to_string(),
+            _ => schemas[&source].clone(),
         };
+        let suite = suite_label(case.suite());
         let mut row = Self {
             case: format!("{suite}/{}", case.name()),
             name: case.name().to_string(),
@@ -205,14 +207,15 @@ impl Inventory {
                 let source = relative_path(root, &path);
                 let text = read_text(&path);
                 let doc: Value = serde_saphyr::from_str(&text).unwrap();
-                if suite_dir == &integration_dir {
-                    assert!(
-                        doc.get("runtimes").is_some(),
-                        "{source} must declare runtimes: the loader default depends on the host OS",
-                    );
+                if let Some(schema) = doc.get("type").and_then(Value::as_str) {
+                    if suite_dir == &integration_dir {
+                        assert!(
+                            doc.get("runtimes").is_some(),
+                            "{source} must declare runtimes: the loader default depends on the host OS",
+                        );
+                    }
+                    schemas.insert(source, schema.to_string());
                 }
-                let schema = doc["type"].as_str().unwrap();
-                schemas.insert(source, schema.to_string());
             }
         }
         // Discover both suites together to reject duplicate names across suites, as a run over both directories would.
@@ -384,57 +387,25 @@ impl Inventory {
     }
 }
 
-fn load_cases(path: &Path) -> Vec<(String, Case)> {
-    let text = read_text(path);
-    let doc: Value = serde_saphyr::from_str(&text).unwrap();
-    let schema = doc["type"].as_str().unwrap();
-    let name = path.parent().unwrap().file_name().unwrap().to_str().unwrap();
-    let view = |doc| schema_view(doc, schema, name);
-    let loaded_cases = CaseConfig::load_file(path).unwrap();
-    let mut configs = Vec::new();
-    let mut cases = Vec::new();
-    for case in &loaded_cases {
-        let (suite, effective) = match case.schema() {
-            CaseSchema::Integration(config) => (
-                INTEGRATION,
-                Case {
-                    config: serde_json::to_value(config).unwrap(),
-                    steps: Some(Steps::from_config(config)),
-                    comparison: None,
-                    ignored_fields: Vec::new(),
-                },
-            ),
-            CaseSchema::Correctness(config) => (
-                CORRECTNESS,
-                Case {
-                    config: serde_json::to_value(config).unwrap(),
-                    steps: None,
-                    comparison: Some(Comparison {
-                        additional_span_ignore_fields: config.additional_span_ignore_fields.len(),
-                        analysis_mode: config.analysis_mode.clone(),
-                        otlp_direct_analysis_mode: config.otlp_direct_analysis_mode,
-                        require_dogstatsd_forwarded_packets: config.require_dogstatsd_forwarded_packets,
-                    }),
-                    ignored_fields: Vec::new(),
-                },
-            ),
-            CaseSchema::Participants { .. } => panic!(
-                "{}: the coverage inventory does not record cases that declare participants",
-                path.display()
-            ),
-        };
-        configs.push((case.name(), effective.config.clone()));
-        cases.push((format!("{suite}/{}", case.name()), effective));
+fn suite_label(suite: TestSuite) -> &'static str {
+    match suite {
+        TestSuite::Integration => INTEGRATION,
+        TestSuite::Correctness => CORRECTNESS,
     }
-    let loaded = if schema == "correctness_matrix" {
-        serde_json::to_value(&configs).unwrap()
-    } else {
-        configs[0].1.clone()
-    };
+}
+
+fn load_cases(path: &Path) -> Vec<(String, Case)> {
+    let loaded = CaseConfig::load_file(path).unwrap_or_else(|error| panic!("{}: {error:#}", path.display()));
+    let mut cases = record_cases(&loaded).unwrap_or_else(|error| panic!("{}: {error:#}", path.display()));
+    let doc: Value = serde_saphyr::from_str(&read_text(path)).unwrap();
+    let directory = path.parent().unwrap().file_name().unwrap().to_str().unwrap();
+    let canonical = path.canonicalize().unwrap();
+    let view = |doc| loaded_view(&doc, directory, &canonical);
+    let configs: Vec<_> = cases.iter().map(|(key, case)| (key, &case.config)).collect();
     assert_eq!(
         view(doc.clone()).unwrap(),
-        loaded,
-        "Probe disagrees with loader: {}",
+        serde_json::to_value(configs).unwrap(),
+        "{}: its JSON form loads differently from its YAML, so the ignored-key probe would compare against the wrong configuration",
         path.display()
     );
     let ignored = ignored_fields(&doc, &view, path);
@@ -444,25 +415,60 @@ fn load_cases(path: &Path) -> Vec<(String, Case)> {
     cases
 }
 
-/// Serializes the loaded case configuration, expanding matrix variants.
-fn schema_view(doc: Value, schema: &str, name: &str) -> serde_json::Result<Value> {
-    match schema {
-        INTEGRATION => serde_json::to_value(serde_json::from_value::<IntegrationConfig>(doc)?),
-        CORRECTNESS => serde_json::to_value(serde_json::from_value::<CorrectnessConfig>(doc)?),
-        "correctness_matrix" => {
-            let base: CorrectnessConfig = serde_json::from_value(doc.clone())?;
-            let matrix: MatrixVariants = serde_json::from_value(doc)?;
-            serde_json::to_value(matrix.expand(&base, name))
-        }
-        _ => panic!("Unknown schema: {schema}"),
+/// Records each case under `<suite>/<name>`: its runner configuration and step or comparison coverage.
+fn record_cases(cases: &[CaseConfig]) -> Result<Vec<(String, Case)>, GenericError> {
+    let mut recorded = Vec::new();
+    for case in cases {
+        let effective = match case.schema() {
+            CaseSchema::Integration(config) => Case {
+                config: serde_json::to_value(config)?,
+                steps: Some(Steps::from_config(config)),
+                comparison: None,
+                ignored_fields: Vec::new(),
+            },
+            CaseSchema::Correctness(config) => Case {
+                config: serde_json::to_value(config)?,
+                steps: None,
+                comparison: Some(Comparison {
+                    additional_span_ignore_fields: config.additional_span_ignore_fields.len(),
+                    analysis_mode: config.analysis_mode.clone(),
+                    otlp_direct_analysis_mode: config.otlp_direct_analysis_mode,
+                    require_dogstatsd_forwarded_packets: config.require_dogstatsd_forwarded_packets,
+                }),
+                ignored_fields: Vec::new(),
+            },
+            CaseSchema::Participants { .. } => {
+                let translated = case.integration_config()?;
+                Case {
+                    config: serde_json::to_value(&translated)?,
+                    steps: Some(Steps::from_config(&translated)),
+                    comparison: None,
+                    ignored_fields: Vec::new(),
+                }
+            }
+        };
+        let suite = suite_label(case.suite());
+        recorded.push((format!("{suite}/{}", case.name()), effective));
     }
+    Ok(recorded)
+}
+
+/// Loads `doc` as the file at `source` and returns each case's recorded configuration.
+///
+/// JSON text is valid YAML and preserves strings as strings. `load_cases` checks it against the original YAML.
+fn loaded_view(doc: &Value, directory: &str, source: &Path) -> Result<Value, GenericError> {
+    let content = serde_json::to_string(doc)?;
+    let cases = CaseConfig::load_content(&content, directory, source)?;
+    let recorded = record_cases(&cases)?;
+    let configs: Vec<_> = recorded.iter().map(|(key, case)| (key, &case.config)).collect();
+    Ok(serde_json::to_value(configs)?)
 }
 
 /// Finds keys whose replacement by both a map and a string leaves the effective configuration unchanged.
 ///
 /// `view` loads and serializes the case. The string probe distinguishes default-valued structs, which accept
 /// maps of unknown keys, from ignored fields. The probe also checks that ignored keys have ignored descendants.
-fn ignored_fields(doc: &Value, view: &impl Fn(Value) -> serde_json::Result<Value>, file: &Path) -> Vec<String> {
+fn ignored_fields(doc: &Value, view: &impl Fn(Value) -> Result<Value, GenericError>, file: &Path) -> Vec<String> {
     let original = view(doc.clone()).unwrap();
     let mut paths = Vec::new();
     mapping_paths(doc, "", "", &mut paths);
@@ -649,6 +655,39 @@ fn coverage_inventory_matches_the_case_files() {
 }
 
 #[test]
+fn a_participant_case_and_its_integration_twin_produce_the_same_inventory_apart_from_the_schema_column() {
+    let participant_root = tempfile::tempdir().unwrap();
+    let integration_root = tempfile::tempdir().unwrap();
+    for (root, yaml) in [
+        (participant_root.path(), LOGGING_PARTICIPANT),
+        (integration_root.path(), LOGGING_INTEGRATION),
+    ] {
+        fs::create_dir_all(root.join("test/correctness/cases")).unwrap();
+        write_case(&root.join("test/integration/cases"), "alpha", yaml);
+    }
+    let mut participant =
+        serde_json::to_value(Inventory::generate(&participant_root.path().canonicalize().unwrap())).unwrap();
+    let integration =
+        serde_json::to_value(Inventory::generate(&integration_root.path().canonicalize().unwrap())).unwrap();
+    let participant_rows = participant["rows"].as_array_mut().unwrap();
+    let integration_rows = integration["rows"].as_array().unwrap();
+    assert_eq!(participant_rows.len(), 3);
+    assert_eq!(integration_rows.len(), 3);
+    for ((participant, integration), os) in participant_rows
+        .iter_mut()
+        .zip(integration_rows)
+        .zip(["linux", "macos", "windows"])
+    {
+        assert_eq!(participant["subject_os"], os);
+        assert_eq!(participant["schema"], PARTICIPANTS);
+        assert_eq!(participant["execution"], OLD);
+        assert_eq!(integration["schema"], INTEGRATION);
+        participant["schema"] = integration["schema"].clone();
+    }
+    assert_eq!(participant, integration);
+}
+
+#[test]
 fn every_case_file_produces_an_inventory_row() {
     let root = repository_root();
     Inventory::generate(&root).assert_file_accounting(&root);
@@ -668,6 +707,15 @@ fn inventory_rejects_a_case_name_used_in_both_suites() {
         "shared",
         "type: correctness\nruntime: docker\nanalysis_mode: metrics\nbaseline: {image: base}\ncomparison: {image: comp}\n",
     );
+    Inventory::generate(root.path());
+}
+
+#[test]
+#[should_panic(expected = "must be a string: 'integration', 'correctness' or 'correctness_matrix'")]
+fn inventory_reports_the_loader_error_for_a_non_string_type() {
+    let root = tempfile::tempdir().unwrap();
+    fs::create_dir_all(root.path().join("test/correctness/cases")).unwrap();
+    write_case(&root.path().join("test/integration/cases"), "alpha", "type: 3\n");
     Inventory::generate(root.path());
 }
 
@@ -729,7 +777,7 @@ fn ci_jobs_in_the_inventory_are_defined() {
 }
 
 #[test]
-fn ignored_key_probe_reports_only_keys_the_schema_drops() {
+fn ignored_key_probe_reports_only_keys_the_loader_drops() {
     let integration: Value = serde_saphyr::from_str(
         r#"
 type: integration
@@ -758,8 +806,8 @@ procedure:
     assert_eq!(
         ignored_fields(
             &integration,
-            &|doc| schema_view(doc, INTEGRATION, "probe"),
-            Path::new("inline-integration.yaml"),
+            &|doc| loaded_view(&doc, "probe", Path::new("probe/config.yaml")),
+            Path::new("probe/config.yaml"),
         ),
         ["extra", "extra.nested", "procedure[0].output_contains"],
     );
@@ -778,8 +826,8 @@ comparison: {image: comparison}
     assert_eq!(
         ignored_fields(
             &correctness,
-            &|doc| schema_view(doc, CORRECTNESS, "probe"),
-            Path::new("inline-correctness.yaml"),
+            &|doc| loaded_view(&doc, "probe", Path::new("probe/config.yaml")),
+            Path::new("probe/config.yaml"),
         ),
         ["datadog_intake.config_path"],
     );
@@ -788,10 +836,38 @@ comparison: {image: comparison}
     assert_eq!(
         ignored_fields(
             &correctness,
-            &|doc| schema_view(doc, "correctness_matrix", "probe"),
-            Path::new("inline-matrix.yaml"),
+            &|doc| loaded_view(&doc, "probe", Path::new("probe/config.yaml")),
+            Path::new("probe/config.yaml"),
         ),
         ["datadog_intake.config_path"],
+    );
+    let mut participant: Value = serde_saphyr::from_str(LOGGING_PARTICIPANT).unwrap();
+    assert_eq!(
+        ignored_fields(
+            &participant,
+            &|doc| loaded_view(&doc, "alpha", Path::new("alpha/config.yaml")),
+            Path::new("alpha/config.yaml"),
+        ),
+        Vec::<String>::new(),
+    );
+    let baseline = loaded_view(&participant, "alpha", Path::new("alpha/config.yaml")).unwrap();
+    participant["participants"]["adp"]["config"]["env"]["DD_API_KEY"] = json!("x");
+    let changed = loaded_view(&participant, "alpha", Path::new("alpha/config.yaml")).unwrap();
+    assert_ne!(changed, baseline);
+    assert_eq!(changed[0][1]["env"]["DD_API_KEY"], "x");
+}
+
+#[test]
+fn loaded_view_fails_for_a_participant_case_the_translation_cannot_run() {
+    let doc: Value = serde_saphyr::from_str(
+        &PARTICIPANT_FIELDS.replace("subject: true", "subject: true, realization: {kind: linux-container}"),
+    )
+    .unwrap();
+    let error = loaded_view(&doc, "alpha", Path::new("alpha/config.yaml")).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "Cannot run case 'alpha' from alpha/config.yaml: \
+         participant 'adp' sets 'realization', which the integration runner does not support"
     );
 }
 

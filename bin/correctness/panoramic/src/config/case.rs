@@ -102,17 +102,8 @@ impl CaseConfig {
     ///
     /// # Errors
     ///
-    /// Files without a top-level `type` declare participants. Returns an error if the file cannot be
-    /// read or resolved, contains invalid YAML, has a non-string or unknown `type`, or fails schema
-    /// deserialization. The directory must have a name, and a declared case name must match it.
-    /// Integration runtimes must be nonempty and recognized; a correctness matrix must have at least
-    /// one variant. Participant cases must declare at least one participant and a nonempty, unique
-    /// `subject_os` list using `linux`, `macos` or `windows`. Participant names must be DNS labels starting
-    /// with a letter, other than `self`; exactly one subject is required, without an `os` override.
-    /// Types must be registered, configuration names declared by the type, and OS overlays reachable.
-    /// Connections must join a declared consumed endpoint to another participant's declared served endpoint.
-    /// Each step must name a registered step, decode its fields strictly, contain no `{{` template reference,
-    /// and reference only declared participants and the processes their types declare.
+    /// Returns path resolution and read errors, an error if the directory has no name,
+    /// and every error of [`Self::load_content`].
     pub(crate) fn load_file(config_path: &Path) -> Result<Vec<Self>, GenericError> {
         let canonical_path = config_path.canonicalize().error_context(format!(
             "Failed to resolve configuration file: {}",
@@ -132,24 +123,41 @@ impl CaseConfig {
         let content = std::fs::read_to_string(config_path)
             .error_context(format!("Failed to read config file: {}", config_path.display()))?;
 
-        let peek: serde_json::Value = serde_saphyr::from_str(&content).error_context(format!(
-            "Failed to parse config file as YAML: {}",
-            config_path.display()
-        ))?;
+        Self::load_content(&content, dir_name, config_path)
+    }
+
+    /// Loads `content` as the `config.yaml` recorded at `source`, in directory `directory`.
+    ///
+    /// # Errors
+    ///
+    /// Files without a top-level `type` declare participants. Returns an error if the content contains
+    /// invalid YAML, has a non-string or unknown `type`, or fails schema deserialization.
+    /// A declared case name must match the directory name.
+    /// Integration runtimes must be nonempty and recognized; a correctness matrix must have at least
+    /// one variant. Participant cases must declare at least one participant and a nonempty, unique
+    /// `subject_os` list using `linux`, `macos` or `windows`. Participant names must be DNS labels starting
+    /// with a letter, other than `self`; exactly one subject is required, without an `os` override.
+    /// Types must be registered, configuration names declared by the type, and OS overlays reachable.
+    /// Connections must join a declared consumed endpoint to another participant's declared served endpoint.
+    /// Each step must name a registered step, decode its fields strictly, contain no `{{` template reference,
+    /// and reference only declared participants and the processes their types declare.
+    pub(super) fn load_content(content: &str, directory: &str, source: &Path) -> Result<Vec<Self>, GenericError> {
+        let peek: serde_json::Value = serde_saphyr::from_str(content)
+            .error_context(format!("Failed to parse config file as YAML: {}", source.display()))?;
 
         let test_type = match peek.get("type") {
             None => {
-                let file: CaseFile = deserialize_case(&content, config_path)?;
-                let name = case_name(file.name.as_deref(), dir_name, config_path)?;
-                let subject_os = file.check(&name, config_path)?;
-                check_participants(&file, &subject_os, REGISTERED_TYPES, &name, config_path)?;
-                let procedure = build_steps(&file, REGISTERED_STEPS, REGISTERED_TYPES, &name, config_path)?;
+                let file: CaseFile = deserialize_case(content, source)?;
+                let name = case_name(file.name.as_deref(), directory, source)?;
+                let subject_os = file.check(&name, source)?;
+                check_participants(&file, &subject_os, REGISTERED_TYPES, &name, source)?;
+                let procedure = build_steps(&file, REGISTERED_STEPS, REGISTERED_TYPES, &name, source)?;
                 return Ok(vec![Self {
                     name,
                     description: file.description.clone(),
                     // TODO: derive the suite from the case's directory.
                     suite: TestSuite::Integration,
-                    source: config_path.to_path_buf(),
+                    source: source.to_path_buf(),
                     timeout: file.timeout.0,
                     subject_os,
                     disabled: false,
@@ -161,20 +169,20 @@ impl CaseConfig {
                 return Err(generic_error!(
                     "'type' in {} must be a string: 'integration', 'correctness' or 'correctness_matrix'; \
                      a case that declares participants has no top-level 'type'",
-                    config_path.display()
+                    source.display()
                 ));
             }
         };
 
         match test_type {
             "integration" => {
-                let config: IntegrationConfig = parse_case(&content, config_path)?;
-                let name = case_name(Some(&config.name), dir_name, config_path)?;
+                let config: IntegrationConfig = parse_case(content, source)?;
+                let name = case_name(Some(&config.name), directory, source)?;
                 if config.runtimes.is_empty() {
                     return Err(generic_error!(
                         "integration test '{}' in {} has empty runtimes list",
                         config.name,
-                        config_path.display()
+                        source.display()
                     ));
                 }
                 let subject_os = config
@@ -185,7 +193,7 @@ impl CaseConfig {
                             generic_error!(
                                 "integration test '{}' in {} declares unknown runtime '{}' (expected '{}', '{}', or '{}')",
                                 config.name,
-                                config_path.display(),
+                                source.display(),
                                 runtime,
                                 LINUX_RUNTIME,
                                 MAC_RUNTIME,
@@ -206,20 +214,20 @@ impl CaseConfig {
                 }])
             }
             "correctness" => {
-                let config = parse_case(&content, config_path)?;
-                let name = case_name(None, dir_name, config_path)?;
+                let config = parse_case(content, source)?;
+                let name = case_name(None, directory, source)?;
                 Ok(vec![Self::from_correctness(name, config)])
             }
             "correctness_matrix" => {
                 // Parse each schema from YAML text; flattening or a Value round-trip changes scalar coercion.
-                let base: CorrectnessConfig = parse_case(&content, config_path)?;
-                let matrix: MatrixVariants = deserialize_case(&content, config_path)?;
-                let base_name = case_name(None, dir_name, config_path)?;
+                let base: CorrectnessConfig = parse_case(content, source)?;
+                let matrix: MatrixVariants = deserialize_case(content, source)?;
+                let base_name = case_name(None, directory, source)?;
                 if matrix.variants.is_empty() {
                     return Err(generic_error!(
                         "correctness_matrix '{}' in {} has no variants defined",
                         base_name,
-                        config_path.display()
+                        source.display()
                     ));
                 }
                 Ok(matrix
@@ -232,7 +240,7 @@ impl CaseConfig {
                 "Unknown test type '{}' in {} (expected 'integration', 'correctness', or 'correctness_matrix'; \
                  a case that declares participants has no top-level 'type')",
                 other,
-                config_path.display()
+                source.display()
             )),
         }
     }
@@ -264,12 +272,43 @@ impl CaseConfig {
         }
     }
 
+    /// Translates a participant case into the configuration its integration runner receives.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error naming the case and source if it uses another schema or suite, or has unsupported
+    /// participant settings or steps; see [`CaseFile::integration_config`].
+    pub(super) fn integration_config(&self) -> Result<IntegrationConfig, GenericError> {
+        let CaseSchema::Participants { file, procedure } = &self.schema else {
+            return Err(generic_error!(
+                "Cannot run case '{}' from {}: integration translation requires a case that declares participants",
+                self.name,
+                self.source.display()
+            ));
+        };
+        if self.suite != TestSuite::Integration {
+            return Err(generic_error!(
+                "Cannot run case '{}' from {}: the integration runner runs only integration-suite cases",
+                self.name,
+                self.source.display()
+            ));
+        }
+        file.integration_config(&self.name, &self.source, procedure)
+            .map_err(|reason| {
+                generic_error!(
+                    "Cannot run case '{}' from {}: {}",
+                    self.name,
+                    self.source.display(),
+                    reason
+                )
+            })
+    }
+
     /// Builds a runner from a copy of the case data, applying image choices to that copy.
     ///
     /// # Errors
     ///
-    /// Returns an error naming the case and source if a participant case belongs to another suite or has settings
-    /// the integration runner cannot run; see [`CaseFile::integration_config`].
+    /// Propagates [`Self::integration_config`] errors for participant cases.
     pub(super) fn build_test(
         &self, settings: &IntegrationSettings, overrides: &ImageOverrides<'_>,
     ) -> Result<Box<dyn Test>, GenericError> {
@@ -280,25 +319,8 @@ impl CaseConfig {
                 overrides.apply_correctness(&mut config);
                 Ok(Box::new(CorrectnessTestCase::new(self.name.clone(), config)))
             }
-            CaseSchema::Participants { file, procedure } => {
-                if self.suite != TestSuite::Integration {
-                    return Err(generic_error!(
-                        "Cannot run case '{}' from {}: the integration runner runs only integration-suite cases",
-                        self.name,
-                        self.source.display()
-                    ));
-                }
-                let config = file
-                    .integration_config(&self.name, &self.source, procedure)
-                    .map_err(|reason| {
-                        generic_error!(
-                            "Cannot run case '{}' from {}: {}",
-                            self.name,
-                            self.source.display(),
-                            reason
-                        )
-                    })?;
-                Ok(Box::new(IntegrationTestCase::new(config, settings)))
+            CaseSchema::Participants { .. } => {
+                Ok(Box::new(IntegrationTestCase::new(self.integration_config()?, settings)))
             }
         }
     }
@@ -416,6 +438,40 @@ mod tests {
         };
         assert_eq!(file.participants["adp"].participant_type, "agent-adp");
         assert!(file.procedure.is_empty());
+    }
+
+    #[test]
+    fn load_content_names_the_case_after_the_given_directory() {
+        let source = Path::new("alpha/config.yaml");
+        let cases = CaseConfig::load_content(PARTICIPANT_FIELDS, "alpha", source).unwrap();
+        assert_eq!(cases.len(), 1);
+        assert_eq!(cases[0].name(), "alpha");
+        assert_eq!(cases[0].source(), source);
+
+        let error = CaseConfig::load_content(&format!("name: beta\n{PARTICIPANT_FIELDS}"), "alpha", source)
+            .err()
+            .expect("a declared name must match the given directory");
+        assert_eq!(
+            error.to_string(),
+            "case name 'beta' in alpha/config.yaml does not match its directory 'alpha'; \
+             rename the directory or the name so they agree"
+        );
+    }
+
+    #[test]
+    fn integration_translation_requires_a_participant_case() {
+        for yaml in [
+            "type: integration\nname: alpha\ntimeout: 1s\nruntimes: [linux]\nprocedure: []\n".to_string(),
+            format!("type: correctness\n{CORRECTNESS_FIELDS}"),
+        ] {
+            let cases = CaseConfig::load_content(&yaml, "alpha", Path::new("alpha/config.yaml")).unwrap();
+            assert_eq!(cases.len(), 1);
+            assert_eq!(
+                cases[0].integration_config().unwrap_err().to_string(),
+                "Cannot run case 'alpha' from alpha/config.yaml: \
+                 integration translation requires a case that declares participants"
+            );
+        }
     }
 
     #[test]

@@ -48,6 +48,7 @@ mod machine_output;
 use self::machine_output::RunReport;
 
 mod ledger;
+mod participants;
 mod probe;
 mod record;
 mod reporter;

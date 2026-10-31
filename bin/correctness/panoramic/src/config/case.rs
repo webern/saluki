@@ -14,13 +14,14 @@ use saluki_error::{generic_error, ErrorContext as _, GenericError};
 use serde::Deserialize;
 
 use super::{
-    case_file::CaseFile, deserialize_case, parse_case, IntegrationConfig, MatrixVariants, LINUX_RUNTIME, MAC_RUNTIME,
-    WINDOWS_RUNTIME,
+    case_file::CaseFile, deserialize_case, parse_case, participant_check::check_participants, IntegrationConfig,
+    MatrixVariants, LINUX_RUNTIME, MAC_RUNTIME, WINDOWS_RUNTIME,
 };
 use crate::{
     correctness::{case::CorrectnessTestCase, config::Config as CorrectnessConfig},
     image_override::ImageOverrides,
     integration::{IntegrationSettings, IntegrationTestCase},
+    participants::REGISTERED_TYPES,
     test::{Test, TestSuite},
 };
 
@@ -95,7 +96,10 @@ impl CaseConfig {
     /// deserialization. The directory must have a name, and a declared case name must match it.
     /// Integration runtimes must be nonempty and recognized; a correctness matrix must have at least
     /// one variant. Participant cases must declare at least one participant and a nonempty, unique
-    /// `subject_os` list using `linux`, `macos` or `windows`.
+    /// `subject_os` list using `linux`, `macos` or `windows`. Participant names must be DNS labels starting
+    /// with a letter, other than `self`; exactly one subject is required, without an `os` override.
+    /// Types must be registered, configuration names declared by the type, and OS overlays reachable.
+    /// Connections must join a declared consumed endpoint to another participant's declared served endpoint.
     pub(crate) fn load_file(config_path: &Path) -> Result<Vec<Self>, GenericError> {
         let canonical_path = config_path.canonicalize().error_context(format!(
             "Failed to resolve configuration file: {}",
@@ -125,6 +129,7 @@ impl CaseConfig {
                 let file: CaseFile = deserialize_case(&content, config_path)?;
                 let name = case_name(file.name.as_deref(), dir_name, config_path)?;
                 let subject_os = file.check(&name, config_path)?;
+                check_participants(&file, &subject_os, REGISTERED_TYPES, &name, config_path)?;
                 return Ok(vec![Self {
                     name,
                     description: file.description.clone(),
@@ -376,6 +381,69 @@ mod tests {
         };
         assert_eq!(file.participants["adp"].participant_type, "agent-adp");
         assert!(file.procedure.is_empty());
+    }
+
+    #[test]
+    fn agent_adp_participants_accept_environment_variables_and_os_overlays_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let yaml = PARTICIPANT_FIELDS.replace(
+            "subject: true",
+            "subject: true, config: {env: {ANY_KEY: arbitrary}, os: {linux: {env: {ANY_KEY: linux}}}}",
+        );
+        let path = write_case(dir.path(), "alpha", &yaml);
+        let cases = CaseConfig::load_file(&path).unwrap();
+        assert_eq!(cases.len(), 1);
+        let CaseSchema::Participants(file) = cases[0].schema() else {
+            panic!("expected participant data");
+        };
+        let config = &file.participants["adp"].config;
+        assert_eq!(config.env["ANY_KEY"], "arbitrary");
+        assert_eq!(config.os[&Os::Linux].env["ANY_KEY"], "linux");
+
+        for (fields, expected) in [
+            ("config: {files: {settings.yaml: missing.yaml}}", "it declares none"),
+            ("config: {endpoints: {api: {port: 80}}}", "it serves none"),
+            ("config: {params: {mode: fast}}", "it accepts none"),
+            ("connect: {upstream: other.api}", "it consumes none"),
+            (
+                "config: {os: {linux: {files: {settings.yaml: missing.yaml}}}}",
+                "it declares none",
+            ),
+            ("config: {os: {linux: {params: {mode: fast}}}}", "it accepts none"),
+        ] {
+            let yaml = PARTICIPANT_FIELDS.replace("subject: true", &format!("subject: true, {fields}"));
+            let path = write_case(dir.path(), "alpha", &yaml);
+            let error = CaseConfig::load_file(&path).err().expect("undeclared names must fail");
+            let message = error.to_string();
+            assert!(
+                message.starts_with(&format!("case 'alpha' in {}: ", path.canonicalize().unwrap().display())),
+                "{message}"
+            );
+            assert!(message.contains("which type 'agent-adp' does not"), "{message}");
+            assert!(message.ends_with(expected), "{message}");
+        }
+    }
+
+    #[test]
+    fn a_participant_type_outside_the_registry_fails_to_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_case(
+            dir.path(),
+            "alpha",
+            &PARTICIPANT_FIELDS.replace("agent-adp", "datadog-intake"),
+        );
+        let error = CaseConfig::load_file(&path).err().expect("unregistered type must fail");
+        let message = error.to_string();
+        assert!(
+            message.contains("participant 'adp' has unknown type 'datadog-intake'; registered types: agent-adp"),
+            "{message}"
+        );
+        assert!(
+            message.starts_with(&format!("case 'alpha' in {}: ", path.canonicalize().unwrap().display())),
+            "{message}"
+        );
+        let path = write_case(dir.path(), "alpha", PARTICIPANT_FIELDS);
+        assert_eq!(CaseConfig::load_file(&path).unwrap().len(), 1);
     }
 
     #[test]

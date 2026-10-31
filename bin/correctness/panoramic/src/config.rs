@@ -13,6 +13,7 @@ use serde::{
 use serde_json::Value;
 
 use self::case::CaseConfig;
+pub(crate) use self::participant_check::ParticipantDeclaration;
 use crate::correctness::config::Config as CorrectnessConfig;
 use crate::image_override::{ImageOverride, ImageOverrides};
 use crate::integration::IntegrationSettings;
@@ -859,6 +860,7 @@ pub fn parse_file_spec(spec: &str) -> Result<(&str, &str), GenericError> {
 
 pub(crate) mod case;
 mod case_file;
+mod participant_check;
 
 #[cfg(test)]
 mod coverage_inventory;
@@ -1325,6 +1327,14 @@ timeout: 30s
                 "e-procedure",
                 PARTICIPANT_FIELDS.replace("procedure: []", "procedure: [{parallel: []}]"),
                 "at least one step",
+            ),
+            (
+                "f-subject",
+                PARTICIPANT_FIELDS.replace(
+                    "  adp: {type: agent-adp, subject: true}",
+                    "  adp: {type: agent-adp, subject: true}\n  other: {type: agent-adp, subject: true}",
+                ),
+                "are both marked 'subject: true'",
             ),
         ] {
             sources.push((write_case(dir.path(), name, &yaml).canonicalize().unwrap(), expected));

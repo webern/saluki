@@ -21,6 +21,8 @@ pub(crate) struct ParticipantDeclaration {
     pub(crate) consumes: &'static [&'static str],
     /// Names a case may set under `config.params`.
     pub(crate) params: &'static [&'static str],
+    /// Named processes steps may address with `process`, in sorted order.
+    pub(crate) processes: &'static [&'static str],
 }
 
 /// Checks participant names, configuration and connections against registered types.
@@ -155,7 +157,7 @@ pub(super) fn check_participants(
     Ok(())
 }
 
-fn find_type<'a>(types: &[&'a ParticipantDeclaration], name: &str) -> Option<&'a ParticipantDeclaration> {
+pub(super) fn find_type<'a>(types: &[&'a ParticipantDeclaration], name: &str) -> Option<&'a ParticipantDeclaration> {
     types.iter().copied().find(|declaration| declaration.name == name)
 }
 
@@ -184,7 +186,7 @@ fn check_keys<'a>(
     Ok(())
 }
 
-fn declared_names(names: &[&str]) -> String {
+pub(super) fn declared_names(names: &[&str]) -> String {
     if names.is_empty() {
         "none".into()
     } else {
@@ -202,6 +204,7 @@ mod tests {
         endpoints: &["api"],
         consumes: &[],
         params: &["mode"],
+        processes: &["server"],
     };
     const CLIENT: ParticipantDeclaration = ParticipantDeclaration {
         name: "client",
@@ -209,6 +212,7 @@ mod tests {
         endpoints: &[],
         consumes: &["upstream"],
         params: &[],
+        processes: &[],
     };
     const TYPES: &[&ParticipantDeclaration] = &[&SERVER, &CLIENT];
 

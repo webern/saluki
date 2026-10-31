@@ -14,6 +14,7 @@ use serde_json::Value;
 
 use self::case::CaseConfig;
 pub(crate) use self::participant_check::ParticipantDeclaration;
+pub(crate) use self::step_check::{decode_fields, Need, Step, StepDeclaration, StepFields};
 use crate::correctness::config::Config as CorrectnessConfig;
 use crate::image_override::{ImageOverride, ImageOverrides};
 use crate::integration::IntegrationSettings;
@@ -861,6 +862,7 @@ pub fn parse_file_spec(spec: &str) -> Result<(&str, &str), GenericError> {
 pub(crate) mod case;
 mod case_file;
 mod participant_check;
+mod step_check;
 
 #[cfg(test)]
 mod coverage_inventory;
@@ -1335,6 +1337,11 @@ timeout: 30s
                     "  adp: {type: agent-adp, subject: true}\n  other: {type: agent-adp, subject: true}",
                 ),
                 "are both marked 'subject: true'",
+            ),
+            (
+                "g-step",
+                PARTICIPANT_FIELDS.replace("procedure: []", "procedure: [{step: wait_ready}]"),
+                "unknown step 'wait_ready'",
             ),
         ] {
             sources.push((write_case(dir.path(), name, &yaml).canonicalize().unwrap(), expected));

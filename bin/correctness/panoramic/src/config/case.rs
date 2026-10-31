@@ -14,14 +14,18 @@ use saluki_error::{generic_error, ErrorContext as _, GenericError};
 use serde::Deserialize;
 
 use super::{
-    case_file::CaseFile, deserialize_case, parse_case, participant_check::check_participants, IntegrationConfig,
-    MatrixVariants, LINUX_RUNTIME, MAC_RUNTIME, WINDOWS_RUNTIME,
+    case_file::{CaseFile, ProcedureNode},
+    deserialize_case, parse_case,
+    participant_check::check_participants,
+    step_check::build_steps,
+    IntegrationConfig, MatrixVariants, Step, LINUX_RUNTIME, MAC_RUNTIME, WINDOWS_RUNTIME,
 };
 use crate::{
     correctness::{case::CorrectnessTestCase, config::Config as CorrectnessConfig},
     image_override::ImageOverrides,
     integration::{IntegrationSettings, IntegrationTestCase},
     participants::REGISTERED_TYPES,
+    steps::REGISTERED_STEPS,
     test::{Test, TestSuite},
 };
 
@@ -83,7 +87,10 @@ pub(super) enum CaseSchema {
         dead_code,
         reason = "Only tests read the stored case until participant cases can run."
     )]
-    Participants(CaseFile),
+    Participants {
+        file: CaseFile,
+        procedure: Vec<ProcedureNode<Box<dyn Step>>>,
+    },
 }
 
 impl CaseConfig {
@@ -100,6 +107,8 @@ impl CaseConfig {
     /// with a letter, other than `self`; exactly one subject is required, without an `os` override.
     /// Types must be registered, configuration names declared by the type, and OS overlays reachable.
     /// Connections must join a declared consumed endpoint to another participant's declared served endpoint.
+    /// Each step must name a registered step, decode its fields strictly, contain no `{{` template reference,
+    /// and reference only declared participants and the processes their types declare.
     pub(crate) fn load_file(config_path: &Path) -> Result<Vec<Self>, GenericError> {
         let canonical_path = config_path.canonicalize().error_context(format!(
             "Failed to resolve configuration file: {}",
@@ -130,6 +139,7 @@ impl CaseConfig {
                 let name = case_name(file.name.as_deref(), dir_name, config_path)?;
                 let subject_os = file.check(&name, config_path)?;
                 check_participants(&file, &subject_os, REGISTERED_TYPES, &name, config_path)?;
+                let procedure = build_steps(&file, REGISTERED_STEPS, REGISTERED_TYPES, &name, config_path)?;
                 return Ok(vec![Self {
                     name,
                     description: file.description.clone(),
@@ -139,7 +149,7 @@ impl CaseConfig {
                     timeout: file.timeout.0,
                     subject_os,
                     disabled: false,
-                    schema: CaseSchema::Participants(file),
+                    schema: CaseSchema::Participants { file, procedure },
                 }]);
             }
             Some(serde_json::Value::String(test_type)) => test_type.as_str(),
@@ -243,7 +253,7 @@ impl CaseConfig {
             return false;
         }
         match self.schema {
-            CaseSchema::Integration(_) | CaseSchema::Participants(_) => {
+            CaseSchema::Integration(_) | CaseSchema::Participants { .. } => {
                 Os::from_runtime(runtime).is_some_and(|os| self.subject_os.contains(&os))
             }
             CaseSchema::Correctness(_) => true,
@@ -265,7 +275,7 @@ impl CaseConfig {
                 overrides.apply_correctness(&mut config);
                 Ok(Box::new(CorrectnessTestCase::new(self.name.clone(), config)))
             }
-            CaseSchema::Participants(_) => Err(generic_error!(
+            CaseSchema::Participants { .. } => Err(generic_error!(
                 "Cannot run case '{}' from {}: panoramic cannot yet run cases that declare participants",
                 self.name,
                 self.source.display()
@@ -320,12 +330,17 @@ fn case_name(declared: Option<&str>, directory: &str, source: &Path) -> Result<S
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::{any::Any, fs};
 
     use super::*;
     use crate::config::{
         build_runners, default_host_runtime,
         tests::{write_case, NO_PARTICIPANT_FIELDS, PARTICIPANT_FIELDS},
+        Need,
+    };
+    use crate::steps::{
+        file_contains::FileContains,
+        log_contains::{LogContains, LogNotContains},
     };
 
     const CORRECTNESS_FIELDS: &str =
@@ -376,11 +391,173 @@ mod tests {
         assert_eq!(case.suite(), TestSuite::Integration);
         assert!(!case.disabled);
         assert_eq!(case.source(), path.canonicalize().unwrap());
-        let CaseSchema::Participants(file) = case.schema() else {
+        let CaseSchema::Participants { file, .. } = case.schema() else {
             panic!("expected participant data");
         };
         assert_eq!(file.participants["adp"].participant_type, "agent-adp");
         assert!(file.procedure.is_empty());
+    }
+
+    #[test]
+    fn a_participant_case_stores_its_built_procedure() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_case(
+            dir.path(),
+            "alpha",
+            r#"timeout: 120s
+subject_os: [linux]
+participants:
+  adp: {type: agent-adp, subject: true, config: {env: {DD_API_KEY: "0000"}}}
+procedure:
+  - step: log_contains
+    on: adp
+    pattern: "Initial configuration received."
+    timeout: 30s
+  - parallel:
+      - step: log_not_contains
+        on: adp
+        process: adp
+        pattern: "panic|PANIC"
+        regex: true
+        during: 10s
+  - step: file_contains
+    on: adp
+    path: /var/log/datadog/agent-data-plane.log
+    pattern: DATAPLANE
+    timeout: 30s
+"#,
+        );
+        let cases = CaseConfig::load_file(&path).unwrap();
+        assert_eq!(cases.len(), 1);
+        let CaseSchema::Participants { file, procedure } = cases[0].schema() else {
+            panic!("expected participant data");
+        };
+        assert_eq!(file.participants["adp"].config.env["DD_API_KEY"], "0000");
+        assert_eq!(file.procedure.len(), 3);
+        let [ProcedureNode::Step(log), ProcedureNode::Parallel(members), ProcedureNode::Step(file_step)] =
+            procedure.as_slice()
+        else {
+            panic!("expected step, parallel, step");
+        };
+        assert_eq!(members.len(), 1);
+        let log = (log.as_ref() as &dyn Any).downcast_ref::<LogContains>().unwrap();
+        assert_eq!(log.on, "adp");
+        assert_eq!(log.process, None);
+        assert_eq!(log.pattern, "Initial configuration received.");
+        assert!(!log.regex);
+        assert_eq!(log.timeout.0, Duration::from_secs(30));
+        let absent = (members[0].as_ref() as &dyn Any)
+            .downcast_ref::<LogNotContains>()
+            .unwrap();
+        assert_eq!(absent.on, "adp");
+        assert_eq!(absent.process.as_deref(), Some("adp"));
+        assert_eq!(absent.pattern, "panic|PANIC");
+        assert!(absent.regex);
+        assert_eq!(absent.during.0, Duration::from_secs(10));
+        let file_step = (file_step.as_ref() as &dyn Any).downcast_ref::<FileContains>().unwrap();
+        assert_eq!(file_step.on, "adp");
+        assert_eq!(file_step.path, "/var/log/datadog/agent-data-plane.log");
+        assert_eq!(file_step.pattern, "DATAPLANE");
+        assert!(!file_step.regex);
+        assert_eq!(file_step.timeout.0, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn agent_adp_log_steps_may_name_the_adp_and_agent_processes_only() {
+        let dir = tempfile::tempdir().unwrap();
+        for (step, duration) in [("log_contains", "timeout"), ("log_not_contains", "during")] {
+            for process in ["adp", "agent", "core"] {
+                let yaml = PARTICIPANT_FIELDS.replace(
+                    "procedure: []",
+                    &format!(
+                        "procedure: [{{step: {step}, on: adp, process: {process}, pattern: ready, {duration}: 1s}}]"
+                    ),
+                );
+                let path = write_case(dir.path(), "alpha", &yaml);
+                if process == "core" {
+                    let error = CaseConfig::load_file(&path)
+                        .err()
+                        .expect("undeclared process must fail");
+                    assert_eq!(
+                        error.to_string(),
+                        format!(
+                            "case 'alpha' in {}: step 1 '{step}' names process 'core' of participant 'adp', which type 'agent-adp' does not run; it runs adp, agent",
+                            path.canonicalize().unwrap().display()
+                        )
+                    );
+                } else {
+                    let cases = CaseConfig::load_file(&path).unwrap();
+                    assert_eq!(cases.len(), 1);
+                    let CaseSchema::Participants { procedure, .. } = cases[0].schema() else {
+                        panic!("expected participant data");
+                    };
+                    let [ProcedureNode::Step(step)] = procedure.as_slice() else {
+                        panic!("expected one built step");
+                    };
+                    assert_eq!(step.needs(), vec![Need::Process("adp".into(), process.into())]);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn participant_step_errors_name_the_canonical_file_and_step() {
+        let dir = tempfile::tempdir().unwrap();
+        for (fields, expected) in [
+            (
+                "step: wait_ready",
+                "names unknown step 'wait_ready'; registered steps: file_contains, log_contains, log_not_contains",
+            ),
+            (
+                "step: log_contains, on: adp, pattern: ready, timeout: 1s, unknown: x",
+                "'log_contains': unknown: unknown field `unknown`",
+            ),
+            ("step: log_contains, on: adp, timeout: 1s", "missing field `pattern`"),
+            (
+                "step: log_contains, on: adp, pattern: true, timeout: 1s",
+                "'log_contains': pattern: invalid type: boolean `true`, expected a string",
+            ),
+            (
+                "step: log_contains, on: adp, pattern: ready, timeout: 30",
+                "'log_contains': timeout: invalid type: integer `30`, expected a string",
+            ),
+            (
+                "step: log_contains, on: adp, pattern: '(', regex: true, timeout: 1s",
+                "'log_contains': pattern '(' is not a valid regex",
+            ),
+            (
+                "step: file_contains, on: adp, path: '{{ adp.facts.default_log_file }}', pattern: ready, timeout: 1s",
+                "'file_contains': field 'path' contains a template reference",
+            ),
+            (
+                "step: log_contains, on: missing, pattern: ready, timeout: 1s",
+                "'log_contains' runs on unknown participant 'missing'; participants: adp",
+            ),
+            (
+                "step: log_contains, on: adp, pattern: ready, timeout: 1s, stream: stdout",
+                "unknown field `stream`",
+            ),
+            (
+                "step: file_contains, on: adp, path: /logs/output.log, pattern: ready, timeout: 1s, process: adp",
+                "unknown field `process`",
+            ),
+        ] {
+            let path = write_case(
+                dir.path(),
+                "alpha",
+                &PARTICIPANT_FIELDS.replace("procedure: []", &format!("procedure: [{{{fields}}}]")),
+            );
+            let error = CaseConfig::load_file(&path).err().expect("invalid step must fail");
+            let message = error.to_string();
+            assert!(
+                message.starts_with(&format!(
+                    "case 'alpha' in {}: step 1 ",
+                    path.canonicalize().unwrap().display()
+                )),
+                "{message}"
+            );
+            assert!(message.contains(expected), "expected {expected}: {message}");
+        }
     }
 
     #[test]
@@ -393,7 +570,7 @@ mod tests {
         let path = write_case(dir.path(), "alpha", &yaml);
         let cases = CaseConfig::load_file(&path).unwrap();
         assert_eq!(cases.len(), 1);
-        let CaseSchema::Participants(file) = cases[0].schema() else {
+        let CaseSchema::Participants { file, .. } = cases[0].schema() else {
             panic!("expected participant data");
         };
         let config = &file.participants["adp"].config;

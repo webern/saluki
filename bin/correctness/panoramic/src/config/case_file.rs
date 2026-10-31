@@ -30,11 +30,6 @@ pub(super) struct CaseFile {
     /// Required participant instances keyed by name. Must contain at least one; has no default.
     pub(super) participants: BTreeMap<String, ParticipantEntry>,
     /// Required ordered steps and parallel blocks. May be empty; has no default.
-    // TODO: remove once participant-type and step declarations validate these fields.
-    #[allow(
-        dead_code,
-        reason = "Only tests read the procedure until step declarations validate it."
-    )]
     pub(super) procedure: Vec<ProcedureNode>,
 }
 
@@ -285,20 +280,15 @@ impl<'de> Deserialize<'de> for ConnectionTarget {
 }
 
 /// One sequential step or a block of concurrent steps.
-// TODO: remove once participant-type and step declarations validate these fields.
-#[allow(
-    dead_code,
-    reason = "Only tests read these nodes until step declarations validate them."
-)]
 #[derive(Debug)]
-pub(super) enum ProcedureNode {
+pub(super) enum ProcedureNode<S = StepNode> {
     /// A single step, with its declaration-specific fields.
-    Step(StepNode),
+    Step(S),
     /// A nonempty block of steps to run concurrently.
-    Parallel(Vec<StepNode>),
+    Parallel(Vec<S>),
 }
 
-impl<'de> Deserialize<'de> for ProcedureNode {
+impl<'de> Deserialize<'de> for ProcedureNode<StepNode> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -354,16 +344,11 @@ impl<'de> Deserialize<'de> for ProcedureNode {
 }
 
 /// A step name and the YAML fields its declaration decodes.
-// TODO: remove once participant-type and step declarations validate these fields.
-#[allow(
-    dead_code,
-    reason = "Only tests read these fields until step declarations validate them."
-)]
 #[derive(Debug)]
 pub(super) struct StepNode {
     /// Required step declaration name; has no default.
     pub(super) name: String,
-    /// Declaration-specific fields, preserving YAML value types. Defaults to empty.
+    /// Declaration-specific fields, preserving YAML value types; decoded by the step's declaration. Defaults to empty.
     pub(super) fields: BTreeMap<String, Value>,
 }
 

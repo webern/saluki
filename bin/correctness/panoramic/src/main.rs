@@ -52,6 +52,7 @@ mod participants;
 mod probe;
 mod record;
 mod reporter;
+mod steps;
 use self::reporter::{OutputFormat, Reporter};
 
 mod runner;

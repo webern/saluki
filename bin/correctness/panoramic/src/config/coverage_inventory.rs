@@ -418,7 +418,7 @@ fn load_cases(path: &Path) -> Vec<(String, Case)> {
                     ignored_fields: Vec::new(),
                 },
             ),
-            CaseSchema::Participants(_) => panic!(
+            CaseSchema::Participants { .. } => panic!(
                 "{}: the coverage inventory does not record cases that declare participants",
                 path.display()
             ),

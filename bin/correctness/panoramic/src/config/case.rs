@@ -71,9 +71,25 @@ impl CaseConfig {
     /// # Errors
     ///
     /// Returns an error if the file cannot be read or resolved, contains invalid YAML, omits `type`,
-    /// names an unknown type, or fails schema deserialization. Integration runtimes must be nonempty
-    /// and recognized; a correctness matrix must have at least one variant.
+    /// names an unknown type, or fails schema deserialization. The directory must have a name, and an
+    /// integration case's name must match it. Integration runtimes must be nonempty and recognized;
+    /// a correctness matrix must have at least one variant.
     pub(crate) fn load_file(config_path: &Path) -> Result<Vec<Self>, GenericError> {
+        let canonical_path = config_path.canonicalize().error_context(format!(
+            "Failed to resolve configuration file: {}",
+            config_path.display()
+        ))?;
+        let dir_name = config_path
+            .parent()
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| {
+                generic_error!(
+                    "Cannot name the case in {}: its directory has no name",
+                    canonical_path.display()
+                )
+            })?;
+        let config_path = canonical_path.as_path();
         let content = std::fs::read_to_string(config_path)
             .error_context(format!("Failed to read config file: {}", config_path.display()))?;
 
@@ -84,22 +100,27 @@ impl CaseConfig {
 
         let test_type = peek.get("type").and_then(|v| v.as_str()).ok_or_else(|| {
             generic_error!(
-                "Missing required 'type' field (expected 'integration', 'correctness', or 'correctness_matrix')"
+                "Missing required 'type' field in {} (expected 'integration', 'correctness', or 'correctness_matrix')",
+                config_path.display()
             )
         })?;
-        let dir_name = config_path
-            .parent()
-            .and_then(Path::file_name)
-            .and_then(|name| name.to_str())
-            .unwrap_or("unknown");
 
         match test_type {
             "integration" => {
                 let config: IntegrationConfig = load_case(config_path)?;
+                if config.name != dir_name {
+                    return Err(generic_error!(
+                        "integration test name '{}' in {} does not match its directory '{}'; rename the directory or the name so they agree",
+                        config.name,
+                        config_path.display(),
+                        dir_name
+                    ));
+                }
                 if config.runtimes.is_empty() {
                     return Err(generic_error!(
-                        "integration test '{}' has empty runtimes list",
-                        config.name
+                        "integration test '{}' in {} has empty runtimes list",
+                        config.name,
+                        config_path.display()
                     ));
                 }
                 let subject_os = config
@@ -108,8 +129,9 @@ impl CaseConfig {
                     .map(|runtime| {
                         Os::from_runtime(runtime).ok_or_else(|| {
                             generic_error!(
-                                "integration test '{}' declares unknown runtime '{}' (expected '{}', '{}', or '{}')",
+                                "integration test '{}' in {} declares unknown runtime '{}' (expected '{}', '{}', or '{}')",
                                 config.name,
+                                config_path.display(),
                                 runtime,
                                 LINUX_RUNTIME,
                                 MAC_RUNTIME,
@@ -140,8 +162,9 @@ impl CaseConfig {
                     .error_context(format!("Failed to parse configuration file: {}", config_path.display()))?;
                 if matrix.variants.is_empty() {
                     return Err(generic_error!(
-                        "correctness_matrix '{}' has no variants defined",
-                        dir_name
+                        "correctness_matrix '{}' in {} has no variants defined",
+                        dir_name,
+                        config_path.display()
                     ));
                 }
                 Ok(matrix
@@ -151,8 +174,9 @@ impl CaseConfig {
                     .collect())
             }
             other => Err(generic_error!(
-                "Unknown test type '{}' (expected 'integration', 'correctness', or 'correctness_matrix')",
-                other
+                "Unknown test type '{}' in {} (expected 'integration', 'correctness', or 'correctness_matrix')",
+                other,
+                config_path.display()
             )),
         }
     }
@@ -207,8 +231,6 @@ impl CaseConfig {
         self.suite
     }
 
-    // TODO: remove the dead_code allowance once duplicate-name load errors name both source files.
-    #[allow(dead_code)]
     pub(crate) fn source(&self) -> &Path {
         &self.source
     }
@@ -231,25 +253,17 @@ mod tests {
     use std::fs;
 
     use super::*;
-    use crate::config::{build_runners, default_host_runtime};
+    use crate::config::{build_runners, default_host_runtime, tests::write_case};
 
     const CORRECTNESS_FIELDS: &str =
         "runtime: docker\nanalysis_mode: metrics\nbaseline: {image: 'base:file'}\ncomparison: {image: 'comp:file'}\n";
-
-    fn write_case(root: &Path, name: &str, yaml: &str) -> PathBuf {
-        let dir = root.join(name);
-        fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("config.yaml");
-        fs::write(&path, yaml).unwrap();
-        path
-    }
 
     #[test]
     fn integration_case_records_its_declared_name_description_timeout_and_subject_os() {
         let dir = tempfile::tempdir().unwrap();
         let path = write_case(
             dir.path(),
-            "directory",
+            "alpha",
             "type: integration\nname: alpha\ndescription: A portable case\ntimeout: 7s\nruntimes: [linux, mac]\nprocedure: []\n",
         );
         let cases = CaseConfig::load_file(&path).unwrap();
@@ -395,6 +409,85 @@ mod tests {
     }
 
     #[test]
+    fn every_load_error_names_the_canonical_file() {
+        let dir = tempfile::tempdir().unwrap();
+        for (yaml, reason) in [
+            ("type: [".to_string(), "Failed to parse config file as YAML"),
+            ("name: alpha\n".to_string(), "Missing required 'type' field"),
+            ("type: bogus\n".to_string(), "Unknown test type 'bogus'"),
+            (
+                "type: integration\nname: alpha\ntimeout: nope\nprocedure: []\n".to_string(),
+                "Failed to parse configuration file",
+            ),
+            (
+                "type: integration\nname: alpha\ntimeout: 1s\nruntimes: []\nprocedure: []\n".to_string(),
+                "empty runtimes list",
+            ),
+            (
+                "type: integration\nname: alpha\ntimeout: 1s\nruntimes: [typo]\nprocedure: []\n".to_string(),
+                "unknown runtime 'typo'",
+            ),
+            (
+                format!("type: correctness_matrix\n{CORRECTNESS_FIELDS}variants: []\n"),
+                "has no variants defined",
+            ),
+            (
+                "type: integration\nname: mismatch\ntimeout: 1s\nprocedure: []\n".to_string(),
+                "does not match its directory",
+            ),
+        ] {
+            let path = write_case(dir.path(), "alpha", &yaml);
+            let error = CaseConfig::load_file(&path).err().expect("invalid case must fail");
+            let message = format!("{error:#}");
+            assert!(message.contains(reason), "{message}");
+            assert!(
+                message.contains(&path.canonicalize().unwrap().display().to_string()),
+                "{message}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_integration_name_must_match_its_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let yaml = "type: integration\nname: alpha\ntimeout: 1s\nruntimes: [linux]\nprocedure: []\n";
+        let path = write_case(dir.path(), "directory", yaml);
+        let error = CaseConfig::load_file(&path).err().expect("mismatched name must fail");
+        let message = error.to_string();
+        assert!(message.contains("name 'alpha'"), "{message}");
+        assert!(
+            message.contains("does not match its directory 'directory'"),
+            "{message}"
+        );
+
+        let path = write_case(dir.path(), "alpha", yaml);
+        let cases = CaseConfig::load_file(&path).unwrap();
+        assert_eq!(cases.iter().map(CaseConfig::name).collect::<Vec<_>>(), ["alpha"]);
+    }
+
+    #[test]
+    fn a_case_file_without_a_named_directory_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("sub")).unwrap();
+        fs::write(
+            dir.path().join("config.yaml"),
+            format!("type: correctness\n{CORRECTNESS_FIELDS}"),
+        )
+        .unwrap();
+        let path = dir.path().join("sub/../config.yaml");
+        let error = CaseConfig::load_file(&path)
+            .err()
+            .expect("a parent ending in '..' has no directory name");
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "Cannot name the case in {}: its directory has no name",
+                path.canonicalize().unwrap().display()
+            )
+        );
+    }
+
+    #[test]
     fn source_is_canonical_when_the_file_is_named_through_a_non_canonical_path() {
         let dir = tempfile::tempdir().unwrap();
         let path = write_case(dir.path(), "case", &format!("type: correctness\n{CORRECTNESS_FIELDS}"));
@@ -513,7 +606,19 @@ mod tests {
         let error = CaseConfig::load_file(&missing).err().expect("missing file must fail");
         assert_eq!(
             error.to_string(),
-            format!("Failed to read config file: {}", missing.display())
+            format!("Failed to resolve configuration file: {}", missing.display())
+        );
+        let directory = dir.path().join("unreadable/config.yaml");
+        fs::create_dir_all(&directory).unwrap();
+        let error = CaseConfig::load_file(&directory)
+            .err()
+            .expect("a directory cannot be read as a file");
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "Failed to read config file: {}",
+                directory.canonicalize().unwrap().display()
+            )
         );
         for (yaml, context) in [
             ("type: [", "Failed to parse config file as YAML"),

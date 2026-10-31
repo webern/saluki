@@ -133,7 +133,7 @@ Exit codes distinguish the run-level result:
 |------|---------|
 | 0 | Every test passed; run completed |
 | 1 | Assertion failure, unless code 2 applies |
-| 2 | Harness error, `timed_out` test, or interrupted run |
+| 2 | Harness error, including a case that fails to load or a case name declared more than once (reported before any test runs, with no `run.json`), a `timed_out` test, or an interrupted run |
 | 3 | Empty selection or unmatched test name |
 
 An `errored` step couldn't be evaluated. Inspect test `error`, `timeout`, `cause`, and step `message` fields.

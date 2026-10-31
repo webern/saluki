@@ -716,13 +716,11 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error if a test directory is missing or cannot be read.
-///
-/// # Panics
-///
-/// Panics if a case file fails to load, including a missing or unknown `type`.
+/// Returns an error if a test directory is missing or cannot be read, a case file fails to load,
+/// or more than one case declares the same name.
 pub(crate) fn discover_cases(dirs: &[PathBuf]) -> Result<Vec<CaseConfig>, GenericError> {
     let mut cases = Vec::new();
+    let mut load_errors = Vec::new();
 
     for base_path in dirs {
         if !base_path.is_dir() {
@@ -741,20 +739,38 @@ pub(crate) fn discover_cases(dirs: &[PathBuf]) -> Result<Vec<CaseConfig>, Generi
                 if config_path.exists() {
                     match CaseConfig::load_file(&config_path) {
                         Ok(loaded) => cases.extend(loaded),
-                        Err(e) => {
-                            // Previously we had a warning here that cannot be seen in TUI-mode. It is better to fail
-                            // loudly and fast when we have a bad test configuration than to falsely believe our test is
-                            // working when we see that all tests passed.
-                            panic!("Failed to load test case, bad configuration: {e:?}");
-                        }
+                        // Continue loading so one report names every problem. Reject the whole list on error:
+                        // a dropped case could make an incomplete run look like a passing run.
+                        Err(e) => load_errors.push((config_path, e)),
                     }
                 }
             }
         }
     }
 
-    // Sort by name for deterministic ordering.
-    cases.sort_by(|a, b| a.name().cmp(b.name()));
+    load_errors.sort_by(|(a, _), (b, _)| a.cmp(b));
+    let mut problems: Vec<_> = load_errors.into_iter().map(|(_, error)| format!("{error:#}")).collect();
+    cases.sort_by(|a, b| (a.name(), a.source()).cmp(&(b.name(), b.source())));
+    for group in cases.chunk_by(|a, b| a.name() == b.name()) {
+        if group.len() > 1 {
+            let sources: Vec<_> = group.iter().map(|case| case.source().display().to_string()).collect();
+            problems.push(format!(
+                "Case name '{}' is declared more than once: {}",
+                group[0].name(),
+                sources.join(", ")
+            ));
+        }
+    }
+    if !problems.is_empty() {
+        let problems: Vec<_> = problems
+            .into_iter()
+            .map(|problem| problem.replace('\n', "\n    "))
+            .collect();
+        return Err(generic_error!(
+            "Failed to load test cases:\n  - {}",
+            problems.join("\n  - ")
+        ));
+    }
 
     Ok(cases)
 }
@@ -831,7 +847,7 @@ pub(crate) mod case;
 mod coverage_inventory;
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::correctness::case::CorrectnessTestCase;
 
@@ -1013,6 +1029,117 @@ timeout: 30s
                 .collect::<Vec<_>>(),
             ["matrix/first", "matrix/second"]
         );
+    }
+
+    #[test]
+    fn discovery_reports_every_malformed_file_sorted_by_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = write_case(dir.path(), "b-missing-type", "name: missing\n");
+        let invalid = write_case(dir.path(), "a-invalid-yaml", "type: [");
+        let good = write_case(
+            dir.path(),
+            "good",
+            "type: integration\nname: good\ntimeout: 1s\nruntimes: [linux]\nprocedure: []\n",
+        );
+
+        let error = discover_cases(&[dir.path().to_path_buf()])
+            .err()
+            .expect("malformed files must fail discovery");
+        let message = format!("{error:#}");
+        assert!(message.starts_with("Failed to load test cases:\n  - "), "{message}");
+        assert!(message.lines().skip(1).all(|line| line.starts_with("  ")), "{message}");
+        let invalid_position = message
+            .find(&invalid.canonicalize().unwrap().display().to_string())
+            .unwrap();
+        let missing_position = message
+            .find(&missing.canonicalize().unwrap().display().to_string())
+            .unwrap();
+        assert!(invalid_position < missing_position, "{message}");
+        assert!(message.contains("Failed to parse config file as YAML"), "{message}");
+        assert!(message.contains("Missing required 'type' field"), "{message}");
+        assert!(
+            !message.contains(&good.canonicalize().unwrap().display().to_string()),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn discovery_rejects_a_name_declared_in_two_directories_and_names_both_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut roots = [dir.path().join("windows"), dir.path().join("disabled")];
+        let mut sources = [
+            write_case(
+                &roots[0],
+                "shared",
+                "type: integration\nname: shared\ntimeout: 1s\nruntimes: [windows]\nprocedure: []\n",
+            ).canonicalize().unwrap(),
+            write_case(
+                &roots[1],
+                "shared",
+                "type: correctness\ndisabled: true\nruntime: docker\nanalysis_mode: metrics\nbaseline: {image: base}\ncomparison: {image: comp}\n",
+            ).canonicalize().unwrap(),
+        ];
+        sources.sort();
+        let expected = format!(
+            "Failed to load test cases:\n  - Case name 'shared' is declared more than once: {}, {}",
+            sources[0].display(),
+            sources[1].display()
+        );
+        for _ in 0..2 {
+            let error = discover_cases(&roots)
+                .err()
+                .expect("duplicate names must fail discovery");
+            assert_eq!(format!("{error:#}"), expected);
+            let error = discover_in_scope(&roots, LINUX_RUNTIME)
+                .err()
+                .expect("runtime and disabled filtering must not hide duplicate names");
+            assert_eq!(format!("{error:#}"), expected);
+            roots.reverse();
+        }
+    }
+
+    #[test]
+    fn discovery_rejects_a_matrix_variant_name_declared_twice() {
+        let dir = create_test_case_dir(
+            "matrix",
+            "type: correctness_matrix\nruntime: docker\nanalysis_mode: metrics\nbaseline: {image: base}\ncomparison: {image: comp}\nvariants: [{name: x}, {name: x}]\n",
+        );
+        let error = discover_cases(&[dir.path().to_path_buf()])
+            .err()
+            .expect("duplicate variant names must fail discovery");
+        let source = dir.path().join("matrix/config.yaml").canonicalize().unwrap();
+        assert_eq!(
+            format!("{error:#}"),
+            format!(
+                "Failed to load test cases:\n  - Case name 'matrix/x' is declared more than once: {0}, {0}",
+                source.display()
+            )
+        );
+    }
+
+    #[test]
+    fn discovery_reports_load_failures_and_duplicate_names_together() {
+        let dir = tempfile::tempdir().unwrap();
+        let roots = [dir.path().join("first"), dir.path().join("second")];
+        let malformed = write_case(&roots[0], "malformed", "name: missing\n");
+        for root in &roots {
+            for name in ["z-shared", "a-shared"] {
+                write_case(
+                    root,
+                    name,
+                    &format!("type: integration\nname: {name}\ntimeout: 1s\nruntimes: [linux]\nprocedure: []\n"),
+                );
+            }
+        }
+        let error = discover_cases(&roots).err().expect("all problems must fail discovery");
+        let message = format!("{error:#}");
+        let malformed_position = message
+            .find(&malformed.canonicalize().unwrap().display().to_string())
+            .unwrap();
+        let first_duplicate = message.find("Case name 'a-shared' is declared more than once").unwrap();
+        let second_duplicate = message.find("Case name 'z-shared' is declared more than once").unwrap();
+        assert!(malformed_position < first_duplicate, "{message}");
+        assert!(first_duplicate < second_duplicate, "{message}");
     }
 
     #[test]
@@ -2070,10 +2197,16 @@ comparison: {image: comp}
                 .as_nanos()
         );
         let base_dir = std::env::temp_dir().join(unique);
-        let case_dir = base_dir.join(case_name);
-        std::fs::create_dir_all(&case_dir).unwrap();
-        std::fs::write(case_dir.join("config.yaml"), config).unwrap();
+        write_case(&base_dir, case_name, config);
 
         TestCaseDir { path: base_dir }
+    }
+
+    pub(crate) fn write_case(root: &Path, name: &str, yaml: &str) -> PathBuf {
+        let dir = root.join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.yaml");
+        std::fs::write(&path, yaml).unwrap();
+        path
     }
 }

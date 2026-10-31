@@ -181,11 +181,11 @@ async fn run_tests(cmd: cli::RunCommand, use_tui: bool) -> ExitCode {
         Ok(pair) => pair,
         Err(e) => {
             if use_tui {
-                eprintln!("Failed to discover tests: {}", e);
+                eprintln!("Failed to discover tests: {:#}", e);
             } else {
-                error!("Failed to discover tests: {}", e);
+                error!("Failed to discover tests: {:#}", e);
             }
-            return ExitCode::from(2);
+            return ExitCode::from(EXIT_HARNESS_ERROR);
         }
     };
 
@@ -446,8 +446,8 @@ async fn list_tests(cmd: cli::ListCommand) -> ExitCode {
     let cases = match discover_in_scope(&cmd.test_dirs, &integration_runtime) {
         Ok(cases) => cases,
         Err(e) => {
-            error!("Failed to discover tests: {}", e);
-            return ExitCode::from(2);
+            error!("Failed to discover tests: {:#}", e);
+            return ExitCode::from(EXIT_HARNESS_ERROR);
         }
     };
 
@@ -455,8 +455,8 @@ async fn list_tests(cmd: cli::ListCommand) -> ExitCode {
         let runners = match build_runners(&cases, &integration_runtime, &[]) {
             Ok(runners) => runners,
             Err(e) => {
-                error!("Failed to discover tests: {}", e);
-                return ExitCode::from(2);
+                error!("Failed to discover tests: {:#}", e);
+                return ExitCode::from(EXIT_HARNESS_ERROR);
             }
         };
         println!(
@@ -509,21 +509,11 @@ fn listing(cases: &[CaseConfig], runners: &[Box<dyn test::Test>]) -> BTreeMap<St
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use super::*;
-    use crate::config::{DEFAULT_WINDOWS_TARGET_IMAGE, LINUX_RUNTIME, WINDOWS_RUNTIME};
+    use crate::config::{tests::write_case, DEFAULT_WINDOWS_TARGET_IMAGE, LINUX_RUNTIME, WINDOWS_RUNTIME};
 
     const CORRECTNESS_FIELDS: &str =
         "runtime: docker\nanalysis_mode: metrics\nbaseline: {image: 'base:declared'}\ncomparison: {image: 'comp:declared'}\n";
-
-    fn write_case(root: &std::path::Path, name: &str, yaml: &str) -> PathBuf {
-        let dir = root.join(name);
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("config.yaml");
-        std::fs::write(&path, yaml).unwrap();
-        path
-    }
 
     #[test]
     fn log_level_scopes_the_selected_level_to_first_party_crates() {
@@ -580,12 +570,74 @@ comparison: {image: comp}
         }
     }
 
+    #[tokio::test]
+    async fn a_malformed_case_fails_run_before_any_report_even_when_another_case_is_selected() {
+        let dir = tempfile::tempdir().unwrap();
+        write_case(
+            dir.path(),
+            "good",
+            "type: integration\nname: good\ntimeout: 1s\nruntimes: [linux]\nprocedure: []\n",
+        );
+        let bad = write_case(dir.path(), "bad", "name: bad\n");
+        let error = discover_in_scope(&[dir.path().to_path_buf()], LINUX_RUNTIME)
+            .err()
+            .expect("the malformed case must fail discovery");
+        assert!(
+            format!("{error:#}").contains(&bad.canonicalize().unwrap().display().to_string()),
+            "{error:#}"
+        );
+        let logs = dir.path().join("logs");
+        for selection in [Some("good"), None] {
+            let mut args = vec![
+                "panoramic",
+                "run",
+                "-d",
+                dir.path().to_str().unwrap(),
+                "--runtime",
+                "linux",
+                "-l",
+                logs.to_str().unwrap(),
+                "--no-tui",
+            ];
+            if let Some(name) = selection {
+                args.extend(["-t", name]);
+            }
+            let cli = Cli::try_parse_from(args).unwrap();
+            let Command::Run(cmd) = cli.command else {
+                panic!("expected run");
+            };
+            assert_eq!(run_tests(cmd, false).await, ExitCode::from(EXIT_HARNESS_ERROR));
+            assert!(!logs.exists(), "discovery must fail before creating the log directory");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_malformed_case_fails_list_and_list_json() {
+        let dir = tempfile::tempdir().unwrap();
+        write_case(dir.path(), "bad", "name: bad\n");
+        for json in [false, true] {
+            let mut args = vec!["panoramic", "list", "-d", dir.path().to_str().unwrap()];
+            if json {
+                args.push("--json");
+            }
+            let cli = Cli::try_parse_from(args).unwrap();
+            let Command::List(cmd) = cli.command else {
+                panic!("expected list");
+            };
+            assert_eq!(
+                list_tests(cmd).await,
+                ExitCode::from(EXIT_HARNESS_ERROR),
+                "json: {json}"
+            );
+        }
+    }
+
     #[test]
     fn selection_matches_loaded_case_names_including_matrix_variants() {
         let dir = tempfile::tempdir().unwrap();
         write_case(
             dir.path(),
-            "directory",
+            "integration",
             "type: integration\nname: integration\ntimeout: 7s\nruntimes: [linux]\nprocedure: []\n",
         );
         write_case(

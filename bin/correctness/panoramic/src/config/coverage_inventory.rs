@@ -20,8 +20,9 @@ use serde_json::{json, Value};
 use super::{
     build_runners,
     case::{CaseConfig, CaseSchema},
-    discover_cases, AssertionStep, CorrectnessConfig, IntegrationConfig, MatrixVariants, LINUX_RUNTIME, MAC_RUNTIME,
-    WINDOWS_RUNTIME,
+    discover_cases,
+    tests::write_case,
+    AssertionStep, CorrectnessConfig, IntegrationConfig, MatrixVariants, LINUX_RUNTIME, MAC_RUNTIME, WINDOWS_RUNTIME,
 };
 use crate::{
     correctness::analysis::AnalysisMode,
@@ -214,7 +215,12 @@ impl Inventory {
                 schemas.insert(source, schema.to_string());
             }
         }
-        let integration_cases = discover_cases(std::slice::from_ref(&integration_dir)).unwrap();
+        // Discover both suites together to reject duplicate names across suites, as a run over both directories would.
+        // CI discovers each suite separately.
+        let cases = discover_cases(&[integration_dir.clone(), correctness_dir.clone()])
+            .unwrap_or_else(|error| panic!("{error:#}"));
+        let (integration_cases, correctness_cases): (Vec<_>, Vec<_>) =
+            cases.iter().partition(|case| case.suite() == TestSuite::Integration);
         for (runtime, os) in [
             (LINUX_RUNTIME, "linux"),
             (MAC_RUNTIME, "macos"),
@@ -222,6 +228,7 @@ impl Inventory {
         ] {
             let eligible: Vec<_> = integration_cases
                 .iter()
+                .copied()
                 .filter(|case| case.is_eligible_for(runtime))
                 .collect();
             let runners = build_runners(eligible.iter().copied(), runtime, &[]).unwrap();
@@ -229,8 +236,7 @@ impl Inventory {
                 rows.push(Row::from_case(root, case, runner.as_ref(), os, SELECTED, &schemas));
             }
         }
-        let correctness_cases = discover_cases(std::slice::from_ref(&correctness_dir)).unwrap();
-        for case in &correctness_cases {
+        for case in correctness_cases {
             let runners = build_runners(std::slice::from_ref(case), LINUX_RUNTIME, &[]).unwrap();
             let status = if case.is_eligible_for(LINUX_RUNTIME) {
                 SELECTED
@@ -638,6 +644,23 @@ fn every_case_file_produces_an_inventory_row() {
 }
 
 #[test]
+#[should_panic(expected = "Case name 'shared' is declared more than once")]
+fn inventory_rejects_a_case_name_used_in_both_suites() {
+    let root = tempfile::tempdir().unwrap();
+    write_case(
+        &root.path().join("test/integration/cases"),
+        "shared",
+        "type: integration\nname: shared\ntimeout: 1s\nruntimes: [linux]\nprocedure: []\n",
+    );
+    write_case(
+        &root.path().join("test/correctness/cases"),
+        "shared",
+        "type: correctness\nruntime: docker\nanalysis_mode: metrics\nbaseline: {image: base}\ncomparison: {image: comp}\n",
+    );
+    Inventory::generate(root.path());
+}
+
+#[test]
 fn ci_jobs_in_the_inventory_are_defined() {
     let root = repository_root();
     let inventory = Inventory::generate(&root);
@@ -648,6 +671,12 @@ fn ci_jobs_in_the_inventory_are_defined() {
     assert!(
         has_job(&e2e, "run-correctness-tests"),
         "Missing correctness child pipeline"
+    );
+    assert!(
+        e2e.lines().any(|line| {
+            line.trim() == "- bash ci/tooling/generate-correctness-pipeline.sh > generated-correctness.yml"
+        }),
+        "CI must run the correctness generator without masking its exit status"
     );
     for row in &inventory.rows {
         if row.suite == INTEGRATION {
@@ -661,8 +690,15 @@ fn ci_jobs_in_the_inventory_are_defined() {
         }
     }
     let script = read_text(&root.join("ci/tooling/generate-correctness-pipeline.sh"));
+    let position = |rule: &str| {
+        script
+            .lines()
+            .position(|line| line.trim() == rule || line.trim() == format!("{rule} \\"))
+    };
+    let list_rule = "./target/release/panoramic list -d test/correctness/cases --json";
     for rule in [
-        "./target/release/panoramic list -d test/correctness/cases --json",
+        "set -euo pipefail",
+        list_rule,
         "if [[ \"${runtime}\" == \"kubernetes_in_docker\" ]]; then",
         "base_mixin=\".test-correctness-kind-definition\"",
         "base_mixin=\".test-correctness-definition\"",
@@ -672,13 +708,13 @@ fn ci_jobs_in_the_inventory_are_defined() {
         r#"job_name="${case//\//-}""#,
         "test-correctness-${job_name}:",
     ] {
-        assert!(
-            script
-                .lines()
-                .any(|line| line.trim() == rule || line.trim() == format!("{rule} \\")),
-            "CI generator rule changed: {rule}"
-        );
+        assert!(position(rule).is_some(), "CI generator rule changed: {rule}");
     }
+    // Without pipefail the pipeline's status is the while loop's, so a failing list would silently drop jobs.
+    assert!(
+        position("set -euo pipefail") < position(list_rule),
+        "CI generator must enable fail-fast shell options before listing cases"
+    );
 }
 
 #[test]

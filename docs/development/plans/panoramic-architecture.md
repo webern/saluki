@@ -36,7 +36,8 @@ PANORAMIC_WRITE_COVERAGE_INVENTORY=1 cargo nextest run -p panoramic coverage_inv
 Review the diff. Update the inventory whenever a case file, its platforms or its CI job changes.
 Without the environment variable, the test compares the generated JSON and coverage tables with the checked-in
 versions and reports added or removed row keys and the first differing line in each file. The other inventory tests
-check file accounting, CI job and mixin definitions, ignored-key detection, and migration-proof references.
+check file accounting, case-name uniqueness across both suites, CI job and mixin definitions, the correctness generator's
+fail-fast shell options, ignored-key detection, and migration-proof references.
 
 ## Coverage details
 

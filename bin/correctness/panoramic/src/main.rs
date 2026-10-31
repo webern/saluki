@@ -514,7 +514,7 @@ mod tests {
     use super::*;
     use crate::config::{
         tests::{write_case, PARTICIPANT_FIELDS},
-        DEFAULT_WINDOWS_TARGET_IMAGE, LINUX_RUNTIME, WINDOWS_RUNTIME,
+        DEFAULT_LINUX_TARGET_IMAGE, DEFAULT_WINDOWS_TARGET_IMAGE, LINUX_RUNTIME, WINDOWS_RUNTIME,
     };
 
     const CORRECTNESS_FIELDS: &str =
@@ -638,9 +638,13 @@ comparison: {image: comp}
     }
 
     #[tokio::test]
-    async fn list_shows_a_participant_case_but_list_json_and_run_fail() {
+    async fn list_shows_a_participant_case_the_integration_runner_cannot_run_but_list_json_and_run_fail() {
         let dir = tempfile::tempdir().unwrap();
-        write_case(dir.path(), "participant", PARTICIPANT_FIELDS);
+        write_case(
+            dir.path(),
+            "participant",
+            &PARTICIPANT_FIELDS.replace("subject: true", "subject: true, realization: {kind: linux-container}"),
+        );
         write_case(
             dir.path(),
             "good",
@@ -794,6 +798,17 @@ comparison: {image: comp}
         assert_eq!(entry["runtime"], "windows");
         assert_eq!(entry["timeout"], serde_json::json!({"secs": 7, "nanos": 0}));
         assert_eq!(entry["images"]["container"], DEFAULT_WINDOWS_TARGET_IMAGE);
+
+        let path = write_case(dir.path(), "participant", &PARTICIPANT_FIELDS.replace("1s", "9s"));
+        let cases = CaseConfig::load_file(&path).unwrap();
+        let runners = build_runners(&cases, LINUX_RUNTIME, &[]).unwrap();
+        let entries = listing(&cases, &runners);
+        assert_eq!(entries.len(), 1);
+        let entry = &entries["participant"];
+        assert_eq!(entry["type"], "integration");
+        assert_eq!(entry["runtime"], "linux");
+        assert_eq!(entry["timeout"], serde_json::json!({"secs": 9, "nanos": 0}));
+        assert_eq!(entry["images"]["container"], DEFAULT_LINUX_TARGET_IMAGE);
     }
 
     #[test]

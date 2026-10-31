@@ -20,8 +20,6 @@ pub(crate) struct LogContains {
     #[serde(default)]
     pub(crate) regex: bool,
     /// Required, positive time to wait for a match; has no default.
-    // TODO: remove once panoramic runs this step.
-    #[allow(dead_code, reason = "Only tests read this field until the step runs.")]
     pub(crate) timeout: HumanDuration,
 }
 
@@ -49,8 +47,6 @@ pub(crate) struct LogNotContains {
     #[serde(default)]
     pub(crate) regex: bool,
     /// Required, positive time the pattern must stay absent; has no default.
-    // TODO: remove once panoramic runs this step.
-    #[allow(dead_code, reason = "Only tests read this field until the step runs.")]
     pub(crate) during: HumanDuration,
 }
 

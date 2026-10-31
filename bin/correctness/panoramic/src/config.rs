@@ -861,6 +861,7 @@ pub fn parse_file_spec(spec: &str) -> Result<(&str, &str), GenericError> {
 
 pub(crate) mod case;
 mod case_file;
+mod integration_bridge;
 mod participant_check;
 mod step_check;
 
@@ -1266,35 +1267,40 @@ timeout: 30s
     }
 
     #[test]
-    fn building_runners_names_every_participant_case_before_validating_overrides() {
+    fn building_runners_names_every_case_that_cannot_run_before_validating_overrides() {
         let dir = tempfile::tempdir().unwrap();
         let mut cases = Vec::new();
-        let mut participant_sources = Vec::new();
-        for name in ["second", "integration", "first"] {
-            let yaml = if name == "integration" {
-                "type: integration\nname: integration\ntimeout: 1s\nruntimes: [linux]\nprocedure: []\n"
-            } else {
-                PARTICIPANT_FIELDS
-            };
-            let path = write_case(dir.path(), name, yaml);
+        let mut errors = Vec::new();
+        for (name, yaml, field) in [
+            (
+                "second",
+                PARTICIPANT_FIELDS.replace("subject: true", "subject: true, realization: {kind: linux-container}"),
+                Some("realization"),
+            ),
+            (
+                "integration",
+                "type: integration\nname: integration\ntimeout: 1s\nruntimes: [linux]\nprocedure: []\n".to_string(),
+                None,
+            ),
+            (
+                "first",
+                PARTICIPANT_FIELDS.replace("subject: true", "subject: true, config: {os: {linux: {env: {A: b}}}}"),
+                Some("config.os"),
+            ),
+        ] {
+            let path = write_case(dir.path(), name, &yaml);
             cases.extend(CaseConfig::load_file(&path).unwrap());
-            if name != "integration" {
-                participant_sources.push((name, path.canonicalize().unwrap()));
+            if let Some(field) = field {
+                errors.push(format!(
+                    "Cannot run case '{name}' from {}: participant 'adp' sets '{field}', which the integration runner does not support",
+                    path.canonicalize().unwrap().display()
+                ));
             }
         }
         let overrides = ["unmatched=image:override".parse().unwrap()];
         let error = build_runners(&cases, LINUX_RUNTIME, &overrides)
             .err()
-            .expect("participant cases must fail runner construction");
-        let errors: Vec<_> = participant_sources
-            .iter()
-            .map(|(name, source)| {
-                format!(
-                    "Cannot run case '{name}' from {}: panoramic cannot yet run cases that declare participants",
-                    source.display()
-                )
-            })
-            .collect();
+            .expect("unsupported participant settings must fail runner construction");
         assert_eq!(
             format!("{error:#}"),
             format!("Failed to build test runners:\n  - {}", errors.join("\n  - "))

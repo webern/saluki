@@ -12,8 +12,6 @@ pub(crate) struct FileContains {
     /// Required participant whose file is searched; has no default.
     pub(crate) on: String,
     /// Required path inside the participant, kept verbatim for its OS; has no default.
-    // TODO: remove once panoramic runs this step.
-    #[allow(dead_code, reason = "Only tests read this field until the step runs.")]
     pub(crate) path: String,
     /// Required text or regex to find; has no default.
     pub(crate) pattern: String,
@@ -21,8 +19,6 @@ pub(crate) struct FileContains {
     #[serde(default)]
     pub(crate) regex: bool,
     /// Required, positive time to wait for a match; has no default.
-    // TODO: remove once panoramic runs this step.
-    #[allow(dead_code, reason = "Only tests read this field until the step runs.")]
     pub(crate) timeout: HumanDuration,
 }
 

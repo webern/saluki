@@ -83,11 +83,6 @@ pub(super) struct ParticipantEntry {
     /// Participant OS for a non-subject participant; the subject must not set it. Defaults to the subject OS.
     pub(super) os: Option<Os>,
     /// Requested execution mechanism. Defaults to the layout's choice.
-    // TODO: remove once panoramic builds participants from this field.
-    #[allow(
-        dead_code,
-        reason = "Only tests read this field until participant construction uses it."
-    )]
     pub(super) realization: Option<RequestedRealization>,
     /// Product configuration. Defaults to empty maps.
     #[serde(default)]
@@ -132,11 +127,6 @@ pub(super) enum RealizationKind {
 #[serde(deny_unknown_fields)]
 pub(super) struct ParticipantConfig {
     /// Process environment variables; values must be YAML strings. Defaults to empty.
-    // TODO: remove once panoramic builds participants from this field.
-    #[allow(
-        dead_code,
-        reason = "Only tests read this field until participant construction uses it."
-    )]
     #[serde(default, deserialize_with = "deserialize_env_map")]
     pub(super) env: BTreeMap<String, String>,
     /// Declared configuration file names mapped to case-relative sources. Defaults to empty.

@@ -1,8 +1,8 @@
 //! A [`CaseConfig`] is one case loaded from a `config.yaml`.
 //!
 //! It records the name, description, suite, source file, timeout and declared subject operating systems.
-//! The parsed integration, correctness or participant data stays private. [`CaseConfig::build_test`] builds
-//! supported runners from copies, so image overrides leave the loaded case unchanged.
+//! The parsed integration, correctness or participant data stays private. [`CaseConfig::build_test`] builds runners
+//! from copies, so image overrides leave the loaded case unchanged; a participant case builds an integration runner.
 
 use std::{
     collections::BTreeSet,
@@ -52,6 +52,15 @@ impl Os {
         }
     }
 
+    /// Returns the integration runtime identifier for the OS.
+    pub(crate) fn runtime(self) -> &'static str {
+        match self {
+            Self::Linux => LINUX_RUNTIME,
+            Self::MacOs => MAC_RUNTIME,
+            Self::Windows => WINDOWS_RUNTIME,
+        }
+    }
+
     /// Maps an integration runtime identifier to its OS.
     pub(crate) fn from_runtime(runtime: &str) -> Option<Self> {
         match runtime {
@@ -82,11 +91,6 @@ pub(crate) struct CaseConfig {
 pub(super) enum CaseSchema {
     Integration(IntegrationConfig),
     Correctness(CorrectnessConfig),
-    // TODO: remove once panoramic can run cases that declare participants.
-    #[allow(
-        dead_code,
-        reason = "Only tests read the stored case until participant cases can run."
-    )]
     Participants {
         file: CaseFile,
         procedure: Vec<ProcedureNode<Box<dyn Step>>>,
@@ -264,7 +268,8 @@ impl CaseConfig {
     ///
     /// # Errors
     ///
-    /// Returns an error naming the case and source for participant cases.
+    /// Returns an error naming the case and source if a participant case belongs to another suite or has settings
+    /// the integration runner cannot run; see [`CaseFile::integration_config`].
     pub(super) fn build_test(
         &self, settings: &IntegrationSettings, overrides: &ImageOverrides<'_>,
     ) -> Result<Box<dyn Test>, GenericError> {
@@ -275,11 +280,26 @@ impl CaseConfig {
                 overrides.apply_correctness(&mut config);
                 Ok(Box::new(CorrectnessTestCase::new(self.name.clone(), config)))
             }
-            CaseSchema::Participants { .. } => Err(generic_error!(
-                "Cannot run case '{}' from {}: panoramic cannot yet run cases that declare participants",
-                self.name,
-                self.source.display()
-            )),
+            CaseSchema::Participants { file, procedure } => {
+                if self.suite != TestSuite::Integration {
+                    return Err(generic_error!(
+                        "Cannot run case '{}' from {}: the integration runner runs only integration-suite cases",
+                        self.name,
+                        self.source.display()
+                    ));
+                }
+                let config = file
+                    .integration_config(&self.name, &self.source, procedure)
+                    .map_err(|reason| {
+                        generic_error!(
+                            "Cannot run case '{}' from {}: {}",
+                            self.name,
+                            self.source.display(),
+                            reason
+                        )
+                    })?;
+                Ok(Box::new(IntegrationTestCase::new(config, settings)))
+            }
         }
     }
 }
@@ -396,6 +416,25 @@ mod tests {
         };
         assert_eq!(file.participants["adp"].participant_type, "agent-adp");
         assert!(file.procedure.is_empty());
+    }
+
+    #[test]
+    fn a_participant_case_in_another_suite_cannot_build_an_integration_runner() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_case(dir.path(), "alpha", PARTICIPANT_FIELDS);
+        let mut cases = CaseConfig::load_file(&path).unwrap();
+        cases[0].suite = TestSuite::Correctness;
+        let error = build_runners(&cases, LINUX_RUNTIME, &[])
+            .err()
+            .expect("the case and runner suites must agree");
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "Failed to build test runners:\n  - Cannot run case 'alpha' from {}: \
+                 the integration runner runs only integration-suite cases",
+                path.canonicalize().unwrap().display()
+            )
+        );
     }
 
     #[test]

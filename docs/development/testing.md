@@ -91,7 +91,7 @@ make list-integration-tests  # list available tests
 ### Test case config
 
 Test cases live in `test/integration/cases/` as `config.yaml` files. The runner is **panoramic**
-(`bin/correctness/panoramic/`).
+(`bin/correctness/panoramic/`). A case file must be named `config.yaml`; discovery rejects `config.yml`.
 
 Each test defines a container and a list of high-level assertions. Assertions run sequentially by default but can also
 be configured to run in `parallel`.

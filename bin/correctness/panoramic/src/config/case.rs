@@ -12,7 +12,7 @@ use std::{
 
 use saluki_error::{generic_error, ErrorContext as _, GenericError};
 
-use super::{load_case, IntegrationConfig, MatrixVariants, LINUX_RUNTIME, MAC_RUNTIME, WINDOWS_RUNTIME};
+use super::{parse_case, IntegrationConfig, MatrixVariants, LINUX_RUNTIME, MAC_RUNTIME, WINDOWS_RUNTIME};
 use crate::{
     correctness::{case::CorrectnessTestCase, config::Config as CorrectnessConfig},
     image_override::ImageOverrides,
@@ -107,15 +107,8 @@ impl CaseConfig {
 
         match test_type {
             "integration" => {
-                let config: IntegrationConfig = load_case(config_path)?;
-                if config.name != dir_name {
-                    return Err(generic_error!(
-                        "integration test name '{}' in {} does not match its directory '{}'; rename the directory or the name so they agree",
-                        config.name,
-                        config_path.display(),
-                        dir_name
-                    ));
-                }
+                let config: IntegrationConfig = parse_case(&content, config_path)?;
+                let name = case_name(Some(&config.name), dir_name, config_path)?;
                 if config.runtimes.is_empty() {
                     return Err(generic_error!(
                         "integration test '{}' in {} has empty runtimes list",
@@ -141,7 +134,7 @@ impl CaseConfig {
                     })
                     .collect::<Result<BTreeSet<_>, _>>()?;
                 Ok(vec![Self {
-                    name: config.name.clone(),
+                    name,
                     description: config.description.clone(),
                     suite: TestSuite::Integration,
                     source: config.loaded_from.clone(),
@@ -152,23 +145,25 @@ impl CaseConfig {
                 }])
             }
             "correctness" => {
-                let config = load_case(config_path)?;
-                Ok(vec![Self::from_correctness(dir_name.to_string(), config)])
+                let config = parse_case(&content, config_path)?;
+                let name = case_name(None, dir_name, config_path)?;
+                Ok(vec![Self::from_correctness(name, config)])
             }
             "correctness_matrix" => {
                 // Parse each schema from YAML text; flattening or a Value round-trip changes scalar coercion.
-                let base: CorrectnessConfig = load_case(config_path)?;
+                let base: CorrectnessConfig = parse_case(&content, config_path)?;
                 let matrix: MatrixVariants = serde_saphyr::from_str(&content)
                     .error_context(format!("Failed to parse configuration file: {}", config_path.display()))?;
+                let base_name = case_name(None, dir_name, config_path)?;
                 if matrix.variants.is_empty() {
                     return Err(generic_error!(
                         "correctness_matrix '{}' in {} has no variants defined",
-                        dir_name,
+                        base_name,
                         config_path.display()
                     ));
                 }
                 Ok(matrix
-                    .expand(&base, dir_name)
+                    .expand(&base, &base_name)
                     .into_iter()
                     .map(|(name, config)| Self::from_correctness(name, config))
                     .collect())
@@ -245,6 +240,20 @@ impl CaseConfig {
     /// The parsed file data, for tests that inspect what the loader produced.
     pub(super) fn schema(&self) -> &CaseSchema {
         &self.schema
+    }
+}
+
+/// Names a case after its directory. A declared name must equal the directory name.
+fn case_name(declared: Option<&str>, directory: &str, source: &Path) -> Result<String, GenericError> {
+    match declared {
+        Some(name) if name != directory => Err(generic_error!(
+            "case name '{}' in {} does not match its directory '{}'; rename the directory or the name so they agree",
+            name,
+            source.display(),
+            directory
+        )),
+        Some(name) => Ok(name.to_string()),
+        None => Ok(directory.to_string()),
     }
 }
 
@@ -445,6 +454,18 @@ mod tests {
                 "{message}"
             );
         }
+    }
+
+    #[test]
+    fn a_declared_case_name_must_match_its_directory_and_an_omitted_one_defaults_to_it() {
+        let source = Path::new("cases/dir/config.yaml");
+        assert_eq!(case_name(None, "dir", source).unwrap(), "dir");
+        assert_eq!(case_name(Some("dir"), "dir", source).unwrap(), "dir");
+
+        let message = case_name(Some("other"), "dir", source).unwrap_err().to_string();
+        assert!(message.contains("case name 'other'"), "{message}");
+        assert!(message.contains(&source.display().to_string()), "{message}");
+        assert!(message.contains("does not match its directory 'dir'"), "{message}");
     }
 
     #[test]

@@ -672,38 +672,23 @@ pub(crate) trait LoadedFrom {
     fn set_loaded_from(&mut self, path: PathBuf);
 }
 
-/// Loads one test case configuration and records its canonical file path.
+/// Parses one test case configuration and records `source` as its file path.
 ///
-/// Every case type loads the same way: plain YAML deserialization, then the canonical file path recorded
-/// on the result. Values come from the file alone, so YAML typing is what the case gets: an unquoted
-/// `true` is a boolean and does not stand in for the string `"true"`. Images a case declares can be
-/// replaced after loading; see [`crate::image_override`].
+/// The caller supplies a canonical source path. Every case type uses plain YAML deserialization.
+/// Values come from the text alone: an unquoted `true` is a boolean; `"true"` is a string.
+/// Images a case declares can be replaced after loading; see [`crate::image_override`].
 ///
 /// # Errors
 ///
-/// Returns an error if `config_path` cannot be resolved or read, or if its contents do not
-/// deserialize into `T`.
-fn load_case<T, P>(config_path: P) -> Result<T, GenericError>
+/// Returns an error if `content` does not deserialize into `T`.
+fn parse_case<T>(content: &str, source: &Path) -> Result<T, GenericError>
 where
     T: LoadedFrom + DeserializeOwned,
-    P: AsRef<Path>,
 {
-    let config_path = config_path.as_ref();
+    let mut case: T = serde_saphyr::from_str(content)
+        .error_context(format!("Failed to parse configuration file: {}", source.display()))?;
 
-    // Canonicalizing the file rather than its parent directory keeps a bare `config.yaml` working:
-    // `Path::parent` would hand back an empty path, which does not canonicalize.
-    let config_path = config_path.canonicalize().error_context(format!(
-        "Failed to resolve configuration file: {}",
-        config_path.display()
-    ))?;
-
-    let content = std::fs::read_to_string(&config_path)
-        .error_context(format!("Failed to read configuration file: {}", config_path.display()))?;
-
-    let mut case: T = serde_saphyr::from_str(&content)
-        .error_context(format!("Failed to parse configuration file: {}", config_path.display()))?;
-
-    case.set_loaded_from(config_path);
+    case.set_loaded_from(source.to_path_buf());
 
     Ok(case)
 }
@@ -712,12 +697,13 @@ where
 ///
 /// Each `config.yaml` found in a direct subdirectory must have a top-level `type` field set to
 /// `"integration"`, `"correctness"`, or `"correctness_matrix"`. Multiple test types may coexist
-/// within the same directory. Each matrix variant produces one case.
+/// within the same directory. Each matrix variant produces one case. A `config.yml` file is rejected,
+/// even alongside a `config.yaml`; discovery still loads the latter to report every problem.
 ///
 /// # Errors
 ///
 /// Returns an error if a test directory is missing or cannot be read, a case file fails to load,
-/// or more than one case declares the same name.
+/// a case directory contains `config.yml`, or more than one case declares the same name.
 pub(crate) fn discover_cases(dirs: &[PathBuf]) -> Result<Vec<CaseConfig>, GenericError> {
     let mut cases = Vec::new();
     let mut load_errors = Vec::new();
@@ -743,6 +729,18 @@ pub(crate) fn discover_cases(dirs: &[PathBuf]) -> Result<Vec<CaseConfig>, Generi
                         // a dropped case could make an incomplete run look like a passing run.
                         Err(e) => load_errors.push((config_path, e)),
                     }
+                }
+                // Treat config.yml as an error so a misspelled file cannot silently drop a case from every run.
+                let stray_path = path.join("config.yml");
+                if std::fs::symlink_metadata(&stray_path).is_ok() {
+                    let source = stray_path.canonicalize().unwrap_or_else(|_| stray_path.clone());
+                    load_errors.push((
+                        stray_path,
+                        generic_error!(
+                            "Case file {} is named config.yml; panoramic loads only config.yaml, so rename it",
+                            source.display()
+                        ),
+                    ));
                 }
             }
         }
@@ -850,6 +848,16 @@ mod coverage_inventory;
 pub(crate) mod tests {
     use super::*;
     use crate::correctness::case::CorrectnessTestCase;
+
+    fn load_case<T, P>(path: P) -> Result<T, GenericError>
+    where
+        T: LoadedFrom + DeserializeOwned,
+        P: AsRef<Path>,
+    {
+        let source = path.as_ref().canonicalize()?;
+        let content = std::fs::read_to_string(&source)?;
+        parse_case(&content, &source)
+    }
 
     #[test]
     fn parse_duration_handles_units_and_combinations() {
@@ -1060,6 +1068,93 @@ timeout: 30s
         assert!(
             !message.contains(&good.canonicalize().unwrap().display().to_string()),
             "{message}"
+        );
+    }
+
+    #[test]
+    fn discovery_rejects_a_case_file_named_config_yml() {
+        for with_config_yaml in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let yaml = write_case(
+                dir.path(),
+                "stray",
+                "type: integration\nname: stray\ntimeout: 1s\nprocedure: []\n",
+            );
+            let yml = yaml.with_extension("yml");
+            if with_config_yaml {
+                std::fs::copy(&yaml, &yml).unwrap();
+            } else {
+                std::fs::rename(&yaml, &yml).unwrap();
+            }
+            write_case(
+                dir.path(),
+                "good",
+                "type: integration\nname: good\ntimeout: 1s\nprocedure: []\n",
+            );
+
+            let error = discover_cases(&[dir.path().to_path_buf()])
+                .err()
+                .expect("config.yml must fail discovery");
+            let message = format!("{error:#}");
+            assert_eq!(
+                message,
+                format!(
+                    "Failed to load test cases:\n  - Case file {} is named config.yml; panoramic loads only config.yaml, so rename it",
+                    yml.canonicalize().unwrap().display()
+                ),
+                "with_config_yaml = {with_config_yaml}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn discovery_rejects_a_dangling_config_yml_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let case_dir = dir.path().join("stray");
+        std::fs::create_dir(&case_dir).unwrap();
+        let stray_path = case_dir.join("config.yml");
+        std::os::unix::fs::symlink("missing.yaml", &stray_path).unwrap();
+
+        let error = discover_cases(&[dir.path().to_path_buf()])
+            .err()
+            .expect("a dangling config.yml symlink must fail discovery");
+        assert_eq!(
+            format!("{error:#}"),
+            format!(
+                "Failed to load test cases:\n  - Case file {} is named config.yml; panoramic loads only config.yaml, so rename it",
+                stray_path.display()
+            )
+        );
+    }
+
+    #[test]
+    fn a_stray_config_yml_is_reported_with_the_other_problems_in_its_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let yaml = write_case(dir.path(), "invalid", "type: [");
+        let yml = yaml.with_extension("yml");
+        std::fs::write(&yml, "type: correctness\n").unwrap();
+
+        let error = discover_cases(&[dir.path().to_path_buf()])
+            .err()
+            .expect("both case file problems must fail discovery");
+        let message = format!("{error:#}");
+        let problems: Vec<_> = message.split("\n  - ").collect();
+        assert_eq!(problems.len(), 3, "{message}");
+        assert_eq!(problems[0], "Failed to load test cases:");
+        assert!(
+            problems[1].starts_with(&format!(
+                "Failed to parse config file as YAML: {}",
+                yaml.canonicalize().unwrap().display()
+            )),
+            "{message}"
+        );
+        assert_eq!(
+            problems[2],
+            format!(
+                "Case file {} is named config.yml; panoramic loads only config.yaml, so rename it",
+                yml.canonicalize().unwrap().display()
+            )
         );
     }
 
@@ -2146,11 +2241,9 @@ comparison: {{image: comp}}
     }
 
     #[test]
-    fn loader_records_the_canonical_file_without_resolving_declared_paths() {
-        let dir = tempfile::tempdir_in(".").unwrap();
-        let path = dir.path().join("config.yaml");
-        std::fs::write(
-            &path,
+    fn parser_records_its_source_without_resolving_declared_paths() {
+        let source = Path::new("/cases/relative/config.yaml");
+        let config: CorrectnessConfig = parse_case(
             r#"
 runtime: docker
 analysis_mode: metrics
@@ -2158,16 +2251,16 @@ loaded_from: ignored
 baseline: {image: base}
 comparison: {image: comp}
 "#,
+            source,
         )
         .unwrap();
-        let config: CorrectnessConfig = load_case(&path).unwrap();
-        assert_eq!(config.loaded_from, path.canonicalize().unwrap());
+        assert_eq!(config.loaded_from, source);
         assert_eq!(config.millstone.config_path, PathBuf::from("millstone.yaml"));
         let case = CorrectnessTestCase::new("relative".to_string(), config);
-        assert_eq!(case.case_path(), dir.path().canonicalize().unwrap());
+        assert_eq!(case.case_path(), Path::new("/cases/relative"));
         assert_eq!(
             case.millstone_config().config_path,
-            case.case_path().join("millstone.yaml")
+            Path::new("/cases/relative").join("millstone.yaml")
         );
     }
 

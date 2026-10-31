@@ -10,6 +10,7 @@ mod service_checks;
 mod traces;
 
 /// Types of analysis to perform on collected data
+#[cfg_attr(test, derive(serde::Serialize))]
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AnalysisMode {

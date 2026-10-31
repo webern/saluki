@@ -31,6 +31,16 @@ impl<'de> Deserialize<'de> for HumanDuration {
     }
 }
 
+#[cfg(test)]
+impl serde::Serialize for HumanDuration {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&format!("{:?}", self.0))
+    }
+}
+
 fn parse_duration(s: &str) -> Result<Duration, String> {
     let s = s.trim();
     if s.is_empty() {
@@ -95,6 +105,7 @@ fn parse_duration(s: &str) -> Result<Duration, String> {
 
 /// The deserializable configuration struct that defines an integration test. Not to be confused with
 /// `CorrectnessConfig` which is a different testing modality.
+#[cfg_attr(test, derive(serde::Serialize))]
 #[derive(Clone, Debug, Deserialize)]
 pub struct IntegrationConfig {
     /// Name of the test case.
@@ -210,6 +221,7 @@ pub(crate) const INTAKE_IMAGE_NAME: &str = "intake";
 /// process with no container network, and the `windows` runtime needs a `nat` network that the
 /// sidecar's Linux container cannot share. Runners reject the combination rather than skip it, so a
 /// test that needs the sidecar must declare `runtimes: [linux]`.
+#[cfg_attr(test, derive(serde::Serialize))]
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct IntakeConfig {
     /// Whether to start the intake sidecar.
@@ -227,6 +239,7 @@ pub const INTAKE_NETWORK_ALIAS: &str = "datadog-intake";
 pub const INTAKE_HTTP_PORT: u16 = 2049;
 
 /// Container configuration for a test case.
+#[cfg_attr(test, derive(serde::Serialize))]
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct ContainerConfig {
     /// Optional entrypoint override.
@@ -256,6 +269,7 @@ pub struct ContainerConfig {
 /// A single step in the assertion pipeline.
 ///
 /// Each step is either a single assertion, a parallel block of assertions, or a sequential action.
+#[cfg_attr(test, derive(serde::Serialize))]
 #[derive(Clone, Debug, Deserialize)]
 #[serde(untagged)]
 pub enum AssertionStep {
@@ -271,6 +285,7 @@ pub enum AssertionStep {
 }
 
 /// Configuration for a single action.
+#[cfg_attr(test, derive(serde::Serialize))]
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum ActionConfig {
@@ -375,6 +390,7 @@ fn default_action_timeout() -> HumanDuration {
 }
 
 /// Configuration for a single assertion.
+#[cfg_attr(test, derive(serde::Serialize))]
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "assertion", rename_all = "snake_case")]
 pub enum AssertionConfig {
@@ -524,6 +540,7 @@ impl AssertionConfig {
 }
 
 /// How an [`AssertionConfig::IntakeHasMetric`]'s `tags` must relate to an observed context's normalized tags.
+#[cfg_attr(test, derive(serde::Serialize))]
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum TagMatch {
@@ -535,6 +552,7 @@ pub enum TagMatch {
 }
 
 /// Metric type accepted by an [`AssertionConfig::IntakeHasMetric`].
+#[cfg_attr(test, derive(serde::Serialize))]
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum MetricTypeMatcher {
@@ -545,6 +563,7 @@ pub enum MetricTypeMatcher {
 }
 
 /// Which log streams to check.
+#[cfg_attr(test, derive(serde::Serialize))]
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LogStream {
@@ -558,6 +577,7 @@ pub enum LogStream {
 ///
 /// Exactly one variant is set at deserialization time, so the assertion either requires a specific
 /// status code or rejects a specific status code.
+#[cfg_attr(test, derive(serde::Serialize))]
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HttpStatusMatcher {
@@ -880,6 +900,9 @@ pub fn parse_file_spec(spec: &str) -> Result<(&str, &str), GenericError> {
 
     Ok((parts[0], parts[1]))
 }
+
+#[cfg(test)]
+mod coverage_inventory;
 
 #[cfg(test)]
 mod tests {

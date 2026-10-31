@@ -6,6 +6,7 @@ use crate::config::{deserialize_env_map, CaseConfig};
 use crate::correctness::analysis::AnalysisMode;
 
 /// The container runtime backend to use for a correctness test.
+#[cfg_attr(test, derive(serde::Serialize))]
 #[derive(Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Runtime {
@@ -19,6 +20,7 @@ fn default_otlp_direct_analysis_mode() -> bool {
     false
 }
 
+#[cfg_attr(test, derive(serde::Serialize))]
 #[derive(Clone, Deserialize)]
 pub struct Config {
     /// Whether to omit this case from test discovery. Defaults to `false`.
@@ -64,6 +66,7 @@ pub struct Config {
     pub(crate) loaded_from: PathBuf,
 }
 
+#[cfg_attr(test, derive(serde::Serialize))]
 #[derive(Clone, Deserialize)]
 #[serde(default)]
 pub struct MillstoneConfig {
@@ -98,6 +101,7 @@ impl Default for MillstoneConfig {
     }
 }
 
+#[cfg_attr(test, derive(serde::Serialize))]
 #[derive(Clone, Deserialize)]
 #[serde(default)]
 pub struct DatadogIntakeConfig {
@@ -123,6 +127,7 @@ impl Default for DatadogIntakeConfig {
     }
 }
 
+#[cfg_attr(test, derive(serde::Serialize))]
 #[derive(Clone, Deserialize)]
 pub struct TargetConfig {
     /// Container image to use for target.

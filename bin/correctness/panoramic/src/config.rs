@@ -587,7 +587,7 @@ pub enum HttpStatusMatcher {
     NotEqual(u16),
 }
 
-impl CaseConfig for IntegrationConfig {
+impl LoadedFrom for IntegrationConfig {
     fn set_loaded_from(&mut self, path: PathBuf) {
         self.loaded_from = path;
     }
@@ -665,8 +665,8 @@ where
         .collect()
 }
 
-/// Configuration data that records which file the loader read.
-pub trait CaseConfig {
+/// A deserialized case that records its source file.
+pub(crate) trait LoadedFrom {
     /// Records the canonical configuration file path after deserialization.
     fn set_loaded_from(&mut self, path: PathBuf);
 }
@@ -682,9 +682,9 @@ pub trait CaseConfig {
 ///
 /// Returns an error if `config_path` cannot be resolved or read, or if its contents do not
 /// deserialize into `T`.
-pub fn load_case<T, P>(config_path: P) -> Result<T, GenericError>
+pub(crate) fn load_case<T, P>(config_path: P) -> Result<T, GenericError>
 where
-    T: CaseConfig + DeserializeOwned,
+    T: LoadedFrom + DeserializeOwned,
     P: AsRef<Path>,
 {
     let config_path = config_path.as_ref();

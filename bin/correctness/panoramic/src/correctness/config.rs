@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, path::PathBuf};
 
 use serde::Deserialize;
 
-use crate::config::{deserialize_env_map, CaseConfig};
+use crate::config::{deserialize_env_map, LoadedFrom};
 use crate::correctness::analysis::AnalysisMode;
 
 /// The container runtime backend to use for a correctness test.
@@ -161,7 +161,7 @@ pub struct TargetConfig {
     pub env: BTreeMap<String, String>,
 }
 
-impl CaseConfig for Config {
+impl LoadedFrom for Config {
     fn set_loaded_from(&mut self, path: PathBuf) {
         self.loaded_from = path;
     }

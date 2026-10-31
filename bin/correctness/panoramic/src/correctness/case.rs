@@ -122,10 +122,6 @@ impl Test for CorrectnessTestCase {
         TestSuite::Correctness
     }
 
-    fn description(&self) -> Option<String> {
-        None
-    }
-
     fn case_path(&self) -> PathBuf {
         self.config.loaded_from.parent().unwrap_or(Path::new("")).to_path_buf()
     }

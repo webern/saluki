@@ -60,7 +60,7 @@ pub(crate) struct CaseConfig {
 }
 
 /// Parsed case data, with each correctness matrix variant expanded into its own case.
-enum CaseSchema {
+pub(super) enum CaseSchema {
     Integration(IntegrationConfig),
     Correctness(CorrectnessConfig),
 }
@@ -171,7 +171,7 @@ impl CaseConfig {
     }
 
     /// Scopes integration cases to their declared OSes; enabled correctness cases accept every runtime.
-    pub(super) fn is_eligible_for(&self, runtime: &str) -> bool {
+    pub(crate) fn is_eligible_for(&self, runtime: &str) -> bool {
         if self.disabled {
             return false;
         }
@@ -194,8 +194,6 @@ impl CaseConfig {
     }
 }
 
-// TODO: remove the dead_code allowance once list and run read case metadata from CaseConfig.
-#[allow(dead_code)]
 impl CaseConfig {
     pub(crate) fn name(&self) -> &str {
         &self.name
@@ -209,26 +207,22 @@ impl CaseConfig {
         self.suite
     }
 
+    // TODO: remove the dead_code allowance once duplicate-name load errors name both source files.
+    #[allow(dead_code)]
     pub(crate) fn source(&self) -> &Path {
         &self.source
-    }
-
-    pub(crate) fn case_dir(&self) -> &Path {
-        self.source
-            .parent()
-            .expect("a canonical config file path has a parent directory")
     }
 
     pub(crate) fn timeout(&self) -> Duration {
         self.timeout
     }
+}
 
-    pub(crate) fn subject_os(&self) -> &BTreeSet<Os> {
-        &self.subject_os
-    }
-
-    pub(crate) fn disabled(&self) -> bool {
-        self.disabled
+#[cfg(test)]
+impl CaseConfig {
+    /// The parsed file data, for tests that inspect what the loader produced.
+    pub(super) fn schema(&self) -> &CaseSchema {
+        &self.schema
     }
 }
 
@@ -237,7 +231,7 @@ mod tests {
     use std::fs;
 
     use super::*;
-    use crate::config::default_host_runtime;
+    use crate::config::{build_runners, default_host_runtime};
 
     const CORRECTNESS_FIELDS: &str =
         "runtime: docker\nanalysis_mode: metrics\nbaseline: {image: 'base:file'}\ncomparison: {image: 'comp:file'}\n";
@@ -265,11 +259,11 @@ mod tests {
         assert_eq!(case.description(), Some("A portable case"));
         assert_eq!(case.timeout(), Duration::from_secs(7));
         assert_eq!(case.suite(), TestSuite::Integration);
-        assert_eq!(case.subject_os(), &BTreeSet::from([Os::Linux, Os::MacOs]));
-        assert!(!case.disabled());
+        assert_eq!(case.subject_os, BTreeSet::from([Os::Linux, Os::MacOs]));
+        assert!(!case.disabled);
         let canonical = path.canonicalize().unwrap();
         assert_eq!(case.source(), canonical);
-        assert_eq!(case.case_dir(), canonical.parent().unwrap());
+        assert_eq!(case.source.parent().unwrap(), canonical.parent().unwrap());
     }
 
     #[test]
@@ -284,8 +278,8 @@ mod tests {
         assert_eq!(case.timeout(), CORRECTNESS_TIMEOUT);
         assert_eq!(case.timeout(), Duration::from_mins(20));
         assert_eq!(case.suite(), TestSuite::Correctness);
-        assert_eq!(case.subject_os(), &BTreeSet::from([Os::Linux]));
-        assert!(!case.disabled());
+        assert_eq!(case.subject_os, BTreeSet::from([Os::Linux]));
+        assert!(!case.disabled);
     }
 
     #[test]
@@ -304,16 +298,14 @@ mod tests {
             ["matrix/second", "matrix/first"]
         );
         let source = path.canonicalize().unwrap();
-        let overrides = ImageOverrides::new(&[]);
-        let settings = IntegrationSettings::new(LINUX_RUNTIME, &overrides);
-        for (case, variant) in cases.iter().zip(["second", "first"]) {
+        let runners = build_runners(&cases, LINUX_RUNTIME, &[]).unwrap();
+        for ((case, runner), variant) in cases.iter().zip(&runners).zip(["second", "first"]) {
             assert_eq!(case.source(), source);
             assert_eq!(case.timeout(), CORRECTNESS_TIMEOUT);
             assert_eq!(case.suite(), TestSuite::Correctness);
             assert_eq!(case.description(), None);
-            assert_eq!(case.subject_os(), &BTreeSet::from([Os::Linux]));
-            assert!(!case.disabled());
-            let runner = case.build_test(&settings, &overrides);
+            assert_eq!(case.subject_os, BTreeSet::from([Os::Linux]));
+            assert!(!case.disabled);
             assert_eq!(runner.name(), format!("matrix/{variant}"));
             assert_eq!(runner.case_path(), source.parent().unwrap());
 
@@ -348,7 +340,7 @@ mod tests {
             let cases = CaseConfig::load_file(&path).unwrap();
             assert_eq!(cases.iter().map(CaseConfig::name).collect::<Vec<_>>(), names);
             for case in cases {
-                assert!(case.disabled());
+                assert!(case.disabled);
                 for runtime in [LINUX_RUNTIME, MAC_RUNTIME, WINDOWS_RUNTIME, "unknown"] {
                     assert!(!case.is_eligible_for(runtime), "{kind} under {runtime}");
                 }
@@ -373,7 +365,7 @@ mod tests {
         let correctness = CaseConfig::load_file(&correctness).unwrap();
         assert_eq!(integration.len(), 1);
         assert_eq!(correctness.len(), 1);
-        assert_eq!(integration[0].subject_os(), &BTreeSet::from([Os::Linux, Os::Windows]));
+        assert_eq!(integration[0].subject_os, BTreeSet::from([Os::Linux, Os::Windows]));
         for (runtime, eligible) in [
             (LINUX_RUNTIME, true),
             (MAC_RUNTIME, false),
@@ -411,10 +403,8 @@ mod tests {
         let case = &cases[0];
         assert_eq!(case.source(), path.canonicalize().unwrap());
         assert_eq!(case.name(), "case");
-        let overrides = ImageOverrides::new(&[]);
-        let settings = IntegrationSettings::new(LINUX_RUNTIME, &overrides);
-        let runner = case.build_test(&settings, &overrides);
-        assert_eq!(runner.case_path(), path.canonicalize().unwrap().parent().unwrap());
+        let runners = build_runners(&cases, LINUX_RUNTIME, &[]).unwrap();
+        assert_eq!(runners[0].case_path(), path.canonicalize().unwrap().parent().unwrap());
     }
 
     #[test]
@@ -423,20 +413,16 @@ mod tests {
         let path = write_case(dir.path(), "case", &format!("type: correctness\n{CORRECTNESS_FIELDS}"));
         let cases = CaseConfig::load_file(&path).unwrap();
         assert_eq!(cases.len(), 1);
-        let case = &cases[0];
         let entries = ["baseline=base:override".parse().unwrap()];
-        let overrides = ImageOverrides::new(&entries);
-        let settings = IntegrationSettings::new(LINUX_RUNTIME, &overrides);
-        let overridden = case.build_test(&settings, &overrides);
-        let declared = case.build_test(&settings, &ImageOverrides::new(&[]));
-        assert_eq!(overridden.images()["baseline"], "base:override");
-        assert_eq!(declared.images()["baseline"], "base:file");
+        let overridden = build_runners(&cases, LINUX_RUNTIME, &entries).unwrap();
+        let declared = build_runners(&cases, LINUX_RUNTIME, &[]).unwrap();
+        assert_eq!(overridden[0].images()["baseline"], "base:override");
+        assert_eq!(declared[0].images()["baseline"], "base:file");
     }
 
     #[test]
     fn facade_metadata_matches_the_built_runner_for_every_checked_in_case() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-        let overrides = ImageOverrides::new(&[]);
         for suite in ["integration", "correctness"] {
             let mut loaded = 0;
             let mut built = 0;
@@ -461,24 +447,18 @@ mod tests {
                                 .collect(),
                             None => BTreeSet::from([Os::from_runtime(default_host_runtime()).unwrap()]),
                         };
-                        assert_eq!(case.subject_os(), &declared_os, "{}", path.display());
+                        assert_eq!(case.subject_os, declared_os, "{}", path.display());
                     }
                     for runtime in [LINUX_RUNTIME, MAC_RUNTIME, WINDOWS_RUNTIME] {
                         if !case.is_eligible_for(runtime) {
                             continue;
                         }
-                        let settings = IntegrationSettings::new(runtime, &overrides);
-                        let runner = case.build_test(&settings, &overrides);
+                        let runners = build_runners(std::slice::from_ref(&case), runtime, &[]).unwrap();
+                        let runner = &runners[0];
                         assert_eq!(case.name(), runner.name(), "{} under {runtime}", path.display());
                         assert_eq!(case.suite(), runner.suite(), "{} under {runtime}", path.display());
                         assert_eq!(
-                            case.description(),
-                            runner.description().as_deref(),
-                            "{} under {runtime}",
-                            path.display()
-                        );
-                        assert_eq!(
-                            case.case_dir(),
+                            case.source.parent().unwrap(),
                             runner.case_path(),
                             "{} under {runtime}",
                             path.display()

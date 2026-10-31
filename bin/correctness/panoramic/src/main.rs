@@ -34,7 +34,7 @@ mod deadline;
 mod dynamic_vars;
 mod integration;
 mod mounts;
-use self::config::{default_host_runtime, discover_tests};
+use self::config::{build_runners, case::CaseConfig, default_host_runtime, discover_in_scope};
 
 mod events;
 use self::events::create_event_channel;
@@ -135,13 +135,12 @@ fn initialize_logging(log_level: LogLevel) {
 }
 
 /// Splits the `-t` selection into the tests that matched and the names that matched nothing.
-fn resolve_selection(requested: &str, discovered: &[Box<dyn test::Test>]) -> (Vec<String>, Vec<String>) {
-    let discovered: Vec<String> = discovered.iter().map(|t| t.name()).collect();
+fn resolve_selection(requested: &str, discovered: &[CaseConfig]) -> (Vec<String>, Vec<String>) {
     let mut selected = Vec::new();
     let mut unmatched = Vec::new();
 
     for name in requested.split(',').map(str::trim).filter(|n| !n.is_empty()) {
-        if discovered.iter().any(|d| d == name) {
+        if discovered.iter().any(|case| case.name() == name) {
             selected.push(name.to_string());
         } else {
             unmatched.push(name.to_string());
@@ -175,8 +174,11 @@ async fn run_tests(cmd: cli::RunCommand, use_tui: bool) -> ExitCode {
         .runtime
         .clone()
         .unwrap_or_else(|| default_host_runtime().to_string());
-    let test_cases = match discover_tests(&cmd.test_dirs, &integration_runtime, &cmd.image_overrides) {
-        Ok(tests) => tests,
+    let (cases, runners) = match discover_in_scope(&cmd.test_dirs, &integration_runtime).and_then(|cases| {
+        let runners = build_runners(&cases, &integration_runtime, &cmd.image_overrides)?;
+        Ok((cases, runners))
+    }) {
+        Ok(pair) => pair,
         Err(e) => {
             if use_tui {
                 eprintln!("Failed to discover tests: {}", e);
@@ -187,7 +189,7 @@ async fn run_tests(cmd: cli::RunCommand, use_tui: bool) -> ExitCode {
         }
     };
 
-    if test_cases.is_empty() {
+    if cases.is_empty() {
         let dirs_str: Vec<_> = cmd.test_dirs.iter().map(|d| d.display().to_string()).collect();
         let msg = format!("No test cases found in: {}", dirs_str.join(", "));
         if use_tui {
@@ -202,7 +204,7 @@ async fn run_tests(cmd: cli::RunCommand, use_tui: bool) -> ExitCode {
     // selection that leaves nothing to run, is an error rather than a green run of zero tests.
     let selected_tests = match cmd.tests.as_deref() {
         Some(requested) => {
-            let (selected, unmatched) = resolve_selection(requested, &test_cases);
+            let (selected, unmatched) = resolve_selection(requested, &cases);
             if !unmatched.is_empty() {
                 let msg = format!(
                     "No test matches: {}. Run 'panoramic list' to see the tests in scope for runtime '{}'.",
@@ -230,10 +232,16 @@ async fn run_tests(cmd: cli::RunCommand, use_tui: bool) -> ExitCode {
         None => None,
     };
     // Register only the selected tests so the runner and `run.json` share one selection.
-    let test_cases: Vec<Box<dyn test::Test>> = match selected_tests {
-        Some(names) => test_cases.into_iter().filter(|t| names.contains(&t.name())).collect(),
-        None => test_cases,
-    };
+    assert_eq!(cases.len(), runners.len(), "one runner per case");
+    let (cases, runners): (Vec<_>, Vec<_>) = cases
+        .into_iter()
+        .zip(runners)
+        .filter(|(case, _)| {
+            selected_tests
+                .as_ref()
+                .is_none_or(|names| names.iter().any(|name| name == case.name()))
+        })
+        .unzip();
 
     // Create log directory.
     let log_dir = match std::path::absolute(cmd.log_dir()) {
@@ -260,7 +268,7 @@ async fn run_tests(cmd: cli::RunCommand, use_tui: bool) -> ExitCode {
             integration_runtime.clone(),
             cmd.parallelism.get(),
             log_dir.clone(),
-            test_cases.iter().map(|t| t.name()).collect(),
+            cases.iter().map(|case| case.name().to_string()).collect(),
         ),
         cmd.fail_fast,
     );
@@ -270,7 +278,7 @@ async fn run_tests(cmd: cli::RunCommand, use_tui: bool) -> ExitCode {
 
     // Spawn kind cluster setup in the background so non-kind tests start immediately.
     // Kind tests will wait on `kind_rx` before doing any work.
-    let kind_images = collect_kind_images(&test_cases);
+    let kind_images = collect_kind_images(&runners);
     let kind_lifecycle_slot = std::sync::Arc::new(Mutex::new(None::<KindLifecycle>));
     let kind_rx = if kind_images.is_empty() {
         None
@@ -298,8 +306,8 @@ async fn run_tests(cmd: cli::RunCommand, use_tui: bool) -> ExitCode {
     if let Some(ref rx) = kind_rx {
         registry = registry.with_kind_ready(rx.clone());
     }
-    for tc in test_cases {
-        registry.register(tc).expect("failure to register test");
+    for runner in runners {
+        registry.register(runner).expect("failure to register test");
     }
 
     // The consume loop cancels this on the first interrupt.
@@ -435,8 +443,8 @@ async fn list_tests(cmd: cli::ListCommand) -> ExitCode {
         .runtime
         .clone()
         .unwrap_or_else(|| default_host_runtime().to_string());
-    let test_cases = match discover_tests(&cmd.test_dirs, &integration_runtime, &[]) {
-        Ok(tests) => tests,
+    let cases = match discover_in_scope(&cmd.test_dirs, &integration_runtime) {
+        Ok(cases) => cases,
         Err(e) => {
             error!("Failed to discover tests: {}", e);
             return ExitCode::from(2);
@@ -444,49 +452,78 @@ async fn list_tests(cmd: cli::ListCommand) -> ExitCode {
     };
 
     if cmd.json {
-        let mut test_map = BTreeMap::new();
-        for test in &test_cases {
-            test_map.insert(
-                test.name(),
-                serde_json::json!({
-                    "type": test.suite(),
-                    "runtime": test.runtime(),
-                    "timeout": test.timeout(),
-                    "images": test.images(),
-                }),
-            );
-        }
+        let runners = match build_runners(&cases, &integration_runtime, &[]) {
+            Ok(runners) => runners,
+            Err(e) => {
+                error!("Failed to discover tests: {}", e);
+                return ExitCode::from(2);
+            }
+        };
         println!(
             "{}",
-            serde_json::to_string_pretty(&test_map).expect("Unable to serialize a map of the tests")
+            serde_json::to_string_pretty(&listing(&cases, &runners)).expect("Unable to serialize a map of the tests")
         )
     } else {
-        if test_cases.is_empty() {
+        if cases.is_empty() {
             info!("No test cases found.");
             return ExitCode::SUCCESS;
         }
 
-        info!("Discovered {} test case(s).", test_cases.len());
+        info!("Discovered {} test case(s).", cases.len());
 
         println!();
-        println!("Available tests ({}):", test_cases.len());
+        println!("Available tests ({}):", cases.len());
         println!();
 
-        for test_case in &test_cases {
-            println!("  {}", test_case.name());
-            if let Some(description) = test_case.description() {
+        for case in &cases {
+            println!("  {}", case.name());
+            if let Some(description) = case.description() {
                 println!("    {}", description);
             }
-            println!("    Timeout: {:?}", test_case.timeout());
+            println!("    Timeout: {:?}", case.timeout());
             println!();
         }
     }
     ExitCode::SUCCESS
 }
 
+/// Lists each case's suite and timeout, with the runtime and images its runner uses.
+fn listing(cases: &[CaseConfig], runners: &[Box<dyn test::Test>]) -> BTreeMap<String, serde_json::Value> {
+    debug_assert_eq!(cases.len(), runners.len());
+    cases
+        .iter()
+        .zip(runners)
+        .map(|(case, runner)| {
+            (
+                case.name().to_string(),
+                serde_json::json!({
+                    "type": case.suite(),
+                    "runtime": runner.runtime(),
+                    "timeout": case.timeout(),
+                    "images": runner.images(),
+                }),
+            )
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
+    use crate::config::{DEFAULT_WINDOWS_TARGET_IMAGE, LINUX_RUNTIME, WINDOWS_RUNTIME};
+
+    const CORRECTNESS_FIELDS: &str =
+        "runtime: docker\nanalysis_mode: metrics\nbaseline: {image: 'base:declared'}\ncomparison: {image: 'comp:declared'}\n";
+
+    fn write_case(root: &std::path::Path, name: &str, yaml: &str) -> PathBuf {
+        let dir = root.join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.yaml");
+        std::fs::write(&path, yaml).unwrap();
+        path
+    }
 
     #[test]
     fn log_level_scopes_the_selected_level_to_first_party_crates() {
@@ -544,8 +581,102 @@ comparison: {image: comp}
     }
 
     #[test]
+    fn selection_matches_loaded_case_names_including_matrix_variants() {
+        let dir = tempfile::tempdir().unwrap();
+        write_case(
+            dir.path(),
+            "directory",
+            "type: integration\nname: integration\ntimeout: 7s\nruntimes: [linux]\nprocedure: []\n",
+        );
+        write_case(
+            dir.path(),
+            "matrix",
+            &format!("type: correctness_matrix\n{CORRECTNESS_FIELDS}variants: [{{name: second}}, {{name: first}}]\n"),
+        );
+        let cases = discover_in_scope(&[dir.path().to_path_buf()], LINUX_RUNTIME).unwrap();
+        let (selected, unmatched) = resolve_selection("matrix/first, missing, integration", &cases);
+        assert_eq!(selected, ["matrix/first", "integration"]);
+        assert_eq!(unmatched, ["missing"]);
+    }
+
+    #[tokio::test]
+    async fn selection_rejects_disabled_cases_and_cases_for_another_runtime() {
+        let dir = tempfile::tempdir().unwrap();
+        write_case(
+            dir.path(),
+            "windows-only",
+            "type: integration\nname: windows-only\ntimeout: 7s\nruntimes: [windows]\nprocedure: []\n",
+        );
+        write_case(
+            dir.path(),
+            "linux-only",
+            "type: integration\nname: linux-only\ntimeout: 7s\nruntimes: [linux]\nprocedure: []\n",
+        );
+        write_case(
+            dir.path(),
+            "disabled",
+            &format!("type: correctness\ndisabled: true\n{CORRECTNESS_FIELDS}"),
+        );
+        for name in ["linux-only", "disabled"] {
+            let cli = Cli::try_parse_from([
+                "panoramic",
+                "run",
+                "-d",
+                dir.path().to_str().unwrap(),
+                "--runtime",
+                "windows",
+                "-t",
+                name,
+            ])
+            .unwrap();
+            let Command::Run(cmd) = cli.command else {
+                panic!("expected run")
+            };
+            assert_eq!(
+                run_tests(cmd, false).await,
+                ExitCode::from(EXIT_NO_TESTS_SELECTED),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn listing_reports_suite_runtime_timeout_and_declared_images() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_case(
+            dir.path(),
+            "correctness",
+            &format!("type: correctness\n{CORRECTNESS_FIELDS}"),
+        );
+        let cases = CaseConfig::load_file(&path).unwrap();
+        let runners = build_runners(&cases, LINUX_RUNTIME, &[]).unwrap();
+        let entries = listing(&cases, &runners);
+        assert_eq!(entries.len(), 1);
+        let entry = &entries["correctness"];
+        assert_eq!(entry["type"], "correctness");
+        assert_eq!(entry["runtime"], "docker");
+        assert_eq!(entry["timeout"], serde_json::json!({"secs": 1200, "nanos": 0}));
+        assert_eq!(entry["images"]["baseline"], "base:declared");
+
+        let path = write_case(
+            dir.path(),
+            "integration",
+            "type: integration\nname: integration\ntimeout: 7s\nruntimes: [windows]\nprocedure: []\n",
+        );
+        let cases = CaseConfig::load_file(&path).unwrap();
+        let runners = build_runners(&cases, WINDOWS_RUNTIME, &[]).unwrap();
+        let entries = listing(&cases, &runners);
+        assert_eq!(entries.len(), 1);
+        let entry = &entries["integration"];
+        assert_eq!(entry["type"], "integration");
+        assert_eq!(entry["runtime"], "windows");
+        assert_eq!(entry["timeout"], serde_json::json!({"secs": 7, "nanos": 0}));
+        assert_eq!(entry["images"]["container"], DEFAULT_WINDOWS_TARGET_IMAGE);
+    }
+
+    #[test]
     fn selection_reports_names_that_match_nothing() {
-        let discovered: Vec<Box<dyn test::Test>> = Vec::new();
+        let discovered: Vec<CaseConfig> = Vec::new();
         let (selected, unmatched) = resolve_selection("no-such-test", &discovered);
         assert!(selected.is_empty());
         assert_eq!(unmatched, vec!["no-such-test".to_string()]);

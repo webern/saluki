@@ -104,10 +104,6 @@ impl Test for IntegrationTestCase {
         TestSuite::Integration
     }
 
-    fn description(&self) -> Option<String> {
-        self.config.description.clone()
-    }
-
     fn case_path(&self) -> PathBuf {
         self.config.loaded_from.parent().unwrap_or(Path::new("")).to_path_buf()
     }

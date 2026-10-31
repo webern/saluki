@@ -1290,10 +1290,6 @@ pub(crate) mod test_support {
             TestSuite::Integration
         }
 
-        fn description(&self) -> Option<String> {
-            None
-        }
-
         fn case_path(&self) -> PathBuf {
             PathBuf::from("/cases").join(&self.name)
         }

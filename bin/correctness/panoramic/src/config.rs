@@ -14,7 +14,7 @@ use serde_json::Value;
 
 use self::case::CaseConfig;
 use crate::correctness::config::Config as CorrectnessConfig;
-use crate::image_override::ImageOverrides;
+use crate::image_override::{ImageOverride, ImageOverrides};
 use crate::integration::IntegrationSettings;
 use crate::test::Test;
 
@@ -708,26 +708,21 @@ where
     Ok(case)
 }
 
-/// Discover all test cases across one or more directories.
+/// Discovers every case in the directories, sorted by name, including disabled cases and cases for any runtime.
 ///
 /// Each `config.yaml` found in a direct subdirectory must have a top-level `type` field set to
-/// `"integration"`, `"correctness"`, or `"correctness_matrix"`. Files with a missing or unknown
-/// `type` cause a panic. Multiple test types may coexist freely within the same directory.
-///
-/// `integration_runtime` scopes integration-test discovery to a single runtime: an integration
-/// test is included if and only if its `runtimes:` list contains this value. Correctness tests
-/// are unaffected by runtime scoping, but cases marked `disabled: true` are omitted. Image
-/// overrides apply across this entire scope, before the caller selects tests by name.
+/// `"integration"`, `"correctness"`, or `"correctness_matrix"`. Multiple test types may coexist
+/// within the same directory. Each matrix variant produces one case.
 ///
 /// # Errors
 ///
-/// Returns an error if a test directory cannot be read or an image override is duplicate or unmatched.
-pub fn discover_tests(
-    dirs: &[PathBuf], integration_runtime: &str, image_overrides: &[crate::image_override::ImageOverride],
-) -> Result<Vec<Box<dyn Test>>, GenericError> {
-    let overrides = ImageOverrides::new(image_overrides);
-    let settings = IntegrationSettings::new(integration_runtime, &overrides);
-    let mut tests: Vec<Box<dyn Test>> = Vec::new();
+/// Returns an error if a test directory is missing or cannot be read.
+///
+/// # Panics
+///
+/// Panics if a case file fails to load, including a missing or unknown `type`.
+pub(crate) fn discover_cases(dirs: &[PathBuf]) -> Result<Vec<CaseConfig>, GenericError> {
+    let mut cases = Vec::new();
 
     for base_path in dirs {
         if !base_path.is_dir() {
@@ -745,12 +740,7 @@ pub fn discover_tests(
                 let config_path = path.join("config.yaml");
                 if config_path.exists() {
                     match CaseConfig::load_file(&config_path) {
-                        Ok(cases) => tests.extend(
-                            cases
-                                .iter()
-                                .filter(|case| case.is_eligible_for(integration_runtime))
-                                .map(|case| case.build_test(&settings, &overrides)),
-                        ),
+                        Ok(loaded) => cases.extend(loaded),
                         Err(e) => {
                             // Previously we had a warning here that cannot be seen in TUI-mode. It is better to fail
                             // loudly and fast when we have a bad test configuration than to falsely believe our test is
@@ -764,10 +754,37 @@ pub fn discover_tests(
     }
 
     // Sort by name for deterministic ordering.
-    tests.sort_by_key(|a| a.name());
+    cases.sort_by(|a, b| a.name().cmp(b.name()));
 
-    overrides.validate(&tests)?;
-    Ok(tests)
+    Ok(cases)
+}
+
+/// Discovers enabled cases eligible for `integration_runtime`, sorted by name.
+pub(crate) fn discover_in_scope(dirs: &[PathBuf], integration_runtime: &str) -> Result<Vec<CaseConfig>, GenericError> {
+    let mut cases = discover_cases(dirs)?;
+    cases.retain(|case| case.is_eligible_for(integration_runtime));
+    Ok(cases)
+}
+
+/// Builds integration and correctness runners, one per case in the input order.
+///
+/// Validates image overrides across every supplied case. Eligibility is the caller's responsibility:
+/// pass the cases intended to run or list.
+///
+/// # Errors
+///
+/// Returns an error if an image override is duplicate or unmatched.
+pub(crate) fn build_runners<'a>(
+    cases: impl IntoIterator<Item = &'a CaseConfig>, integration_runtime: &str, image_overrides: &[ImageOverride],
+) -> Result<Vec<Box<dyn Test>>, GenericError> {
+    let overrides = ImageOverrides::new(image_overrides);
+    let settings = IntegrationSettings::new(integration_runtime, &overrides);
+    let runners = cases
+        .into_iter()
+        .map(|case| case.build_test(&settings, &overrides))
+        .collect::<Vec<_>>();
+    overrides.validate(&runners)?;
+    Ok(runners)
 }
 
 /// Parse a port specification (for example, "8125/udp") into port number and protocol.
@@ -957,6 +974,77 @@ timeout: 30s
         assert_eq!(timeout.0, Duration::from_secs(30));
     }
 
+    fn discover_runners(
+        dirs: &[PathBuf], runtime: &str, image_overrides: &[ImageOverride],
+    ) -> Result<Vec<Box<dyn Test>>, GenericError> {
+        let cases = discover_in_scope(dirs, runtime)?;
+        build_runners(&cases, runtime, image_overrides)
+    }
+
+    #[test]
+    fn discovery_returns_disabled_and_other_runtime_cases_sorted_by_name() {
+        let windows = create_test_case_dir(
+            "windows-only",
+            "type: integration\nname: windows-only\ntimeout: 1s\nruntimes: [windows]\nprocedure: []\n",
+        );
+        let disabled = create_test_case_dir(
+            "disabled",
+            "type: correctness\ndisabled: true\nruntime: docker\nanalysis_mode: metrics\nbaseline: {image: base}\ncomparison: {image: comp}\n",
+        );
+        let matrix = create_test_case_dir(
+            "matrix",
+            "type: correctness_matrix\nruntime: docker\nanalysis_mode: metrics\nbaseline: {image: base}\ncomparison: {image: comp}\nvariants: [{name: second}, {name: first}]\n",
+        );
+        let cases = discover_cases(&[
+            windows.path().to_path_buf(),
+            matrix.path().to_path_buf(),
+            disabled.path().to_path_buf(),
+        ])
+        .unwrap();
+        assert_eq!(
+            cases.iter().map(CaseConfig::name).collect::<Vec<_>>(),
+            ["disabled", "matrix/first", "matrix/second", "windows-only"]
+        );
+        assert_eq!(
+            cases
+                .iter()
+                .filter(|case| case.is_eligible_for(LINUX_RUNTIME))
+                .map(CaseConfig::name)
+                .collect::<Vec<_>>(),
+            ["matrix/first", "matrix/second"]
+        );
+    }
+
+    #[test]
+    fn runners_follow_the_order_of_the_cases_they_are_built_from() {
+        let integration = create_test_case_dir(
+            "integration",
+            "type: integration\nname: integration\ntimeout: 1s\nruntimes: [linux]\nprocedure: []\n",
+        );
+        let correctness = create_test_case_dir(
+            "correctness",
+            "type: correctness\nruntime: docker\nanalysis_mode: metrics\nbaseline: {image: base}\ncomparison: {image: comp}\n",
+        );
+        let mut cases = discover_cases(&[integration.path().to_path_buf(), correctness.path().to_path_buf()]).unwrap();
+        cases.reverse();
+        let entries = ["baseline=base:override".parse().unwrap()];
+        let runners = build_runners(&cases, LINUX_RUNTIME, &entries).unwrap();
+        assert_eq!(runners.len(), cases.len());
+        assert_eq!(
+            cases.iter().map(CaseConfig::name).collect::<Vec<_>>(),
+            ["integration", "correctness"]
+        );
+        for (case, runner) in cases.iter().zip(&runners) {
+            assert_eq!(runner.name(), case.name());
+        }
+        assert_eq!(
+            runners[0].images(),
+            BTreeMap::from([("container", DEFAULT_LINUX_TARGET_IMAGE.to_string())])
+        );
+        assert_eq!(runners[1].images()["baseline"], "base:override");
+        assert_eq!(runners[1].images()["comparison"], "comp");
+    }
+
     #[test]
     fn windows_runtime_is_valid_for_integration_discovery() {
         let base_dir = create_test_case_dir(
@@ -970,11 +1058,11 @@ procedure: []
 "#,
         );
 
-        let tests = discover_tests(&[base_dir.path().to_path_buf()], "windows", &[]).unwrap();
+        let runners = discover_runners(&[base_dir.path().to_path_buf()], "windows", &[]).unwrap();
 
-        assert_eq!(tests.len(), 1);
-        assert_eq!(tests[0].name(), "windows-smoke");
-        assert_eq!(tests[0].runtime(), "windows");
+        assert_eq!(runners.len(), 1);
+        assert_eq!(runners[0].name(), "windows-smoke");
+        assert_eq!(runners[0].runtime(), "windows");
     }
 
     #[test]
@@ -990,8 +1078,8 @@ procedure: []
 "#,
         );
 
-        let tests = discover_tests(&[base_dir.path().to_path_buf()], "windows", &[]).unwrap();
-        let images = tests[0].images();
+        let runners = discover_runners(&[base_dir.path().to_path_buf()], "windows", &[]).unwrap();
+        let images = runners[0].images();
 
         assert_eq!(images.get("container"), Some(&DEFAULT_WINDOWS_TARGET_IMAGE.to_string()));
     }
@@ -1009,8 +1097,8 @@ procedure: []
 "#,
         );
 
-        let tests = discover_tests(&[base_dir.path().to_path_buf()], "linux", &[]).unwrap();
-        let images = tests[0].images();
+        let runners = discover_runners(&[base_dir.path().to_path_buf()], "linux", &[]).unwrap();
+        let images = runners[0].images();
 
         assert_eq!(images.get("container"), Some(&DEFAULT_LINUX_TARGET_IMAGE.to_string()));
     }
@@ -1037,13 +1125,13 @@ variants:
 "#,
         );
 
-        let tests = discover_tests(&[base_dir.path().to_path_buf()], "linux", &[]).unwrap();
+        let runners = discover_runners(&[base_dir.path().to_path_buf()], "linux", &[]).unwrap();
 
-        assert_eq!(tests.len(), 2);
+        assert_eq!(runners.len(), 2);
         // Canonicalized, because the loader canonicalizes the config path it derives this from.
         let case_dir = base_dir.path().join("dsd-matrix").canonicalize().unwrap();
-        for test in &tests {
-            assert_eq!(test.case_path(), case_dir, "case path for '{}'", test.name());
+        for runner in &runners {
+            assert_eq!(runner.case_path(), case_dir, "case path for '{}'", runner.name());
         }
     }
 
@@ -1710,9 +1798,9 @@ variants: [{name: one, env: {QUOTED: "true"}}]
         let ordinary: CorrectnessConfig = load_case(&path).unwrap();
         let matrix: MatrixVariants = serde_saphyr::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         let expanded = matrix.expand(&ordinary, "scalars");
-        let cases = discover_tests(&[dir.path().to_path_buf()], LINUX_RUNTIME, &[]).unwrap();
-        assert_eq!(cases.len(), 1);
-        assert_eq!(cases[0].name(), "scalars/one");
+        let runners = discover_runners(&[dir.path().to_path_buf()], LINUX_RUNTIME, &[]).unwrap();
+        assert_eq!(runners.len(), 1);
+        assert_eq!(runners[0].name(), "scalars/one");
         for config in [&ordinary, &expanded[0].1] {
             assert_eq!(config.baseline.command, ["sleep", "10", "01", "1e3", "true", "1.50"]);
             assert_eq!(config.baseline.entrypoint, ["env", "20", "02", "2e3", "false", "2.50"]);
@@ -1817,22 +1905,22 @@ comparison: {image: comp}
             (MAC_RUNTIME, None),
             ("unknown", None),
         ] {
-            let cases = discover_tests(&dirs, runtime, &[]).unwrap();
-            assert_eq!(cases[0].name(), "correctness");
-            assert_eq!(cases[0].runtime(), "docker");
-            assert_eq!(cases.len(), if runtime == "unknown" { 1 } else { 2 });
+            let runners = discover_runners(&dirs, runtime, &[]).unwrap();
+            assert_eq!(runners[0].name(), "correctness");
+            assert_eq!(runners[0].runtime(), "docker");
+            assert_eq!(runners.len(), if runtime == "unknown" { 1 } else { 2 });
             if runtime != "unknown" {
-                assert_eq!(cases[1].runtime(), runtime);
+                assert_eq!(runners[1].runtime(), runtime);
                 let expected: BTreeMap<&str, String> = target
                     .into_iter()
                     .map(|image| (TARGET_IMAGE_NAME, image.to_string()))
                     .collect();
-                assert_eq!(cases[1].images(), expected);
+                assert_eq!(runners[1].images(), expected);
             }
         }
         let override_entry = ["container=target:override".parse().unwrap()];
         for runtime in [MAC_RUNTIME, "unknown"] {
-            let error = discover_tests(&dirs, runtime, &override_entry)
+            let error = discover_runners(&dirs, runtime, &override_entry)
                 .err()
                 .expect("no eligible target image");
             assert!(error
@@ -1859,8 +1947,8 @@ comparison: {image: comp}
     }
 
     #[test]
-    fn correctness_cases_are_discovered_unless_disabled() {
-        for (kind, variants, enabled_count) in [
+    fn correctness_cases_are_discovered_and_eligible_unless_disabled() {
+        for (kind, variants, case_count) in [
             ("correctness", "", 1),
             ("correctness_matrix", "variants: [{name: first}, {name: second}]", 2),
         ] {
@@ -1882,10 +1970,11 @@ comparison: {{image: comp}}
                 let config: CorrectnessConfig = load_case(dir.path().join("case/config.yaml")).unwrap();
                 assert_eq!(config.disabled, disabled, "{kind} with {setting}");
 
-                let cases = discover_tests(&[dir.path().to_path_buf()], LINUX_RUNTIME, &[]).unwrap();
+                let cases = discover_cases(&[dir.path().to_path_buf()]).unwrap();
+                assert_eq!(cases.len(), case_count, "{kind} with {setting}");
                 assert_eq!(
-                    cases.len(),
-                    if disabled { 0 } else { enabled_count },
+                    cases.iter().filter(|case| case.is_eligible_for(LINUX_RUNTIME)).count(),
+                    if disabled { 0 } else { case_count },
                     "{kind} with {setting}"
                 );
             }
@@ -1893,7 +1982,7 @@ comparison: {{image: comp}}
     }
 
     #[test]
-    fn discovery_applies_correctness_overrides_to_ordinary_and_matrix_cases() {
+    fn runners_apply_correctness_overrides_to_ordinary_and_matrix_cases() {
         let entries = [
             "baseline=base:override",
             "comparison=comp:override",
@@ -1918,10 +2007,10 @@ comparison: {{image: comp}}
 "#
                 ),
             );
-            let cases = discover_tests(&[dir.path().to_path_buf()], LINUX_RUNTIME, &entries).unwrap();
-            assert_eq!(cases.len(), count);
-            for case in cases {
-                let images = case.images();
+            let runners = discover_runners(&[dir.path().to_path_buf()], LINUX_RUNTIME, &entries).unwrap();
+            assert_eq!(runners.len(), count);
+            for runner in runners {
+                let images = runner.images();
                 for entry in &entries {
                     assert_eq!(images[entry.name.as_str()], entry.image);
                 }

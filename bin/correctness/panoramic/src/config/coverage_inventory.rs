@@ -17,9 +17,14 @@ use std::{
 use serde::Serialize;
 use serde_json::{json, Value};
 
-use super::{discover_tests, load_case, AssertionStep, CorrectnessConfig, IntegrationConfig, MatrixVariants};
+use super::{
+    build_runners,
+    case::{CaseConfig, CaseSchema},
+    discover_cases, AssertionStep, CorrectnessConfig, IntegrationConfig, MatrixVariants, LINUX_RUNTIME, MAC_RUNTIME,
+    WINDOWS_RUNTIME,
+};
 use crate::{
-    correctness::{analysis::AnalysisMode, case::CorrectnessTestCase},
+    correctness::analysis::AnalysisMode,
     test::{Test, TestSuite},
 };
 
@@ -120,27 +125,28 @@ impl Steps {
 }
 
 impl Row {
-    fn from_test(
-        root: &Path, test: &dyn Test, subject_os: &str, status: &'static str, schemas: &BTreeMap<String, String>,
+    fn from_case(
+        root: &Path, case: &CaseConfig, runner: &dyn Test, subject_os: &str, status: &'static str,
+        schemas: &BTreeMap<String, String>,
     ) -> Self {
-        let source = relative_path(root, &test.case_path().join("config.yaml"));
+        let source = relative_path(root, case.source());
         let schema = schemas[&source].clone();
-        let suite = match test.suite() {
+        let suite = match case.suite() {
             TestSuite::Integration => INTEGRATION,
             TestSuite::Correctness => CORRECTNESS,
         };
         let mut row = Self {
-            case: format!("{suite}/{}", test.name()),
-            name: test.name(),
+            case: format!("{suite}/{}", case.name()),
+            name: case.name().to_string(),
             suite,
             subject_os: subject_os.to_string(),
-            runtime: test.runtime(),
+            runtime: runner.runtime(),
             source,
             schema,
             execution: OLD,
             status,
-            timeout: format!("{:?}", test.timeout()),
-            images: test.images().into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
+            timeout: format!("{:?}", case.timeout()),
+            images: runner.images().into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
             ci_jobs: Vec::new(),
             ci_mixins: Vec::new(),
         };
@@ -206,31 +212,39 @@ impl Inventory {
                 }
                 let schema = doc["type"].as_str().unwrap();
                 schemas.insert(source, schema.to_string());
-                if suite_dir != &correctness_dir || doc.get("disabled").and_then(Value::as_bool) != Some(true) {
-                    continue;
-                }
-                let base: CorrectnessConfig = load_case(&path).unwrap();
-                let name = dir.file_name().unwrap().to_str().unwrap();
-                let configs = match schema {
-                    CORRECTNESS => vec![(name.to_string(), base)],
-                    "correctness_matrix" => serde_saphyr::from_str::<MatrixVariants>(&text)
-                        .unwrap()
-                        .expand(&base, name),
-                    schema => panic!("Unexpected disabled schema {schema} in {}", path.display()),
-                };
-                for (name, config) in configs {
-                    let test = CorrectnessTestCase::new(name, config);
-                    rows.push(Row::from_test(root, &test, "linux", DISABLED, &schemas));
-                }
             }
         }
-        for (runtime, os) in [("linux", "linux"), ("mac", "macos"), ("windows", "windows")] {
-            for test in discover_tests(std::slice::from_ref(&integration_dir), runtime, &[]).unwrap() {
-                rows.push(Row::from_test(root, test.as_ref(), os, SELECTED, &schemas));
+        let integration_cases = discover_cases(std::slice::from_ref(&integration_dir)).unwrap();
+        for (runtime, os) in [
+            (LINUX_RUNTIME, "linux"),
+            (MAC_RUNTIME, "macos"),
+            (WINDOWS_RUNTIME, "windows"),
+        ] {
+            let eligible: Vec<_> = integration_cases
+                .iter()
+                .filter(|case| case.is_eligible_for(runtime))
+                .collect();
+            let runners = build_runners(eligible.iter().copied(), runtime, &[]).unwrap();
+            for (case, runner) in eligible.into_iter().zip(runners) {
+                rows.push(Row::from_case(root, case, runner.as_ref(), os, SELECTED, &schemas));
             }
         }
-        for test in discover_tests(std::slice::from_ref(&correctness_dir), "linux", &[]).unwrap() {
-            rows.push(Row::from_test(root, test.as_ref(), "linux", SELECTED, &schemas));
+        let correctness_cases = discover_cases(std::slice::from_ref(&correctness_dir)).unwrap();
+        for case in &correctness_cases {
+            let runners = build_runners(std::slice::from_ref(case), LINUX_RUNTIME, &[]).unwrap();
+            let status = if case.is_eligible_for(LINUX_RUNTIME) {
+                SELECTED
+            } else {
+                DISABLED
+            };
+            rows.push(Row::from_case(
+                root,
+                case,
+                runners[0].as_ref(),
+                "linux",
+                status,
+                &schemas,
+            ));
         }
 
         rows.sort_by(|a, b| (&a.suite, &a.name, &a.subject_os).cmp(&(&b.suite, &b.name, &b.subject_os)));
@@ -363,50 +377,43 @@ fn load_cases(path: &Path) -> Vec<(String, Case)> {
     let schema = doc["type"].as_str().unwrap();
     let name = path.parent().unwrap().file_name().unwrap().to_str().unwrap();
     let view = |doc| schema_view(doc, schema, name);
-    let loaded;
+    let loaded_cases = CaseConfig::load_file(path).unwrap();
+    let mut configs = Vec::new();
     let mut cases = Vec::new();
-    if schema == INTEGRATION {
-        let config: IntegrationConfig = load_case(path).unwrap();
-        loaded = serde_json::to_value(&config).unwrap();
-        cases.push((
-            format!("{INTEGRATION}/{}", config.name),
-            Case {
-                config: loaded.clone(),
-                steps: Some(Steps::from_config(&config)),
-                comparison: None,
-                ignored_fields: Vec::new(),
-            },
-        ));
-    } else {
-        let base: CorrectnessConfig = load_case(path).unwrap();
-        let configs = if schema == "correctness_matrix" {
-            let configs = serde_saphyr::from_str::<MatrixVariants>(&text)
-                .unwrap()
-                .expand(&base, name);
-            loaded = serde_json::to_value(&configs).unwrap();
-            configs
-        } else {
-            assert_eq!(schema, CORRECTNESS, "Unknown schema in {}", path.display());
-            loaded = serde_json::to_value(&base).unwrap();
-            vec![(name.to_string(), base)]
-        };
-        for (name, config) in configs {
-            cases.push((
-                format!("{CORRECTNESS}/{name}"),
+    for case in &loaded_cases {
+        let (suite, effective) = match case.schema() {
+            CaseSchema::Integration(config) => (
+                INTEGRATION,
                 Case {
-                    config: serde_json::to_value(&config).unwrap(),
+                    config: serde_json::to_value(config).unwrap(),
+                    steps: Some(Steps::from_config(config)),
+                    comparison: None,
+                    ignored_fields: Vec::new(),
+                },
+            ),
+            CaseSchema::Correctness(config) => (
+                CORRECTNESS,
+                Case {
+                    config: serde_json::to_value(config).unwrap(),
                     steps: None,
                     comparison: Some(Comparison {
                         additional_span_ignore_fields: config.additional_span_ignore_fields.len(),
-                        analysis_mode: config.analysis_mode,
+                        analysis_mode: config.analysis_mode.clone(),
                         otlp_direct_analysis_mode: config.otlp_direct_analysis_mode,
                         require_dogstatsd_forwarded_packets: config.require_dogstatsd_forwarded_packets,
                     }),
                     ignored_fields: Vec::new(),
                 },
-            ));
-        }
+            ),
+        };
+        configs.push((case.name(), effective.config.clone()));
+        cases.push((format!("{suite}/{}", case.name()), effective));
     }
+    let loaded = if schema == "correctness_matrix" {
+        serde_json::to_value(&configs).unwrap()
+    } else {
+        configs[0].1.clone()
+    };
     assert_eq!(
         view(doc.clone()).unwrap(),
         loaded,

@@ -125,9 +125,6 @@ pub(crate) trait Test: Send + Sync {
     /// The suite of tests that the test belongs to.
     fn suite(&self) -> TestSuite;
 
-    /// A description of the test for reporting and documentation purposes.
-    fn description(&self) -> Option<String>;
-
     /// The directory the test case was loaded from, for reporting.
     fn case_path(&self) -> PathBuf;
 

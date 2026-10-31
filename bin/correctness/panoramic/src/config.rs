@@ -12,9 +12,10 @@ use serde::{
 };
 use serde_json::Value;
 
-use crate::correctness::{case::CorrectnessTestCase, config::Config as CorrectnessConfig};
+use self::case::CaseConfig;
+use crate::correctness::config::Config as CorrectnessConfig;
 use crate::image_override::ImageOverrides;
-use crate::integration::{IntegrationSettings, IntegrationTestCase};
+use crate::integration::IntegrationSettings;
 use crate::test::Test;
 
 /// A duration that can be parsed from human-readable strings like `10s`, `1m`, `500ms`.
@@ -682,7 +683,7 @@ pub(crate) trait LoadedFrom {
 ///
 /// Returns an error if `config_path` cannot be resolved or read, or if its contents do not
 /// deserialize into `T`.
-pub(crate) fn load_case<T, P>(config_path: P) -> Result<T, GenericError>
+fn load_case<T, P>(config_path: P) -> Result<T, GenericError>
 where
     T: LoadedFrom + DeserializeOwned,
     P: AsRef<Path>,
@@ -743,8 +744,13 @@ pub fn discover_tests(
             if path.is_dir() {
                 let config_path = path.join("config.yaml");
                 if config_path.exists() {
-                    match try_load_test(&config_path, &path, integration_runtime, &settings, &overrides) {
-                        Ok(loaded) => tests.extend(loaded),
+                    match CaseConfig::load_file(&config_path) {
+                        Ok(cases) => tests.extend(
+                            cases
+                                .iter()
+                                .filter(|case| case.is_eligible_for(integration_runtime))
+                                .map(|case| case.build_test(&settings, &overrides)),
+                        ),
                         Err(e) => {
                             // Previously we had a warning here that cannot be seen in TUI-mode. It is better to fail
                             // loudly and fast when we have a bad test configuration than to falsely believe our test is
@@ -762,105 +768,6 @@ pub fn discover_tests(
 
     overrides.validate(&tests)?;
     Ok(tests)
-}
-
-/// Load one or more test cases from a config file, dispatching on the top-level `type` field.
-///
-/// Returns a `Vec` because a `correctness_matrix` config expands into multiple independent test
-/// cases—one per variant. `integration` configs produce zero or one test case depending on
-/// whether the active `integration_runtime` is in the test's `runtimes:` list. Disabled
-/// correctness configs do not produce test cases.
-fn try_load_test(
-    config_path: &Path, dir_path: &Path, integration_runtime: &str, settings: &IntegrationSettings,
-    overrides: &ImageOverrides<'_>,
-) -> Result<Vec<Box<dyn Test>>, GenericError> {
-    let content = std::fs::read_to_string(config_path)
-        .error_context(format!("Failed to read config file: {}", config_path.display()))?;
-
-    let peek: serde_json::Value = serde_saphyr::from_str(&content).error_context(format!(
-        "Failed to parse config file as YAML: {}",
-        config_path.display()
-    ))?;
-
-    let test_type = peek.get("type").and_then(|v| v.as_str()).ok_or_else(|| {
-        generic_error!("Missing required 'type' field (expected 'integration', 'correctness', or 'correctness_matrix')")
-    })?;
-
-    match test_type {
-        "integration" => {
-            let config: IntegrationConfig = load_case(config_path)?;
-            if config.runtimes.is_empty() {
-                return Err(generic_error!(
-                    "integration test '{}' has empty runtimes list",
-                    config.name
-                ));
-            }
-            // Validate every declared runtime up front so a typo in any list surfaces at discovery
-            // time, even on hosts that wouldn't actually run that runtime.
-            for runtime in &config.runtimes {
-                if runtime != LINUX_RUNTIME && runtime != MAC_RUNTIME && runtime != WINDOWS_RUNTIME {
-                    return Err(generic_error!(
-                        "integration test '{}' declares unknown runtime '{}' (expected '{}', '{}', or '{}')",
-                        config.name,
-                        runtime,
-                        LINUX_RUNTIME,
-                        MAC_RUNTIME,
-                        WINDOWS_RUNTIME
-                    ));
-                }
-            }
-            // Scope to the active runtime: skip tests that don't opt in to it.
-            if !config.runtimes.iter().any(|r| r == integration_runtime) {
-                return Ok(Vec::new());
-            }
-            Ok(vec![Box::new(IntegrationTestCase::new(config, settings))])
-        }
-        "correctness" => {
-            let mut config: CorrectnessConfig = load_case(config_path)?;
-            if config.disabled {
-                return Ok(Vec::new());
-            }
-            let name = dir_path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("unknown")
-                .to_string();
-            overrides.apply_correctness(&mut config);
-            Ok(vec![Box::new(CorrectnessTestCase::new(name, config))])
-        }
-        "correctness_matrix" => {
-            let base_name = dir_path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("unknown")
-                .to_string();
-            // Parse both schemas from YAML text: flattening or a Value roundtrip changes scalar coercion.
-            let base: CorrectnessConfig = load_case(config_path)?;
-            let matrix: MatrixVariants = serde_saphyr::from_str(&content)
-                .error_context(format!("Failed to parse configuration file: {}", config_path.display()))?;
-            if matrix.variants.is_empty() {
-                return Err(generic_error!(
-                    "correctness_matrix '{}' has no variants defined",
-                    base_name
-                ));
-            }
-            if base.disabled {
-                return Ok(Vec::new());
-            }
-            Ok(matrix
-                .expand(&base, &base_name)
-                .into_iter()
-                .map(|(name, mut config)| {
-                    overrides.apply_correctness(&mut config);
-                    Box::new(CorrectnessTestCase::new(name, config)) as Box<dyn Test>
-                })
-                .collect())
-        }
-        other => Err(generic_error!(
-            "Unknown test type '{}' (expected 'integration', 'correctness', or 'correctness_matrix')",
-            other
-        )),
-    }
 }
 
 /// Parse a port specification (for example, "8125/udp") into port number and protocol.
@@ -901,12 +808,15 @@ pub fn parse_file_spec(spec: &str) -> Result<(&str, &str), GenericError> {
     Ok((parts[0], parts[1]))
 }
 
+pub(crate) mod case;
+
 #[cfg(test)]
 mod coverage_inventory;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::correctness::case::CorrectnessTestCase;
 
     #[test]
     fn parse_duration_handles_units_and_combinations() {
@@ -1872,17 +1782,9 @@ variants:
                 );
                 let dir = create_test_case_dir("strict", &yaml);
                 let case_dir = dir.path().join("strict");
-                let overrides = ImageOverrides::new(&[]);
-                let settings = IntegrationSettings::new(LINUX_RUNTIME, &overrides);
-                let error = try_load_test(
-                    &case_dir.join("config.yaml"),
-                    &case_dir,
-                    LINUX_RUNTIME,
-                    &settings,
-                    &overrides,
-                )
-                .err()
-                .expect("non-string env value must fail");
+                let error = CaseConfig::load_file(&case_dir.join("config.yaml"))
+                    .err()
+                    .expect("non-string env value must fail");
                 let error = format!("{error:?}");
                 assert!(
                     error.contains("environment variable 'INVALID' must be a YAML string"),
@@ -1940,25 +1842,18 @@ comparison: {image: comp}
     }
 
     #[test]
-    fn declared_runtime_validation_precedes_eligibility_filtering() {
+    fn declared_runtime_validation_does_not_depend_on_the_active_runtime() {
         for (runtimes, expected) in [
             ("[]", "empty runtimes list"),
             ("[linux, typo]", "unknown runtime 'typo'"),
+            ("[linux, first-typo, second-typo]", "unknown runtime 'first-typo'"),
         ] {
             let yaml = format!("type: integration\nname: invalid\ntimeout: 1s\nruntimes: {runtimes}\nprocedure: []\n");
             let dir = create_test_case_dir("invalid", &yaml);
-            let overrides = ImageOverrides::new(&[]);
-            let settings = IntegrationSettings::new(MAC_RUNTIME, &overrides);
             let case_dir = dir.path().join("invalid");
-            let error = try_load_test(
-                &case_dir.join("config.yaml"),
-                &case_dir,
-                MAC_RUNTIME,
-                &settings,
-                &overrides,
-            )
-            .err()
-            .expect("invalid declared runtime");
+            let error = CaseConfig::load_file(&case_dir.join("config.yaml"))
+                .err()
+                .expect("invalid declared runtime");
             assert!(error.to_string().contains(expected), "{error}");
         }
     }

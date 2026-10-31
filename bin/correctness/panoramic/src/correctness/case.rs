@@ -13,12 +13,9 @@ use async_trait::async_trait;
 use saluki_error::{generic_error, GenericError};
 
 use super::config::{Config, Runtime, TargetConfig};
+use crate::config::case::CORRECTNESS_TIMEOUT;
 use crate::reporter::TestResult;
 use crate::test::{resolve_case_path, Test, TestContext, TestSuite};
-
-// Correctness tests run two isolation groups (baseline + comparison), each with multiple
-// containers, so they need more time than the default.
-const CORRECTNESS_TIMEOUT: Duration = Duration::from_mins(20);
 
 /// Container names a correctness test carries in [`Test::images`] and image overrides.
 pub(crate) const BASELINE_IMAGE_NAME: &str = "baseline";

@@ -1,0 +1,873 @@
+//! Case-file grammar for named participants and their procedure.
+
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+    path::{Path, PathBuf},
+};
+
+use saluki_error::{generic_error, GenericError};
+use serde::{
+    de::{value::MapAccessDeserializer, Error as _, MapAccess, Visitor},
+    Deserialize, Deserializer,
+};
+use serde_json::Value;
+
+use super::{case::Os, deserialize_env_map, HumanDuration};
+
+/// A case's identity, participants and procedure.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct CaseFile {
+    /// Reporting name. Defaults to the directory name and must match it when supplied.
+    pub(super) name: Option<String>,
+    /// Reporting description. Defaults to none.
+    pub(super) description: Option<String>,
+    /// Required case deadline, greater than zero; has no default.
+    pub(super) timeout: HumanDuration,
+    /// Required, nonempty list of supported subject operating systems, without duplicates; has no default.
+    pub(super) subject_os: Vec<Os>,
+    /// Required participant instances keyed by name. Must contain at least one; has no default.
+    pub(super) participants: BTreeMap<String, ParticipantEntry>,
+    /// Required ordered steps and parallel blocks. May be empty; has no default.
+    // TODO: remove once participant-type and step declarations validate these fields.
+    #[allow(
+        dead_code,
+        reason = "Only tests read the procedure until step declarations validate it."
+    )]
+    pub(super) procedure: Vec<ProcedureNode>,
+}
+
+impl CaseFile {
+    /// Checks the subject OS list and participant count, returning the supported OS set.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error naming the case and source if the OS list is empty or repeats an OS,
+    /// or the case declares no participants.
+    pub(super) fn check(&self, name: &str, source: &Path) -> Result<BTreeSet<Os>, GenericError> {
+        if self.subject_os.is_empty() {
+            return Err(generic_error!(
+                "case '{}' in {} has an empty subject_os list; name at least one of 'linux', 'macos' or 'windows'",
+                name,
+                source.display()
+            ));
+        }
+        let mut subject_os = BTreeSet::new();
+        for &os in &self.subject_os {
+            if !subject_os.insert(os) {
+                return Err(generic_error!(
+                    "case '{}' in {} lists subject OS '{}' more than once",
+                    name,
+                    source.display(),
+                    os.name()
+                ));
+            }
+        }
+        if self.participants.is_empty() {
+            return Err(generic_error!(
+                "case '{}' in {} declares no participants",
+                name,
+                source.display()
+            ));
+        }
+        Ok(subject_os)
+    }
+}
+
+/// One named instance of a participant type.
+// TODO: remove once panoramic builds participants from these fields.
+#[allow(
+    dead_code,
+    reason = "Only tests read these fields until participant construction uses them."
+)]
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ParticipantEntry {
+    /// Required participant type name; has no default.
+    #[serde(rename = "type")]
+    pub(super) participant_type: String,
+    /// Whether this participant is the test subject. Defaults to false.
+    #[serde(default)]
+    pub(super) subject: bool,
+    /// Participant OS override. Defaults to the subject OS.
+    pub(super) os: Option<Os>,
+    /// Requested execution mechanism. Defaults to the layout's choice.
+    pub(super) realization: Option<RequestedRealization>,
+    /// Product configuration. Defaults to empty maps.
+    #[serde(default)]
+    pub(super) config: ParticipantConfig,
+    /// Consumed endpoint names mapped to other participants' endpoints. Defaults to empty.
+    #[serde(default)]
+    pub(super) connect: BTreeMap<String, ConnectionTarget>,
+}
+
+/// An execution mechanism explicitly requested by the case.
+// TODO: remove once panoramic builds participants from these fields.
+#[allow(
+    dead_code,
+    reason = "Only tests read these fields until participant construction uses them."
+)]
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct RequestedRealization {
+    /// Required execution mechanism; has no default.
+    pub(super) kind: RealizationKind,
+    /// Backend-specific options. Defaults to empty.
+    #[serde(default)]
+    pub(super) options: BTreeMap<String, Value>,
+}
+
+/// Execution mechanisms a case may request.
+#[derive(Debug, Deserialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub(super) enum RealizationKind {
+    /// Processes running directly on the host.
+    HostProcessGroup,
+    /// A Linux container.
+    LinuxContainer,
+    /// A Windows container.
+    WindowsContainer,
+    /// A Kubernetes pod.
+    KubernetesPod,
+}
+
+/// Product configuration supplied to a participant.
+// TODO: remove once panoramic builds participants from these fields.
+#[allow(
+    dead_code,
+    reason = "Only tests read these fields until participant construction uses them."
+)]
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ParticipantConfig {
+    /// Process environment variables; values must be YAML strings. Defaults to empty.
+    #[serde(default, deserialize_with = "deserialize_env_map")]
+    pub(super) env: BTreeMap<String, String>,
+    /// Declared configuration file names mapped to case-relative sources. Defaults to empty.
+    #[serde(default)]
+    pub(super) files: BTreeMap<String, FileSource>,
+    /// Listener overrides keyed by declared endpoint name. Defaults to empty.
+    #[serde(default)]
+    pub(super) endpoints: BTreeMap<String, EndpointOverride>,
+    /// Participant-type-specific parameters, preserving YAML value types. Defaults to empty.
+    #[serde(default)]
+    pub(super) params: BTreeMap<String, Value>,
+    /// Configuration overlays selected by participant OS. Defaults to empty.
+    #[serde(default)]
+    pub(super) os: BTreeMap<Os, ConfigOverlay>,
+}
+
+/// Product configuration overlaid for one participant OS.
+// TODO: remove once panoramic builds participants from these fields.
+#[allow(
+    dead_code,
+    reason = "Only tests read these fields until participant construction uses them."
+)]
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ConfigOverlay {
+    /// Environment overrides; values must be YAML strings. Defaults to empty.
+    #[serde(default, deserialize_with = "deserialize_env_map")]
+    pub(super) env: BTreeMap<String, String>,
+    /// Configuration file source overrides. Defaults to empty.
+    #[serde(default)]
+    pub(super) files: BTreeMap<String, FileSource>,
+    /// Participant-type-specific parameter overrides. Defaults to empty.
+    #[serde(default)]
+    pub(super) params: BTreeMap<String, Value>,
+}
+
+/// A case-relative file or directory supplied to a participant.
+// TODO: remove once panoramic builds participants from these fields.
+#[allow(
+    dead_code,
+    reason = "Only tests read these fields until participant construction uses them."
+)]
+#[derive(Debug, PartialEq)]
+pub(super) struct FileSource {
+    /// Required source path, stored as written; has no default.
+    pub(super) from: PathBuf,
+    /// Whether to expand template references in the source. Defaults to false.
+    pub(super) template: bool,
+}
+
+impl<'de> Deserialize<'de> for FileSource {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct FileSourceVisitor;
+
+        impl<'de> Visitor<'de> for FileSourceVisitor {
+            type Value = FileSource;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a case-relative path or a {from, template} map")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(FileSource {
+                    from: PathBuf::from(value),
+                    template: false,
+                })
+            }
+
+            fn visit_map<A>(self, map: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Source {
+                    from: PathBuf,
+                    #[serde(default)]
+                    template: bool,
+                }
+
+                let source = Source::deserialize(MapAccessDeserializer::new(map))?;
+                Ok(FileSource {
+                    from: source.from,
+                    template: source.template,
+                })
+            }
+        }
+
+        deserializer.deserialize_any(FileSourceVisitor)
+    }
+}
+
+/// A listener port supplied by the case.
+// TODO: remove once panoramic builds participants from these fields.
+#[allow(
+    dead_code,
+    reason = "Only tests read these fields until participant construction uses them."
+)]
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct EndpointOverride {
+    /// Required listener port; has no default.
+    pub(super) port: u16,
+}
+
+/// A connection target written as `participant.endpoint`.
+// TODO: remove once participant-type and step declarations validate these fields.
+#[allow(
+    dead_code,
+    reason = "Only tests read these fields until participant-type declarations validate them."
+)]
+#[derive(Debug, PartialEq)]
+pub(super) struct ConnectionTarget {
+    /// Required name of the participant serving the endpoint; has no default.
+    pub(super) participant: String,
+    /// Required endpoint name within the participant; has no default.
+    pub(super) endpoint: String,
+}
+
+impl<'de> Deserialize<'de> for ConnectionTarget {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        match value.split_once('.') {
+            Some((participant, endpoint))
+                if !participant.is_empty() && !endpoint.is_empty() && !endpoint.contains('.') =>
+            {
+                Ok(Self {
+                    participant: participant.to_string(),
+                    endpoint: endpoint.to_string(),
+                })
+            }
+            _ => Err(D::Error::custom(format!(
+                "connection '{value}' must have the form 'participant.endpoint'"
+            ))),
+        }
+    }
+}
+
+/// One sequential step or a block of concurrent steps.
+// TODO: remove once participant-type and step declarations validate these fields.
+#[allow(
+    dead_code,
+    reason = "Only tests read these nodes until step declarations validate them."
+)]
+#[derive(Debug)]
+pub(super) enum ProcedureNode {
+    /// A single step, with its declaration-specific fields.
+    Step(StepNode),
+    /// A nonempty block of steps to run concurrently.
+    Parallel(Vec<StepNode>),
+}
+
+impl<'de> Deserialize<'de> for ProcedureNode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct ProcedureVisitor;
+
+        impl<'de> Visitor<'de> for ProcedureVisitor {
+            type Value = ProcedureNode;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a procedure node mapping")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut step = None;
+                let mut parallel = None;
+                let mut fields = BTreeMap::new();
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "step" => step = Some(map.next_value::<String>()?),
+                        "parallel" => parallel = Some(map.next_value::<Vec<StepNode>>()?),
+                        _ => {
+                            fields.insert(key, map.next_value::<Value>()?);
+                        }
+                    }
+                }
+                match (step, parallel) {
+                    (Some(_), Some(_)) => Err(A::Error::custom(
+                        "a procedure node must have 'step' or 'parallel', not both",
+                    )),
+                    (None, None) => Err(A::Error::custom("a procedure node must have 'step' or 'parallel'")),
+                    (Some(name), None) => Ok(ProcedureNode::Step(StepNode { name, fields })),
+                    (None, Some(steps)) => {
+                        if let Some(key) = fields.keys().next() {
+                            return Err(A::Error::custom(format!(
+                                "a 'parallel' block takes no other fields; found '{key}'"
+                            )));
+                        }
+                        if steps.is_empty() {
+                            return Err(A::Error::custom("a 'parallel' block must contain at least one step"));
+                        }
+                        Ok(ProcedureNode::Parallel(steps))
+                    }
+                }
+            }
+        }
+
+        deserializer.deserialize_any(ProcedureVisitor)
+    }
+}
+
+/// A step name and the YAML fields its declaration decodes.
+// TODO: remove once participant-type and step declarations validate these fields.
+#[allow(
+    dead_code,
+    reason = "Only tests read these fields until step declarations validate them."
+)]
+#[derive(Debug)]
+pub(super) struct StepNode {
+    /// Required step declaration name; has no default.
+    pub(super) name: String,
+    /// Declaration-specific fields, preserving YAML value types. Defaults to empty.
+    pub(super) fields: BTreeMap<String, Value>,
+}
+
+impl<'de> Deserialize<'de> for StepNode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct StepVisitor;
+
+        impl<'de> Visitor<'de> for StepVisitor {
+            type Value = StepNode;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a procedure node mapping")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut name = None;
+                let mut fields = BTreeMap::new();
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "step" => name = Some(map.next_value::<String>()?),
+                        "parallel" => {
+                            return Err(A::Error::custom(
+                                "a 'parallel' block cannot contain another 'parallel' block",
+                            ));
+                        }
+                        _ => {
+                            fields.insert(key, map.next_value::<Value>()?);
+                        }
+                    }
+                }
+                let name = name.ok_or_else(|| A::Error::custom("a step in a 'parallel' block must have 'step'"))?;
+                Ok(StepNode { name, fields })
+            }
+        }
+
+        deserializer.deserialize_any(StepVisitor)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use serde_json::json;
+
+    use super::*;
+    use crate::config::{
+        case::CaseConfig,
+        tests::{write_case, NO_PARTICIPANT_FIELDS, PARTICIPANT_FIELDS},
+    };
+
+    fn load_error(yaml: &str) -> String {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_case(dir.path(), "alpha", yaml);
+        let error = CaseConfig::load_file(&path).err().expect("invalid case must fail");
+        let message = format!("{error:#}");
+        assert!(
+            message.contains(&path.canonicalize().unwrap().display().to_string()),
+            "{message}"
+        );
+        message
+    }
+
+    #[test]
+    fn a_case_file_parses_every_documented_field() {
+        let file: CaseFile = serde_saphyr::from_str(
+            r#"
+name: alpha
+description: A portable case
+timeout: 60s
+subject_os: [linux, macos, windows]
+participants:
+  adp:
+    type: agent-adp
+    subject: true
+    realization:
+      kind: linux-container
+      options: {host_pid: true}
+    config:
+      env: {DD_DOGSTATSD_NON_LOCAL_TRAFFIC: "true"}
+      files:
+        scripts: ./scripts/
+        datadog.yaml: {from: datadog-base.yaml, template: true}
+      endpoints: {otlp_grpc: {port: 4317}}
+      params: {nested: {enabled: true, count: 3}}
+      os:
+        windows:
+          env: {OS_NAME: windows}
+          files: {scripts: windows/scripts}
+          params: {command: [pwsh, -File, send.ps1]}
+    connect: {intake: intake.api}
+  intake:
+    type: datadog-intake
+    os: linux
+procedure:
+  - step: wait_ready
+    on: adp
+  - parallel:
+      - step: log_not_contains
+        on: adp
+        pattern: "panic|PANIC"
+        regex: true
+        during: 10s
+"#,
+        )
+        .unwrap();
+        assert_eq!(file.name.as_deref(), Some("alpha"));
+        assert_eq!(file.description.as_deref(), Some("A portable case"));
+        assert_eq!(file.timeout.0, Duration::from_secs(60));
+        assert_eq!(file.subject_os, [Os::Linux, Os::MacOs, Os::Windows]);
+        assert_eq!(
+            file.check("alpha", Path::new("config.yaml")).unwrap(),
+            BTreeSet::from([Os::Linux, Os::MacOs, Os::Windows])
+        );
+        assert_eq!(file.participants.len(), 2);
+        let adp = &file.participants["adp"];
+        assert_eq!(adp.participant_type, "agent-adp");
+        assert!(adp.subject);
+        assert_eq!(adp.os, None);
+        let realization = adp.realization.as_ref().unwrap();
+        assert_eq!(realization.kind, RealizationKind::LinuxContainer);
+        assert_eq!(realization.options, BTreeMap::from([("host_pid".into(), json!(true))]));
+        assert_eq!(
+            adp.config.env,
+            BTreeMap::from([("DD_DOGSTATSD_NON_LOCAL_TRAFFIC".into(), "true".into())])
+        );
+        assert_eq!(
+            adp.config.files,
+            BTreeMap::from([
+                (
+                    "scripts".into(),
+                    FileSource {
+                        from: "./scripts/".into(),
+                        template: false
+                    }
+                ),
+                (
+                    "datadog.yaml".into(),
+                    FileSource {
+                        from: "datadog-base.yaml".into(),
+                        template: true
+                    }
+                ),
+            ])
+        );
+        assert_eq!(adp.config.endpoints.len(), 1);
+        assert_eq!(adp.config.endpoints["otlp_grpc"].port, 4317);
+        assert_eq!(
+            adp.config.params,
+            BTreeMap::from([("nested".into(), json!({"enabled": true, "count": 3}))])
+        );
+        assert_eq!(adp.config.os.len(), 1);
+        let overlay = &adp.config.os[&Os::Windows];
+        assert_eq!(overlay.env, BTreeMap::from([("OS_NAME".into(), "windows".into())]));
+        assert_eq!(
+            overlay.files,
+            BTreeMap::from([(
+                "scripts".into(),
+                FileSource {
+                    from: "windows/scripts".into(),
+                    template: false
+                }
+            )])
+        );
+        assert_eq!(
+            overlay.params,
+            BTreeMap::from([("command".into(), json!(["pwsh", "-File", "send.ps1"]))])
+        );
+        assert_eq!(
+            adp.connect,
+            BTreeMap::from([(
+                "intake".into(),
+                ConnectionTarget {
+                    participant: "intake".into(),
+                    endpoint: "api".into()
+                }
+            )])
+        );
+        let intake = &file.participants["intake"];
+        assert_eq!(intake.participant_type, "datadog-intake");
+        assert!(!intake.subject);
+        assert_eq!(intake.os, Some(Os::Linux));
+        assert!(intake.realization.is_none());
+        assert!(intake.config.env.is_empty());
+        assert!(intake.config.files.is_empty());
+        assert!(intake.config.endpoints.is_empty());
+        assert!(intake.config.params.is_empty());
+        assert!(intake.config.os.is_empty());
+        assert!(intake.connect.is_empty());
+        let [ProcedureNode::Step(step), ProcedureNode::Parallel(steps)] = file.procedure.as_slice() else {
+            panic!("expected one step followed by a parallel block");
+        };
+        assert_eq!(step.name, "wait_ready");
+        assert_eq!(step.fields, BTreeMap::from([("on".into(), json!("adp"))]));
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].name, "log_not_contains");
+        assert_eq!(
+            steps[0].fields,
+            BTreeMap::from([
+                ("on".into(), json!("adp")),
+                ("pattern".into(), json!("panic|PANIC")),
+                ("regex".into(), json!(true)),
+                ("during".into(), json!("10s")),
+            ])
+        );
+    }
+
+    #[test]
+    fn an_unknown_field_is_rejected_at_every_level() {
+        for (yaml, key) in [
+            (format!("{PARTICIPANT_FIELDS}timout: 2s\n"), "timout"),
+            (PARTICIPANT_FIELDS.replace("subject: true", "subjet: true"), "subjet"),
+            (
+                PARTICIPANT_FIELDS.replace("subject: true", "realization: {kind: linux-container, optons: {}}"),
+                "optons",
+            ),
+            (
+                PARTICIPANT_FIELDS.replace("subject: true", "config: {environ: {}}"),
+                "environ",
+            ),
+            (
+                PARTICIPANT_FIELDS.replace("subject: true", "config: {files: {settings: {from: x, templat: true}}}"),
+                "templat",
+            ),
+            (
+                PARTICIPANT_FIELDS.replace("subject: true", "config: {endpoints: {api: {port: 4317, prot: 4318}}}"),
+                "prot",
+            ),
+            (
+                PARTICIPANT_FIELDS.replace("subject: true", "config: {os: {windows: {prams: {}}}}"),
+                "prams",
+            ),
+            (
+                PARTICIPANT_FIELDS.replace("subject: true", "config: {os: {windows: {endpoints: {}}}}"),
+                "endpoints",
+            ),
+            (
+                PARTICIPANT_FIELDS.replace("subject: true", "config: {os: {windows: {os: {}}}}"),
+                "os",
+            ),
+            (
+                PARTICIPANT_FIELDS.replace(
+                    "procedure: []",
+                    "procedure: [{parallel: [{step: wait_ready}], timout: 1s}]",
+                ),
+                "timout",
+            ),
+        ] {
+            let message = load_error(&yaml);
+            assert!(
+                message.contains(&format!("'{key}'")) || message.contains(&format!("`{key}`")),
+                "{message}"
+            );
+        }
+    }
+
+    #[test]
+    fn subject_os_must_be_nonempty_unique_and_spelled_as_in_the_schema() {
+        for (list, expected) in [
+            (
+                "[]",
+                "has an empty subject_os list; name at least one of 'linux', 'macos' or 'windows'",
+            ),
+            ("[linux, linux]", "lists subject OS 'linux' more than once"),
+            ("[mac]", "unknown variant `mac`"),
+        ] {
+            let message = load_error(&PARTICIPANT_FIELDS.replace("[linux]", list));
+            assert!(message.contains(expected), "{message}");
+        }
+        for (spelling, expected) in [("linux", Os::Linux), ("macos", Os::MacOs), ("windows", Os::Windows)] {
+            let os: Os = serde_saphyr::from_str(spelling).unwrap();
+            assert_eq!(os, expected);
+            assert_eq!(os.name(), spelling);
+        }
+    }
+
+    #[test]
+    fn a_case_file_must_declare_a_participant() {
+        let message = load_error(NO_PARTICIPANT_FIELDS);
+        assert!(message.contains("case 'alpha'"), "{message}");
+        assert!(message.contains("declares no participants"), "{message}");
+    }
+
+    #[test]
+    fn a_participant_name_declared_twice_is_rejected() {
+        let message = load_error(&PARTICIPANT_FIELDS.replace(
+            "  adp: {type: agent-adp, subject: true}",
+            "  adp: {type: agent-adp, subject: true}\n  adp: {type: datadog-intake}",
+        ));
+        assert!(message.contains("duplicate mapping key: adp"), "{message}");
+    }
+
+    #[test]
+    fn connections_must_name_one_participant_and_one_endpoint() {
+        for value in ["intake", "intake.", ".api", "a.b.c", ""] {
+            let yaml = PARTICIPANT_FIELDS.replace("subject: true", &format!("connect: {{intake: '{value}'}}"));
+            let message = load_error(&yaml);
+            assert!(
+                message.contains(&format!(
+                    "connection '{value}' must have the form 'participant.endpoint'"
+                )),
+                "{message}"
+            );
+        }
+        let endpoint: ConnectionTarget = serde_saphyr::from_str("intake.api").unwrap();
+        assert_eq!(
+            endpoint,
+            ConnectionTarget {
+                participant: "intake".into(),
+                endpoint: "api".into()
+            }
+        );
+    }
+
+    #[test]
+    fn procedure_nodes_are_one_step_or_one_parallel_block_of_steps() {
+        for (node, expected) in [
+            (
+                "{step: wait_ready, parallel: [{step: wait_ready}]}",
+                "a procedure node must have 'step' or 'parallel', not both",
+            ),
+            ("{on: adp}", "a procedure node must have 'step' or 'parallel'"),
+            (
+                "{parallel: [{step: wait_ready}], on: adp}",
+                "a 'parallel' block takes no other fields; found 'on'",
+            ),
+            ("{parallel: []}", "a 'parallel' block must contain at least one step"),
+            (
+                "{parallel: [{parallel: [{step: wait_ready}]}]}",
+                "a 'parallel' block cannot contain another 'parallel' block",
+            ),
+            (
+                "{parallel: [{on: adp}]}",
+                "a step in a 'parallel' block must have 'step'",
+            ),
+            ("wait_ready", "a procedure node mapping"),
+            ("[wait_ready]", "a procedure node mapping"),
+            ("true", "a procedure node mapping"),
+            ("null", "a procedure node mapping"),
+            ("{parallel: [wait_ready]}", "a procedure node mapping"),
+        ] {
+            let yaml = PARTICIPANT_FIELDS.replace("procedure: []", &format!("procedure:\n  - {node}"));
+            let message = load_error(&yaml);
+            assert!(message.contains(expected), "{message}");
+            if node == "{on: adp}" {
+                assert!(!message.contains("not both"), "{message}");
+            }
+            assert!(message.contains("line "), "expected a YAML location: {message}");
+        }
+        let nodes: Vec<ProcedureNode> =
+            serde_saphyr::from_str("[{step: wait_ready}, {parallel: [{step: wait_ready}, {step: log_contains}]}]")
+                .unwrap();
+        let [ProcedureNode::Step(step), ProcedureNode::Parallel(steps)] = nodes.as_slice() else {
+            panic!("expected one step and one parallel block");
+        };
+        assert_eq!(step.name, "wait_ready");
+        assert!(step.fields.is_empty());
+        assert_eq!(
+            steps.iter().map(|step| step.name.as_str()).collect::<Vec<_>>(),
+            ["wait_ready", "log_contains"]
+        );
+    }
+
+    #[test]
+    fn step_fields_keep_their_yaml_scalar_types() {
+        for yaml in [
+            r#"{step: log_not_contains, pattern: "true", regex: true, count: 3, during: 10s}"#,
+            r#"{parallel: [{step: log_not_contains, pattern: "true", regex: true, count: 3, during: 10s}]}"#,
+        ] {
+            let node: ProcedureNode = serde_saphyr::from_str(yaml).unwrap();
+            let step = match &node {
+                ProcedureNode::Step(step) => step,
+                ProcedureNode::Parallel(steps) => &steps[0],
+            };
+            assert_eq!(
+                step.fields,
+                BTreeMap::from([
+                    ("pattern".into(), json!("true")),
+                    ("regex".into(), json!(true)),
+                    ("count".into(), json!(3)),
+                    ("during".into(), json!("10s")),
+                ])
+            );
+        }
+    }
+
+    #[test]
+    fn participant_env_and_overlay_env_reject_non_string_values() {
+        for config in ["{env: {A: true}}", "{os: {linux: {env: {A: true}}}}"] {
+            let message = load_error(&PARTICIPANT_FIELDS.replace("subject: true", &format!("config: {config}")));
+            assert!(
+                message.contains("environment variable 'A' must be a YAML string"),
+                "{message}"
+            );
+        }
+    }
+
+    #[test]
+    fn realization_kinds_use_their_schema_spellings() {
+        for (spelling, expected) in [
+            ("host-process-group", RealizationKind::HostProcessGroup),
+            ("linux-container", RealizationKind::LinuxContainer),
+            ("windows-container", RealizationKind::WindowsContainer),
+            ("kubernetes-pod", RealizationKind::KubernetesPod),
+        ] {
+            let realization: RequestedRealization = serde_saphyr::from_str(&format!("kind: {spelling}")).unwrap();
+            assert_eq!(realization.kind, expected);
+            assert!(realization.options.is_empty());
+        }
+        for spelling in ["kubernetes_pod", "kind"] {
+            let error = serde_saphyr::from_str::<RealizationKind>(spelling).unwrap_err();
+            assert!(
+                error.to_string().contains(&format!("unknown variant `{spelling}`")),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn files_accept_a_path_or_a_from_and_template_map() {
+        for (yaml, template) in [
+            ("./x", false),
+            ("{from: ./x}", false),
+            ("{from: ./x, template: true}", true),
+        ] {
+            let file: FileSource = serde_saphyr::from_str(yaml).unwrap();
+            assert_eq!(
+                file,
+                FileSource {
+                    from: "./x".into(),
+                    template
+                }
+            );
+        }
+        for (yaml, expected) in [
+            ("[x]", "a case-relative path or a {from, template} map"),
+            ("true", "a case-relative path or a {from, template} map"),
+            ("3", "a case-relative path or a {from, template} map"),
+            ("null", "a case-relative path or a {from, template} map"),
+            ("{template: true}", "missing field `from`"),
+        ] {
+            let error = serde_saphyr::from_str::<FileSource>(yaml).unwrap_err();
+            assert!(error.to_string().contains(expected), "{error}");
+        }
+    }
+
+    #[test]
+    fn required_case_and_participant_fields_must_be_present() {
+        for field in ["timeout", "subject_os", "participants", "procedure"] {
+            let yaml = match field {
+                "participants" => {
+                    PARTICIPANT_FIELDS.replace("participants:\n  adp: {type: agent-adp, subject: true}\n", "")
+                }
+                _ => PARTICIPANT_FIELDS
+                    .lines()
+                    .filter(|line| !line.starts_with(&format!("{field}:")))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            };
+            let message = load_error(&yaml);
+            assert!(message.contains(&format!("missing field `{field}`")), "{message}");
+        }
+        let message = load_error(&PARTICIPANT_FIELDS.replace("type: agent-adp, ", ""));
+        assert!(message.contains("missing field `type`"), "{message}");
+    }
+
+    #[test]
+    fn duplicate_procedure_keys_are_rejected() {
+        for node in [
+            "{step: wait_ready, step: wait_exit}",
+            "{parallel: [{step: wait_ready}], parallel: [{step: wait_exit}]}",
+            "{step: wait_ready, on: adp, on: intake}",
+            "{parallel: [{step: wait_ready, step: wait_exit}]}",
+            "{parallel: [{step: wait_ready, on: adp, on: intake}]}",
+        ] {
+            let error = serde_saphyr::from_str::<ProcedureNode>(node).unwrap_err();
+            assert!(error.to_string().contains("duplicate"), "{error}");
+        }
+    }
+
+    #[test]
+    fn configuration_overlays_use_os_keys_and_default_to_empty_maps() {
+        let config: ParticipantConfig = serde_saphyr::from_str("os: {linux: {}, macos: {}, windows: {}}").unwrap();
+        assert_eq!(
+            config.os.keys().copied().collect::<Vec<_>>(),
+            [Os::Linux, Os::MacOs, Os::Windows]
+        );
+        for overlay in config.os.values() {
+            assert!(overlay.env.is_empty());
+            assert!(overlay.files.is_empty());
+            assert!(overlay.params.is_empty());
+        }
+        let message = load_error(&PARTICIPANT_FIELDS.replace("subject: true", "config: {os: {mac: {}}}"));
+        assert!(message.contains("unknown variant `mac`"), "{message}");
+    }
+}

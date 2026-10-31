@@ -685,20 +685,27 @@ fn parse_case<T>(content: &str, source: &Path) -> Result<T, GenericError>
 where
     T: LoadedFrom + DeserializeOwned,
 {
-    let mut case: T = serde_saphyr::from_str(content)
-        .error_context(format!("Failed to parse configuration file: {}", source.display()))?;
+    let mut case: T = deserialize_case(content, source)?;
 
     case.set_loaded_from(source.to_path_buf());
 
     Ok(case)
 }
 
+/// Deserializes case data and includes its source path in parse errors.
+fn deserialize_case<T>(content: &str, source: &Path) -> Result<T, GenericError>
+where
+    T: DeserializeOwned,
+{
+    serde_saphyr::from_str(content).error_context(format!("Failed to parse configuration file: {}", source.display()))
+}
+
 /// Discovers every case in the directories, sorted by name, including disabled cases and cases for any runtime.
 ///
-/// Each `config.yaml` found in a direct subdirectory must have a top-level `type` field set to
-/// `"integration"`, `"correctness"`, or `"correctness_matrix"`. Multiple test types may coexist
-/// within the same directory. Each matrix variant produces one case. A `config.yml` file is rejected,
-/// even alongside a `config.yaml`; discovery still loads the latter to report every problem.
+/// Each `config.yaml` found in a direct subdirectory either declares participants without a top-level
+/// `type`, or selects `"integration"`, `"correctness"`, or `"correctness_matrix"` with that field.
+/// Each matrix variant produces one case. A `config.yml` file is rejected, even alongside a
+/// `config.yaml`; discovery still loads the latter to report every problem.
 ///
 /// # Errors
 ///
@@ -787,16 +794,27 @@ pub(crate) fn discover_in_scope(dirs: &[PathBuf], integration_runtime: &str) -> 
 ///
 /// # Errors
 ///
+/// Reports every case that cannot build a runner, in input order, before validating image overrides.
 /// Returns an error if an image override is duplicate or unmatched.
 pub(crate) fn build_runners<'a>(
     cases: impl IntoIterator<Item = &'a CaseConfig>, integration_runtime: &str, image_overrides: &[ImageOverride],
 ) -> Result<Vec<Box<dyn Test>>, GenericError> {
     let overrides = ImageOverrides::new(image_overrides);
     let settings = IntegrationSettings::new(integration_runtime, &overrides);
-    let runners = cases
-        .into_iter()
-        .map(|case| case.build_test(&settings, &overrides))
-        .collect::<Vec<_>>();
+    let mut runners = Vec::new();
+    let mut errors = Vec::new();
+    for case in cases {
+        match case.build_test(&settings, &overrides) {
+            Ok(runner) => runners.push(runner),
+            Err(error) => errors.push(format!("{error:#}").replace('\n', "\n    ")),
+        }
+    }
+    if !errors.is_empty() {
+        return Err(generic_error!(
+            "Failed to build test runners:\n  - {}",
+            errors.join("\n  - ")
+        ));
+    }
     overrides.validate(&runners)?;
     Ok(runners)
 }
@@ -840,6 +858,7 @@ pub fn parse_file_spec(spec: &str) -> Result<(&str, &str), GenericError> {
 }
 
 pub(crate) mod case;
+mod case_file;
 
 #[cfg(test)]
 mod coverage_inventory;
@@ -848,6 +867,11 @@ mod coverage_inventory;
 pub(crate) mod tests {
     use super::*;
     use crate::correctness::case::CorrectnessTestCase;
+
+    pub(crate) const PARTICIPANT_FIELDS: &str =
+        "timeout: 1s\nsubject_os: [linux]\nparticipants:\n  adp: {type: agent-adp, subject: true}\nprocedure: []\n";
+    pub(crate) const NO_PARTICIPANT_FIELDS: &str =
+        "timeout: 1s\nsubject_os: [linux]\nparticipants: {}\nprocedure: []\n";
 
     fn load_case<T, P>(path: P) -> Result<T, GenericError>
     where
@@ -1042,7 +1066,7 @@ timeout: 30s
     #[test]
     fn discovery_reports_every_malformed_file_sorted_by_path() {
         let dir = tempfile::tempdir().unwrap();
-        let missing = write_case(dir.path(), "b-missing-type", "name: missing\n");
+        let unknown = write_case(dir.path(), "b-unknown-type", "type: bogus\n");
         let invalid = write_case(dir.path(), "a-invalid-yaml", "type: [");
         let good = write_case(
             dir.path(),
@@ -1059,12 +1083,12 @@ timeout: 30s
         let invalid_position = message
             .find(&invalid.canonicalize().unwrap().display().to_string())
             .unwrap();
-        let missing_position = message
-            .find(&missing.canonicalize().unwrap().display().to_string())
+        let unknown_position = message
+            .find(&unknown.canonicalize().unwrap().display().to_string())
             .unwrap();
-        assert!(invalid_position < missing_position, "{message}");
+        assert!(invalid_position < unknown_position, "{message}");
         assert!(message.contains("Failed to parse config file as YAML"), "{message}");
-        assert!(message.contains("Missing required 'type' field"), "{message}");
+        assert!(message.contains("Unknown test type 'bogus'"), "{message}");
         assert!(
             !message.contains(&good.canonicalize().unwrap().display().to_string()),
             "{message}"
@@ -1216,7 +1240,7 @@ timeout: 30s
     fn discovery_reports_load_failures_and_duplicate_names_together() {
         let dir = tempfile::tempdir().unwrap();
         let roots = [dir.path().join("first"), dir.path().join("second")];
-        let malformed = write_case(&roots[0], "malformed", "name: missing\n");
+        let malformed = write_case(&roots[0], "malformed", "type: bogus\n");
         for root in &roots {
             for name in ["z-shared", "a-shared"] {
                 write_case(
@@ -1235,6 +1259,87 @@ timeout: 30s
         let second_duplicate = message.find("Case name 'z-shared' is declared more than once").unwrap();
         assert!(malformed_position < first_duplicate, "{message}");
         assert!(first_duplicate < second_duplicate, "{message}");
+    }
+
+    #[test]
+    fn building_runners_names_every_participant_case_before_validating_overrides() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cases = Vec::new();
+        let mut participant_sources = Vec::new();
+        for name in ["second", "integration", "first"] {
+            let yaml = if name == "integration" {
+                "type: integration\nname: integration\ntimeout: 1s\nruntimes: [linux]\nprocedure: []\n"
+            } else {
+                PARTICIPANT_FIELDS
+            };
+            let path = write_case(dir.path(), name, yaml);
+            cases.extend(CaseConfig::load_file(&path).unwrap());
+            if name != "integration" {
+                participant_sources.push((name, path.canonicalize().unwrap()));
+            }
+        }
+        let overrides = ["unmatched=image:override".parse().unwrap()];
+        let error = build_runners(&cases, LINUX_RUNTIME, &overrides)
+            .err()
+            .expect("participant cases must fail runner construction");
+        let errors: Vec<_> = participant_sources
+            .iter()
+            .map(|(name, source)| {
+                format!(
+                    "Cannot run case '{name}' from {}: panoramic cannot yet run cases that declare participants",
+                    source.display()
+                )
+            })
+            .collect();
+        assert_eq!(
+            format!("{error:#}"),
+            format!("Failed to build test runners:\n  - {}", errors.join("\n  - "))
+        );
+    }
+
+    #[test]
+    fn discovery_aggregates_participant_schema_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut sources = Vec::new();
+        for (name, yaml, expected) in [
+            ("a-os", PARTICIPANT_FIELDS.replace("[linux]", "[]"), "empty subject_os"),
+            (
+                "b-participants",
+                NO_PARTICIPANT_FIELDS.to_string(),
+                "declares no participants",
+            ),
+            (
+                "c-duplicate",
+                PARTICIPANT_FIELDS.replace(
+                    "  adp: {type: agent-adp, subject: true}",
+                    "  adp: {type: agent-adp}\n  adp: {type: agent-adp}",
+                ),
+                "duplicate",
+            ),
+            (
+                "d-connection",
+                PARTICIPANT_FIELDS.replace("subject: true", "connect: {intake: invalid}"),
+                "connection 'invalid'",
+            ),
+            (
+                "e-procedure",
+                PARTICIPANT_FIELDS.replace("procedure: []", "procedure: [{parallel: []}]"),
+                "at least one step",
+            ),
+        ] {
+            sources.push((write_case(dir.path(), name, &yaml).canonicalize().unwrap(), expected));
+        }
+        let error = discover_cases(&[dir.path().to_path_buf()])
+            .err()
+            .expect("invalid cases must fail discovery");
+        let message = format!("{error:#}");
+        let errors: Vec<_> = message.split("\n  - ").collect();
+        assert_eq!(errors[0], "Failed to load test cases:");
+        assert_eq!(errors.len(), sources.len() + 1);
+        for (error, (source, expected)) in errors[1..].iter().zip(sources) {
+            assert!(error.contains(&source.display().to_string()), "{error}");
+            assert!(error.contains(expected), "{error}");
+        }
     }
 
     #[test]

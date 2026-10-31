@@ -510,7 +510,10 @@ fn listing(cases: &[CaseConfig], runners: &[Box<dyn test::Test>]) -> BTreeMap<St
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{tests::write_case, DEFAULT_WINDOWS_TARGET_IMAGE, LINUX_RUNTIME, WINDOWS_RUNTIME};
+    use crate::config::{
+        tests::{write_case, PARTICIPANT_FIELDS},
+        DEFAULT_WINDOWS_TARGET_IMAGE, LINUX_RUNTIME, WINDOWS_RUNTIME,
+    };
 
     const CORRECTNESS_FIELDS: &str =
         "runtime: docker\nanalysis_mode: metrics\nbaseline: {image: 'base:declared'}\ncomparison: {image: 'comp:declared'}\n";
@@ -578,7 +581,7 @@ comparison: {image: comp}
             "good",
             "type: integration\nname: good\ntimeout: 1s\nruntimes: [linux]\nprocedure: []\n",
         );
-        let bad = write_case(dir.path(), "bad", "name: bad\n");
+        let bad = write_case(dir.path(), "bad", "type: bogus\n");
         let error = discover_in_scope(&[dir.path().to_path_buf()], LINUX_RUNTIME)
             .err()
             .expect("the malformed case must fail discovery");
@@ -614,7 +617,7 @@ comparison: {image: comp}
     #[tokio::test]
     async fn a_malformed_case_fails_list_and_list_json() {
         let dir = tempfile::tempdir().unwrap();
-        write_case(dir.path(), "bad", "name: bad\n");
+        write_case(dir.path(), "bad", "type: bogus\n");
         for json in [false, true] {
             let mut args = vec!["panoramic", "list", "-d", dir.path().to_str().unwrap()];
             if json {
@@ -628,6 +631,71 @@ comparison: {image: comp}
                 list_tests(cmd).await,
                 ExitCode::from(EXIT_HARNESS_ERROR),
                 "json: {json}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn list_shows_a_participant_case_but_list_json_and_run_fail() {
+        let dir = tempfile::tempdir().unwrap();
+        write_case(dir.path(), "participant", PARTICIPANT_FIELDS);
+        write_case(
+            dir.path(),
+            "good",
+            "type: integration\nname: good\ntimeout: 1s\nruntimes: [linux]\nprocedure: []\n",
+        );
+        let cases = discover_in_scope(&[dir.path().to_path_buf()], LINUX_RUNTIME).unwrap();
+        assert_eq!(
+            cases.iter().map(CaseConfig::name).collect::<Vec<_>>(),
+            ["good", "participant"]
+        );
+        for json in [false, true] {
+            let mut args = vec![
+                "panoramic",
+                "list",
+                "-d",
+                dir.path().to_str().unwrap(),
+                "--runtime",
+                "linux",
+            ];
+            if json {
+                args.push("--json");
+            }
+            let cli = Cli::try_parse_from(args).unwrap();
+            let Command::List(cmd) = cli.command else {
+                panic!("expected list");
+            };
+            let expected = if json {
+                ExitCode::from(EXIT_HARNESS_ERROR)
+            } else {
+                ExitCode::SUCCESS
+            };
+            assert_eq!(list_tests(cmd).await, expected, "json: {json}");
+        }
+        let logs = dir.path().join("logs");
+        for selection in [Some("good"), None] {
+            let mut args = vec![
+                "panoramic",
+                "run",
+                "-d",
+                dir.path().to_str().unwrap(),
+                "--runtime",
+                "linux",
+                "--no-tui",
+                "-l",
+                logs.to_str().unwrap(),
+            ];
+            if let Some(name) = selection {
+                args.extend(["-t", name]);
+            }
+            let cli = Cli::try_parse_from(args).unwrap();
+            let Command::Run(cmd) = cli.command else {
+                panic!("expected run");
+            };
+            assert_eq!(run_tests(cmd, false).await, ExitCode::from(EXIT_HARNESS_ERROR));
+            assert!(
+                !logs.exists(),
+                "runner construction must fail before creating the log directory"
             );
         }
     }

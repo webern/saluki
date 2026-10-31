@@ -1,8 +1,8 @@
-//! A [`CaseConfig`] is one runnable case loaded from a `config.yaml`.
+//! A [`CaseConfig`] is one case loaded from a `config.yaml`.
 //!
 //! It records the name, description, suite, source file, timeout and declared subject operating systems.
-//! The parsed integration or correctness data stays private. [`CaseConfig::build_test`] builds runners
-//! from copies, so image overrides leave the loaded case unchanged.
+//! The parsed integration, correctness or participant data stays private. [`CaseConfig::build_test`] builds
+//! supported runners from copies, so image overrides leave the loaded case unchanged.
 
 use std::{
     collections::BTreeSet,
@@ -11,8 +11,12 @@ use std::{
 };
 
 use saluki_error::{generic_error, ErrorContext as _, GenericError};
+use serde::Deserialize;
 
-use super::{parse_case, IntegrationConfig, MatrixVariants, LINUX_RUNTIME, MAC_RUNTIME, WINDOWS_RUNTIME};
+use super::{
+    case_file::CaseFile, deserialize_case, parse_case, IntegrationConfig, MatrixVariants, LINUX_RUNTIME, MAC_RUNTIME,
+    WINDOWS_RUNTIME,
+};
 use crate::{
     correctness::{case::CorrectnessTestCase, config::Config as CorrectnessConfig},
     image_override::ImageOverrides,
@@ -21,7 +25,8 @@ use crate::{
 };
 
 /// An operating system a case's processes run on.
-#[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[serde(rename_all = "lowercase")]
 pub(crate) enum Os {
     Linux,
     #[allow(
@@ -33,6 +38,15 @@ pub(crate) enum Os {
 }
 
 impl Os {
+    /// Returns the OS spelling used in case files.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Linux => "linux",
+            Self::MacOs => "macos",
+            Self::Windows => "windows",
+        }
+    }
+
     /// Maps an integration runtime identifier to its OS.
     pub(crate) fn from_runtime(runtime: &str) -> Option<Self> {
         match runtime {
@@ -63,6 +77,12 @@ pub(crate) struct CaseConfig {
 pub(super) enum CaseSchema {
     Integration(IntegrationConfig),
     Correctness(CorrectnessConfig),
+    // TODO: remove once panoramic can run cases that declare participants.
+    #[allow(
+        dead_code,
+        reason = "Only tests read the stored case until participant cases can run."
+    )]
+    Participants(CaseFile),
 }
 
 impl CaseConfig {
@@ -70,10 +90,12 @@ impl CaseConfig {
     ///
     /// # Errors
     ///
-    /// Returns an error if the file cannot be read or resolved, contains invalid YAML, omits `type`,
-    /// names an unknown type, or fails schema deserialization. The directory must have a name, and an
-    /// integration case's name must match it. Integration runtimes must be nonempty and recognized;
-    /// a correctness matrix must have at least one variant.
+    /// Files without a top-level `type` declare participants. Returns an error if the file cannot be
+    /// read or resolved, contains invalid YAML, has a non-string or unknown `type`, or fails schema
+    /// deserialization. The directory must have a name, and a declared case name must match it.
+    /// Integration runtimes must be nonempty and recognized; a correctness matrix must have at least
+    /// one variant. Participant cases must declare at least one participant and a nonempty, unique
+    /// `subject_os` list using `linux`, `macos` or `windows`.
     pub(crate) fn load_file(config_path: &Path) -> Result<Vec<Self>, GenericError> {
         let canonical_path = config_path.canonicalize().error_context(format!(
             "Failed to resolve configuration file: {}",
@@ -98,12 +120,32 @@ impl CaseConfig {
             config_path.display()
         ))?;
 
-        let test_type = peek.get("type").and_then(|v| v.as_str()).ok_or_else(|| {
-            generic_error!(
-                "Missing required 'type' field in {} (expected 'integration', 'correctness', or 'correctness_matrix')",
-                config_path.display()
-            )
-        })?;
+        let test_type = match peek.get("type") {
+            None => {
+                let file: CaseFile = deserialize_case(&content, config_path)?;
+                let name = case_name(file.name.as_deref(), dir_name, config_path)?;
+                let subject_os = file.check(&name, config_path)?;
+                return Ok(vec![Self {
+                    name,
+                    description: file.description.clone(),
+                    // TODO: derive the suite from the case's directory.
+                    suite: TestSuite::Integration,
+                    source: config_path.to_path_buf(),
+                    timeout: file.timeout.0,
+                    subject_os,
+                    disabled: false,
+                    schema: CaseSchema::Participants(file),
+                }]);
+            }
+            Some(serde_json::Value::String(test_type)) => test_type.as_str(),
+            Some(_) => {
+                return Err(generic_error!(
+                    "'type' in {} must be a string: 'integration', 'correctness' or 'correctness_matrix'; \
+                     a case that declares participants has no top-level 'type'",
+                    config_path.display()
+                ));
+            }
+        };
 
         match test_type {
             "integration" => {
@@ -152,8 +194,7 @@ impl CaseConfig {
             "correctness_matrix" => {
                 // Parse each schema from YAML text; flattening or a Value round-trip changes scalar coercion.
                 let base: CorrectnessConfig = parse_case(&content, config_path)?;
-                let matrix: MatrixVariants = serde_saphyr::from_str(&content)
-                    .error_context(format!("Failed to parse configuration file: {}", config_path.display()))?;
+                let matrix: MatrixVariants = deserialize_case(&content, config_path)?;
                 let base_name = case_name(None, dir_name, config_path)?;
                 if matrix.variants.is_empty() {
                     return Err(generic_error!(
@@ -169,7 +210,8 @@ impl CaseConfig {
                     .collect())
             }
             other => Err(generic_error!(
-                "Unknown test type '{}' in {} (expected 'integration', 'correctness', or 'correctness_matrix')",
+                "Unknown test type '{}' in {} (expected 'integration', 'correctness', or 'correctness_matrix'; \
+                 a case that declares participants has no top-level 'type')",
                 other,
                 config_path.display()
             )),
@@ -189,26 +231,40 @@ impl CaseConfig {
         }
     }
 
-    /// Scopes integration cases to their declared OSes; enabled correctness cases accept every runtime.
+    /// Scopes integration and participant cases to their declared OSes;
+    /// enabled correctness cases accept every runtime.
     pub(crate) fn is_eligible_for(&self, runtime: &str) -> bool {
         if self.disabled {
             return false;
         }
         match self.schema {
-            CaseSchema::Integration(_) => Os::from_runtime(runtime).is_some_and(|os| self.subject_os.contains(&os)),
+            CaseSchema::Integration(_) | CaseSchema::Participants(_) => {
+                Os::from_runtime(runtime).is_some_and(|os| self.subject_os.contains(&os))
+            }
             CaseSchema::Correctness(_) => true,
         }
     }
 
     /// Builds a runner from a copy of the case data, applying image choices to that copy.
-    pub(super) fn build_test(&self, settings: &IntegrationSettings, overrides: &ImageOverrides<'_>) -> Box<dyn Test> {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error naming the case and source for participant cases.
+    pub(super) fn build_test(
+        &self, settings: &IntegrationSettings, overrides: &ImageOverrides<'_>,
+    ) -> Result<Box<dyn Test>, GenericError> {
         match &self.schema {
-            CaseSchema::Integration(config) => Box::new(IntegrationTestCase::new(config.clone(), settings)),
+            CaseSchema::Integration(config) => Ok(Box::new(IntegrationTestCase::new(config.clone(), settings))),
             CaseSchema::Correctness(config) => {
                 let mut config = config.clone();
                 overrides.apply_correctness(&mut config);
-                Box::new(CorrectnessTestCase::new(self.name.clone(), config))
+                Ok(Box::new(CorrectnessTestCase::new(self.name.clone(), config)))
             }
+            CaseSchema::Participants(_) => Err(generic_error!(
+                "Cannot run case '{}' from {}: panoramic cannot yet run cases that declare participants",
+                self.name,
+                self.source.display()
+            )),
         }
     }
 }
@@ -262,7 +318,10 @@ mod tests {
     use std::fs;
 
     use super::*;
-    use crate::config::{build_runners, default_host_runtime, tests::write_case};
+    use crate::config::{
+        build_runners, default_host_runtime,
+        tests::{write_case, NO_PARTICIPANT_FIELDS, PARTICIPANT_FIELDS},
+    };
 
     const CORRECTNESS_FIELDS: &str =
         "runtime: docker\nanalysis_mode: metrics\nbaseline: {image: 'base:file'}\ncomparison: {image: 'comp:file'}\n";
@@ -287,6 +346,56 @@ mod tests {
         let canonical = path.canonicalize().unwrap();
         assert_eq!(case.source(), canonical);
         assert_eq!(case.source.parent().unwrap(), canonical.parent().unwrap());
+    }
+
+    #[test]
+    fn a_case_without_a_type_loads_as_a_participant_case() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_case(
+            dir.path(),
+            "alpha",
+            &format!(
+                "description: A portable case\n{}",
+                PARTICIPANT_FIELDS
+                    .replace("1s", "7s")
+                    .replace("[linux]", "[linux, macos]")
+            ),
+        );
+        let cases = CaseConfig::load_file(&path).unwrap();
+        assert_eq!(cases.len(), 1);
+        let case = &cases[0];
+        assert_eq!(case.name(), "alpha");
+        assert_eq!(case.description(), Some("A portable case"));
+        assert_eq!(case.timeout(), Duration::from_secs(7));
+        assert_eq!(case.subject_os, BTreeSet::from([Os::Linux, Os::MacOs]));
+        assert_eq!(case.suite(), TestSuite::Integration);
+        assert!(!case.disabled);
+        assert_eq!(case.source(), path.canonicalize().unwrap());
+        let CaseSchema::Participants(file) = case.schema() else {
+            panic!("expected participant data");
+        };
+        assert_eq!(file.participants["adp"].participant_type, "agent-adp");
+        assert!(file.procedure.is_empty());
+    }
+
+    #[test]
+    fn participant_cases_are_eligible_only_for_their_subject_os() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_case(
+            dir.path(),
+            "alpha",
+            &PARTICIPANT_FIELDS.replace("[linux]", "[linux, windows]"),
+        );
+        let cases = CaseConfig::load_file(&path).unwrap();
+        assert_eq!(cases.len(), 1);
+        for (runtime, eligible) in [
+            (LINUX_RUNTIME, true),
+            (MAC_RUNTIME, false),
+            (WINDOWS_RUNTIME, true),
+            ("unknown", false),
+        ] {
+            assert_eq!(cases[0].is_eligible_for(runtime), eligible, "{runtime}");
+        }
     }
 
     #[test]
@@ -401,19 +510,28 @@ mod tests {
     }
 
     #[test]
-    fn load_file_rejects_missing_and_unknown_types_and_empty_matrices() {
+    fn load_file_rejects_unknown_and_non_string_types_and_empty_matrices() {
         let dir = tempfile::tempdir().unwrap();
         for (yaml, expected) in [
-            ("name: missing\n".to_string(), "Missing required 'type' field"),
-            ("type: bogus\n".to_string(), "Unknown test type 'bogus'"),
+            ("type: 3\n".to_string(), vec!["'type' in", "must be a string"]),
+            ("type: null\n".to_string(), vec!["'type' in", "must be a string"]),
+            ("type: true\n".to_string(), vec!["'type' in", "must be a string"]),
+            ("type: []\n".to_string(), vec!["'type' in", "must be a string"]),
+            ("type: {}\n".to_string(), vec!["'type' in", "must be a string"]),
+            (
+                "type: bogus\n".to_string(),
+                vec!["Unknown test type 'bogus'", "has no top-level 'type'"],
+            ),
             (
                 format!("type: correctness_matrix\n{CORRECTNESS_FIELDS}variants: []\n"),
-                "has no variants defined",
+                vec!["has no variants defined"],
             ),
         ] {
             let path = write_case(dir.path(), "invalid", &yaml);
             let error = CaseConfig::load_file(&path).err().expect("invalid case must fail");
-            assert!(error.to_string().contains(expected), "{error}");
+            for expected in expected {
+                assert!(error.to_string().contains(expected), "{error}");
+            }
         }
     }
 
@@ -422,7 +540,19 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         for (yaml, reason) in [
             ("type: [".to_string(), "Failed to parse config file as YAML"),
-            ("name: alpha\n".to_string(), "Missing required 'type' field"),
+            ("type: 3\n".to_string(), "must be a string"),
+            (format!("{PARTICIPANT_FIELDS}unknown: true\n"), "unknown field"),
+            (PARTICIPANT_FIELDS.replace("1s", "1nope"), "unknown duration unit"),
+            (PARTICIPANT_FIELDS.replace("[linux]", "[]"), "empty subject_os list"),
+            (
+                PARTICIPANT_FIELDS.replace("[linux]", "[linux, linux]"),
+                "lists subject OS 'linux' more than once",
+            ),
+            (NO_PARTICIPANT_FIELDS.to_string(), "declares no participants"),
+            (
+                format!("name: other\n{PARTICIPANT_FIELDS}"),
+                "does not match its directory",
+            ),
             ("type: bogus\n".to_string(), "Unknown test type 'bogus'"),
             (
                 "type: integration\nname: alpha\ntimeout: nope\nprocedure: []\n".to_string(),

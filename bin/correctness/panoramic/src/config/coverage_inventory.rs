@@ -19,7 +19,7 @@ use serde_json::{json, Value};
 
 use super::{
     build_runners,
-    case::{CaseConfig, CaseSchema},
+    case::{CaseConfig, CaseSchema, Os},
     discover_cases,
     tests::write_case,
     AssertionStep, CorrectnessConfig, IntegrationConfig, MatrixVariants, LINUX_RUNTIME, MAC_RUNTIME, WINDOWS_RUNTIME,
@@ -222,9 +222,9 @@ impl Inventory {
         let (integration_cases, correctness_cases): (Vec<_>, Vec<_>) =
             cases.iter().partition(|case| case.suite() == TestSuite::Integration);
         for (runtime, os) in [
-            (LINUX_RUNTIME, "linux"),
-            (MAC_RUNTIME, "macos"),
-            (WINDOWS_RUNTIME, "windows"),
+            (LINUX_RUNTIME, Os::Linux),
+            (MAC_RUNTIME, Os::MacOs),
+            (WINDOWS_RUNTIME, Os::Windows),
         ] {
             let eligible: Vec<_> = integration_cases
                 .iter()
@@ -233,7 +233,14 @@ impl Inventory {
                 .collect();
             let runners = build_runners(eligible.iter().copied(), runtime, &[]).unwrap();
             for (case, runner) in eligible.into_iter().zip(runners) {
-                rows.push(Row::from_case(root, case, runner.as_ref(), os, SELECTED, &schemas));
+                rows.push(Row::from_case(
+                    root,
+                    case,
+                    runner.as_ref(),
+                    os.name(),
+                    SELECTED,
+                    &schemas,
+                ));
             }
         }
         for case in correctness_cases {
@@ -247,7 +254,7 @@ impl Inventory {
                 root,
                 case,
                 runners[0].as_ref(),
-                "linux",
+                Os::Linux.name(),
                 status,
                 &schemas,
             ));
@@ -410,6 +417,10 @@ fn load_cases(path: &Path) -> Vec<(String, Case)> {
                     }),
                     ignored_fields: Vec::new(),
                 },
+            ),
+            CaseSchema::Participants(_) => panic!(
+                "{}: the coverage inventory does not record cases that declare participants",
+                path.display()
             ),
         };
         configs.push((case.name(), effective.config.clone()));

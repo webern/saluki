@@ -1,0 +1,74 @@
+seed: [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71, 73, 79, 83, 89, 97, 101, 103, 107, 109, 113, 127, 131]
+target: "{{ self.connections.target.url }}"
+aggregation_bucket_width_secs: 10
+volume: 10000
+corpus:
+  size: 10000
+  payload:
+    dogstatsd:
+      contexts:
+        constant: 3000
+      name_length:
+        inclusive:
+          min: 1
+          max: 32
+      tag_length:
+        inclusive:
+          min: 3
+          max: 16
+      tags_per_msg:
+        inclusive:
+          min: 2
+          max: 8
+      value:
+        float_probability: 0.5
+        range:
+          inclusive:
+            min: -9999999
+            max: 9999999
+      multivalue_count:
+        inclusive:
+          min: 2
+          max: 32
+      multivalue_pack_probability: 0.08
+      kind_weights:
+        metric: 100
+        event: 0
+        service_check: 0
+      # Weights based on analyzing internal Datadog usage data of metric type for metrics sent to
+      # the Agent over DogStatsD.
+      metric_weights:
+        count: 208
+        gauge: 66
+        timer: 0
+        distribution: 72
+        # We specifically _don't_ want to generate sets, because we can't assert their correctness
+        # once they've been aggregated.
+        set: 0
+        histogram: 1
+      # Pool of container IDs for the |c: (Local Data) extension field. Panoramic substitutes
+      # the load generator's own container ID after its pod starts, so the Agent can resolve
+      # its tags through the containerd socket. The second value exercises an unresolvable |c: value.
+      #
+      # Variants that do not enable dogstatsd_origin_detection_client ignore these fields entirely.
+      container_ids:
+        - "{{ self.late.container_id }}"
+        - "this-is-not-a-real-container-id"
+      # Pool of External Data strings for the |e: extension field. Panoramic substitutes
+      # the load generator's own pod UID after its pod starts. The second value exercises
+      # an unresolvable |e: value.
+      external_data:
+        - "pu-{{ self.late.pod_uid }},cn-millstone,it-false"
+        - "this-is-not-valid-external-data"
+      # Pool of cardinality values for the |card: extension field. Covers all four canonical
+      # lowercase levels, the "orch" shorthand, wrong-case variants to exercise case-insensitive
+      # matching, and an unrecognized value to verify both agents fall back gracefully.
+      cardinality:
+        - "low"
+        - "orchestrator"
+        - "orch"
+        - "high"
+        - "none"
+        - "HIGH"
+        - "ORCH"
+        - "this-is-not-a-valid-cardinality"

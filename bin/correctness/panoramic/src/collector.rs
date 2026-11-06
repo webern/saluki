@@ -8,16 +8,17 @@ use std::io;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
+use panoramic_core::events::TestEvent;
+use panoramic_core::interrupts::Interrupts;
+use panoramic_core::machine_output::{self, InterruptReason, RunReport, RunState, RunTotals, TestReport};
+use panoramic_core::result::{DurationMs, TestOutcome};
 use tokio::sync::mpsc;
 use tokio::task::{JoinError, JoinHandle};
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
-use crate::events::TestEvent;
-use crate::interrupts::Interrupts;
-use crate::machine_output::{self, InterruptReason, RunReport, RunState, RunTotals, TestReport};
-use crate::reporter::{run_counts, DurationMs, Reporter};
+use crate::text_output::{run_counts, Reporter};
 use crate::tui::Tui;
 
 /// Exit code for an assertion failure.
@@ -26,7 +27,7 @@ pub(crate) const EXIT_ASSERTION_FAILURE: u8 = 1;
 /// Exit code for a harness error, timeout, or interrupted run.
 pub(crate) const EXIT_HARNESS_ERROR: u8 = 2;
 
-/// Exit code for an empty selection or an unmatched test name.
+/// Exit code for an empty selection, an unmatched test name, or an all-skipped selection.
 pub(crate) const EXIT_NO_TESTS_SELECTED: u8 = 3;
 
 /// How often the TUI reads keys and redraws.
@@ -107,7 +108,7 @@ impl RunCollector {
             }
             Ok(()) => {
                 let report = &self.report;
-                let stopped_by_fail_fast = self.fail_fast && report.tests.iter().any(|t| !t.outcome.is_passed());
+                let stopped_by_fail_fast = self.fail_fast && report.tests.iter().any(|t| t.outcome.is_unsuccessful());
                 let unexplained = report.running.len() + if stopped_by_fail_fast { 0 } else { report.not_run.len() };
                 if unexplained > 0 {
                     self.interrupt(InterruptReason::RunnerFailed {
@@ -136,12 +137,22 @@ impl RunCollector {
     }
 }
 
+/// Whether every selected test is reported as skipped.
+pub(crate) fn every_test_skipped(report: &RunReport) -> bool {
+    !report.tests.is_empty()
+        && report.tests.iter().all(|test| test.outcome == TestOutcome::Skipped)
+        && report.running.is_empty()
+        && report.not_run.is_empty()
+}
+
 /// Chooses the exit code, giving interruptions and harness errors precedence over assertion failures.
 pub(crate) fn exit_code(report: &RunReport) -> ExitCode {
     if report.state == RunState::Interrupted || report.tests.iter().any(|t| t.outcome.is_error()) {
         ExitCode::from(EXIT_HARNESS_ERROR)
-    } else if report.tests.iter().any(|t| !t.outcome.is_passed()) {
+    } else if report.tests.iter().any(|t| t.outcome.is_unsuccessful()) {
         ExitCode::from(EXIT_ASSERTION_FAILURE)
+    } else if every_test_skipped(report) {
+        ExitCode::from(EXIT_NO_TESTS_SELECTED)
     } else {
         ExitCode::SUCCESS
     }
@@ -320,16 +331,18 @@ fn apply_event(collector: &mut RunCollector, display: Option<&mut RunDisplay>, e
 mod tests {
     use std::sync::Arc;
 
+    use panoramic_core::events::create_event_channel;
+    use panoramic_core::layout::Os;
+    use panoramic_core::machine_output::RUN_REPORT_FILE_NAME;
+    use panoramic_core::record::{StepResult, StepStatus};
+    use panoramic_core::result::{ErrorKind, TestResult};
     use serde_json::{json, Value};
     use tokio::sync::Notify;
 
     use super::*;
-    use crate::assertions::{AssertionResult, AssertionStatus};
-    use crate::events::create_event_channel;
-    use crate::machine_output::RUN_REPORT_FILE_NAME;
-    use crate::reporter::{ErrorKind, OutputFormat, TestResult};
-    use crate::runner::test_support::{test_runner_settings, Behavior, ScriptedTest};
-    use crate::runner::{RunArgs, Runner};
+    use crate::runner::test_support::{Behavior, ScriptedTest};
+    use crate::runner::{BuiltCase, RunArgs, Runner};
+    use crate::text_output::OutputFormat;
 
     /// Bounds test waits below the runner's cleanup grace period so hangs fail promptly.
     const WAIT_BOUND: Duration = Duration::from_secs(5);
@@ -337,7 +350,6 @@ mod tests {
     /// A spawned `Runner` with scripted tests, a collector, and a shared log directory.
     struct ScriptedRun {
         log_dir: tempfile::TempDir,
-        _mounts_dir: tempfile::TempDir,
         collector: RunCollector,
         cancel_all: CancellationToken,
         events: mpsc::UnboundedReceiver<TestEvent>,
@@ -348,20 +360,24 @@ mod tests {
         /// Spawns a sequential runner. On a current-thread runtime, it starts when the test yields.
         fn spawn(tests: Vec<ScriptedTest>, fail_fast: bool) -> Self {
             let log_dir = tempfile::tempdir().expect("temp dir should be creatable");
-            let mounts_dir = tempfile::tempdir().expect("temp dir should be creatable");
             let selected = tests.iter().map(|t| t.name.clone()).collect();
             let report = RunReport::new(
+                "unknown".to_string(),
                 Vec::new(),
-                "linux".to_string(),
+                Vec::new(),
+                Os::Linux,
                 1,
                 log_dir.path().to_path_buf(),
                 selected,
+                Vec::new(),
             );
             let collector = RunCollector::start(report, fail_fast);
 
-            let mut runner = Runner::new(log_dir.path(), test_runner_settings(mounts_dir.path()));
+            let mut runner = Runner::new(log_dir.path());
             for test in tests {
-                runner.register(Box::new(test)).expect("scripted test names are unique");
+                runner
+                    .register(BuiltCase::new(test.plan(), Box::new(test)))
+                    .expect("scripted test names are unique");
             }
             let cancel_all = CancellationToken::new();
             let (tx, events) = create_event_channel();
@@ -370,7 +386,6 @@ mod tests {
 
             Self {
                 log_dir,
-                _mounts_dir: mounts_dir,
                 collector,
                 cancel_all,
                 events,
@@ -382,7 +397,6 @@ mod tests {
         async fn consume(self, interrupts: &mut Interrupts) -> (RunEnd, ConsumedReport) {
             let Self {
                 log_dir,
-                _mounts_dir,
                 mut collector,
                 cancel_all,
                 events,
@@ -453,14 +467,16 @@ mod tests {
         interrupts
     }
 
-    fn result(name: &str, status: AssertionStatus) -> TestResult {
-        let assertion = AssertionResult {
+    fn result(name: &str, status: StepStatus) -> TestResult {
+        let assertion = StepResult {
+            step: 0,
+            member: None,
             name: "log_contains".to_string(),
             status,
             message: String::new(),
             duration: Duration::from_millis(1),
         };
-        TestResult::from_assertions(name, Duration::from_secs(1), vec![assertion], Vec::new())
+        TestResult::from_steps(name, Duration::from_secs(1), vec![assertion], Vec::new())
     }
 
     fn completed(result: TestResult) -> TestEvent {
@@ -514,7 +530,7 @@ mod tests {
         assert_eq!(on_disk["state"], "complete");
         assert_eq!(
             on_disk["totals"],
-            json!({"passed": 1, "failed": 1, "errored": 0, "timed_out": 0, "not_run": 0})
+            json!({"passed": 1, "failed": 1, "errored": 0, "timed_out": 0, "skipped": 0, "not_run": 0})
         );
         assert_eq!(
             exit_code(run.collector.report()),
@@ -666,15 +682,18 @@ mod tests {
         let log_dir = tempfile::tempdir().expect("temp dir should be creatable");
         let selected = vec!["a".to_string(), "b".to_string()];
         let report = RunReport::new(
+            "unknown".to_string(),
             Vec::new(),
-            "linux".to_string(),
+            Vec::new(),
+            Os::Linux,
             1,
             log_dir.path().to_path_buf(),
             selected,
+            Vec::new(),
         );
         let mut collector = RunCollector::start(report, false);
         collector.observe(&TestEvent::TestStarted { name: "a".to_string() });
-        collector.observe(&completed(result("a", AssertionStatus::Passed)));
+        collector.observe(&completed(result("a", StepStatus::Passed)));
 
         collector.finish(Ok(()));
 
@@ -686,54 +705,109 @@ mod tests {
     }
 
     #[test]
-    fn exit_code_distinguishes_failures_errors_and_interruptions() {
+    fn fail_fast_is_not_triggered_by_skipped_tests() {
+        for complete in [true, false] {
+            let log_dir = tempfile::tempdir().unwrap();
+            let report = RunReport::new(
+                "unknown".into(),
+                Vec::new(),
+                Vec::new(),
+                Os::MacOs,
+                1,
+                log_dir.path().to_path_buf(),
+                vec!["a".into()],
+                vec![TestReport::skipped(
+                    "skipped".into(),
+                    "/cases/skipped".into(),
+                    Os::MacOs,
+                )],
+            );
+            let mut collector = RunCollector::start(report, true);
+            if complete {
+                collector.observe(&completed(result("a", StepStatus::Passed)));
+            }
+            collector.finish(Ok(()));
+            let on_disk = read_run_json(log_dir.path());
+            if complete {
+                assert_eq!(on_disk["state"], "complete");
+                assert!(on_disk["interrupted_reason"].is_null());
+                assert_eq!(exit_code(collector.report()), ExitCode::SUCCESS);
+            } else {
+                assert_eq!(on_disk["state"], "interrupted");
+                assert_eq!(on_disk["interrupted_reason"]["kind"], "runner_failed");
+                assert_eq!(on_disk["not_run"], json!(["a"]));
+            }
+        }
+    }
+
+    #[test]
+    fn every_test_skipped_requires_a_nonempty_fully_skipped_selection() {
+        let mut report = RunReport::new(
+            "unknown".into(),
+            Vec::new(),
+            Vec::new(),
+            Os::MacOs,
+            1,
+            std::path::PathBuf::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        assert!(!every_test_skipped(&report));
+        report.tests.push(TestReport::skipped(
+            "skipped".into(),
+            "/cases/skipped".into(),
+            Os::MacOs,
+        ));
+        assert!(every_test_skipped(&report));
+        report.running.push("running".into());
+        assert!(!every_test_skipped(&report));
+        report.running.clear();
+        report.not_run.push("pending".into());
+        assert!(!every_test_skipped(&report));
+        report.not_run.clear();
+        report
+            .tests
+            .push(TestReport::new(&result("passed", StepStatus::Passed)));
+        assert!(!every_test_skipped(&report));
+    }
+
+    #[test]
+    fn exit_code_distinguishes_failures_errors_interruptions_and_skips() {
+        let passed = || result("a", StepStatus::Passed);
+        let failed = || result("b", StepStatus::Failed);
         let timed_out = || TestResult::errored("t", ErrorKind::Timeout, "slow", Duration::from_secs(1), Vec::new());
         let setup_error = || TestResult::errored("e", ErrorKind::Setup, "boom", Duration::from_secs(1), Vec::new());
-        let cases = [
-            (
-                "pass",
-                vec![result("a", AssertionStatus::Passed)],
-                false,
-                ExitCode::SUCCESS,
-            ),
-            (
-                "pass and fail",
-                vec![
-                    result("a", AssertionStatus::Passed),
-                    result("b", AssertionStatus::Failed),
-                ],
-                false,
-                ExitCode::from(EXIT_ASSERTION_FAILURE),
-            ),
-            (
-                "setup error",
-                vec![setup_error()],
-                false,
-                ExitCode::from(EXIT_HARNESS_ERROR),
-            ),
-            // Harness errors take precedence over assertion failures.
-            (
-                "fail and timeout",
-                vec![result("b", AssertionStatus::Failed), timed_out()],
-                false,
-                ExitCode::from(EXIT_HARNESS_ERROR),
-            ),
-            (
-                "pass, then interrupt",
-                vec![result("a", AssertionStatus::Passed)],
-                true,
-                ExitCode::from(EXIT_HARNESS_ERROR),
-            ),
-        ];
-
-        for (case, results, interrupted, expected) in cases {
-            let log_dir = tempfile::tempdir().expect("temp dir should be creatable");
+        for (case, results, skipped, interrupted, expected) in [
+            ("pass", vec![passed()], false, false, 0),
+            ("pass and fail", vec![passed(), failed()], false, false, 1),
+            ("setup error", vec![setup_error()], false, false, 2),
+            ("fail and timeout", vec![failed(), timed_out()], false, false, 2),
+            ("pass then interrupt", vec![passed()], false, true, 2),
+            ("skipped only", vec![], true, false, 3),
+            ("skipped and passed", vec![passed()], true, false, 0),
+            ("skipped and failed", vec![failed()], true, false, 1),
+            ("skipped and setup error", vec![setup_error()], true, false, 2),
+            ("skipped and interrupted", vec![], true, true, 2),
+        ] {
+            let log_dir = tempfile::tempdir().unwrap();
+            let skipped = if skipped {
+                vec![TestReport::skipped(
+                    "skipped".into(),
+                    "/cases/skipped".into(),
+                    Os::MacOs,
+                )]
+            } else {
+                Vec::new()
+            };
             let report = RunReport::new(
+                "unknown".into(),
                 Vec::new(),
-                "linux".to_string(),
+                Vec::new(),
+                Os::MacOs,
                 1,
                 log_dir.path().to_path_buf(),
                 Vec::new(),
+                skipped,
             );
             let mut collector = RunCollector::start(report, false);
             for result in results {
@@ -743,8 +817,7 @@ mod tests {
                 collector.interrupt(InterruptReason::Signal { source: "SIGINT" });
             }
             collector.finish(Ok(()));
-
-            assert_eq!(exit_code(collector.report()), expected, "case: {}", case);
+            assert_eq!(exit_code(collector.report()), ExitCode::from(expected), "{case}");
         }
     }
 
@@ -754,15 +827,18 @@ mod tests {
         // cluster may remain.
         let log_dir = tempfile::tempdir().expect("temp dir should be creatable");
         let report = RunReport::new(
+            "unknown".to_string(),
             Vec::new(),
-            "linux".to_string(),
+            Vec::new(),
+            Os::Linux,
             1,
             log_dir.path().to_path_buf(),
             vec!["a".to_string()],
+            Vec::new(),
         );
         let mut collector = RunCollector::start(report, false);
         collector.observe(&TestEvent::TestStarted { name: "a".to_string() });
-        collector.observe(&completed(result("a", AssertionStatus::Passed)));
+        collector.observe(&completed(result("a", StepStatus::Passed)));
         collector.finish(Ok(()));
         let (tx, mut interrupts) = Interrupts::manual();
 

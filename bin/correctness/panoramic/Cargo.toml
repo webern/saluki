@@ -14,26 +14,23 @@ workspace = true
 [dependencies]
 airlock = { path = "../airlock" }
 async-trait = { workspace = true }
-base64 = { workspace = true }
 bollard = { workspace = true, features = ["time"] }
 chrono = { workspace = true }
 clap = { workspace = true, features = ["derive", "env", "error-context", "help", "std", "usage"] }
 colored = { workspace = true }
 crossterm = { workspace = true, features = ["events", "windows"] }
 futures = { workspace = true }
-k8s-openapi = { workspace = true }
-kube = { workspace = true, features = ["client", "http-proxy", "rustls-tls", "ws"] }
+panoramic-core = { workspace = true }
+panoramic-participants = { workspace = true }
+panoramic-steps = { workspace = true }
 rand = { workspace = true, features = ["std", "std_rng", "thread_rng"] }
 regex = { workspace = true, features = ["std"] }
-reqwest = { workspace = true, features = ["json", "zstd", "rustls-no-provider", "query"] }
 rustls = { workspace = true }
 saluki-common = { workspace = true }
 saluki-error = { workspace = true }
 serde = { workspace = true }
 serde-saphyr = { workspace = true }
 serde_json = { workspace = true }
-snafu = { workspace = true }
-stele = { workspace = true }
 tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { workspace = true, features = ["compat", "rt"] }
 tracing = { workspace = true }
@@ -45,8 +42,6 @@ tracing-subscriber = { workspace = true, features = [
   "std",
   "tracing-log",
 ] }
-treediff = { workspace = true, features = ["with-serde-json"] }
-zstd = { workspace = true }
 
 [target.'cfg(not(windows))'.dependencies]
 rustls = { workspace = true, features = ["aws_lc_rs"] }
@@ -55,6 +50,7 @@ rustls = { workspace = true, features = ["aws_lc_rs"] }
 rustls-cng-crypto = { workspace = true }
 
 [dev-dependencies]
-socket2 = { workspace = true }
+panoramic-core = { workspace = true, features = ["test-util"] }
+panoramic-steps = { workspace = true, features = ["test-util"] }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }

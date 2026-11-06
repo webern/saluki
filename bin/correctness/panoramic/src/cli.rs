@@ -1,13 +1,16 @@
 //! Defines Panoramic's command-line interface.
 
 use std::num::NonZeroUsize;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use airlock::driver::DEFAULT_ALPINE_IMAGE;
 use chrono::Local;
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{
+    builder::{PossibleValuesParser, TypedValueParser},
+    Args, Parser, Subcommand, ValueEnum,
+};
+use panoramic_core::layout::Os;
 
-use crate::{image_override::ImageOverride, reporter::OutputFormat, test::RunnerSettings};
+use crate::text_output::OutputFormat;
 
 /// Environment variables Panoramic honors but doesn't own, rendered at the bottom of the help output.
 ///
@@ -21,16 +24,20 @@ Environment variables:
   RUST_LOG       tracing-subscriber filter, for expert use. When set, it takes precedence over
                  --log-level and applies to every crate, including external dependencies.";
 
-/// Default `agent-data-plane` binary for host-process tests, resolved against the current directory.
-const DEFAULT_ADP_BINARY_PATH: &str = "target/release/agent-data-plane";
-
-/// Default Datadog Agent binary for host-process tests: the sandbox install `make provision-macos-test-env` writes.
-const DEFAULT_CORE_AGENT_BINARY_PATH: &str = "/tmp/saluki-dda/datadog-agent/bin/agent/agent";
-
 /// Crates that `--log-level` applies to: Panoramic itself and the first-party libraries it links.
 ///
 /// These are tracing target names, which are crate names with underscores rather than dashes.
 const FIRST_PARTY_LOG_TARGETS: &[&str] = &["panoramic", "airlock", "stele", "saluki_common", "saluki_error"];
+
+fn subject_os_parser() -> impl TypedValueParser<Value = Os> {
+    let systems = [Os::Linux, Os::MacOs, Os::Windows];
+    PossibleValuesParser::new(systems.map(Os::name)).map(move |value| {
+        systems
+            .into_iter()
+            .find(|os| os.name() == value)
+            .expect("only OS names are possible values")
+    })
+}
 
 /// Verbosity selected by `--log-level`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -72,8 +79,8 @@ impl LogLevel {
 //
 // Panoramic-owned settings should preferably be passed by command-line argument. If an
 // environment variable is desired, it should be prefixed with PANORAMIC_. For example:
-// CLI arg: --adp-binary-path
-// ENV var: PANORAMIC_ADP_BINARY_PATH
+// CLI arg: --log-dir
+// ENV var: PANORAMIC_LOG_DIR
 //
 // Saluki-repo-owned settings need not have a PANORAMIC_ prefix if they are shared with other
 // processes, build or CI environments. These SHOULD have an addressable command-line argument.
@@ -91,7 +98,7 @@ impl LogLevel {
 // first-party libraries. The canonical RUST_LOG overrides this and feeds the logging library
 // directly.
 //
-/// Panoramic: Integration test runner for Agent Data Plane.
+/// Panoramic: Correctness and integration test runner for Agent Data Plane.
 #[derive(Parser)]
 #[command(
     name = "panoramic",
@@ -126,16 +133,76 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Run integration tests.
-    Run(RunCommand),
+    /// Run discovered cases.
+    Run(Box<RunCommand>),
 
-    /// List available integration tests.
+    /// List discovered cases.
     List(ListCommand),
+
+    /// Manage the artifacts cases need.
+    Artifacts(ArtifactsCommand),
+}
+
+#[derive(Args)]
+pub struct ArtifactsCommand {
+    #[command(subcommand)]
+    pub command: ArtifactsSubcommand,
+}
+
+#[derive(Subcommand)]
+pub enum ArtifactsSubcommand {
+    /// Write an artifact manifest from role bindings.
+    Render(RenderCommand),
+
+    /// Verify needed artifacts and print their identities without pulling images.
+    Verify(ArtifactCasesCommand),
+
+    /// Pull needed images and print their identities.
+    Pull(ArtifactCasesCommand),
+}
+
+#[derive(Args)]
+#[command(args_override_self = true)]
+pub struct RenderCommand {
+    /// Binds an artifact role to a reference, as ROLE=REFERENCE (can be specified multiple times).
+    /// Only the first `=` separates the role.
+    #[arg(long, value_name = "ROLE=REFERENCE", value_parser = artifact_binding_parser, verbatim_doc_comment)]
+    pub set: Vec<(String, String)>,
+
+    /// File to write the manifest to; an existing file is replaced.
+    #[arg(short = 'o', long, value_name = "FILE")]
+    pub output: PathBuf,
+}
+
+fn artifact_binding_parser(value: &str) -> Result<(String, String), String> {
+    value
+        .split_once('=')
+        .map(|(role, reference)| (role.to_string(), reference.to_string()))
+        .ok_or_else(|| "expected ROLE=REFERENCE".to_string())
+}
+
+#[derive(Args)]
+#[command(args_override_self = true)]
+pub struct ArtifactCasesCommand {
+    /// Path to a test cases directory (can be specified multiple times).
+    #[arg(short = 'd', long)]
+    pub test_dirs: Vec<PathBuf>,
+
+    /// Subject OS to select cases for: `linux`, `macos` or `windows`. Defaults to the host's OS.
+    #[arg(long, value_parser = subject_os_parser(), default_value = Os::host().name())]
+    pub subject_os: Os,
+
+    /// Artifact manifest (TOML) binding artifact roles to image references and paths.
+    /// Roles it omits use their local defaults; a role no participant type or backend
+    /// declares is an error. Each needed role is printed with the
+    /// reference it resolves to.
+    #[arg(long, value_name = "FILE", verbatim_doc_comment)]
+    pub artifacts: Option<PathBuf>,
 }
 
 // We build clap without its `wrap_help` feature, so help text is never reflowed. Descriptions that
 // need more than one line carry `verbatim_doc_comment` and are wrapped where they're written.
-/// Run integration tests.
+/// Run discovered cases.
 #[derive(Args)]
 #[command(args_override_self = true, after_help = ENV_HELP)]
 pub struct RunCommand {
@@ -147,13 +214,17 @@ pub struct RunCommand {
     #[arg(short = 't', long)]
     pub tests: Option<String>,
 
-    /// Integration-test runtime to scope discovery to (for example, `linux`, `mac`,
-    /// or `windows`). Only integration tests whose `runtimes:` list contains this
-    /// value are eligible to run. Defaults to the host's own runtime: `mac` on
-    /// macOS, `windows` on Windows, and `linux` everywhere else. Correctness tests
-    /// are unaffected by this flag
-    #[arg(long, verbatim_doc_comment)]
-    pub runtime: Option<String>,
+    /// Subject OS to select cases for: `linux`, `macos` or `windows`. Defaults to the
+    /// host's OS. Correctness cases run only for subject OS `linux`; other selections
+    /// report them as skipped.
+    #[arg(long, verbatim_doc_comment, value_parser = subject_os_parser(), default_value = Os::host().name())]
+    pub subject_os: Os,
+
+    /// Artifact manifest (TOML) binding artifact roles to image references and paths.
+    /// Roles it omits use their local defaults; a role no participant type or backend
+    /// declares is an error. Every needed artifact is verified before any case starts.
+    #[arg(long, value_name = "FILE", verbatim_doc_comment)]
+    pub artifacts: Option<PathBuf>,
 
     /// Number of tests to run in parallel.
     #[arg(short = 'p', long, default_value = "4")]
@@ -167,7 +238,7 @@ pub struct RunCommand {
     #[arg(short = 'f', long)]
     pub fail_fast: bool,
 
-    /// Show verbose output including all assertion details.
+    /// Show every step's message, including for passing tests.
     #[arg(short = 'v', long)]
     pub verbose: bool,
 
@@ -180,66 +251,17 @@ pub struct RunCommand {
     #[arg(short = 'l', long, env = "PANORAMIC_LOG_DIR", verbatim_doc_comment)]
     log_dir: Option<PathBuf>,
 
-    /// Directory whose contents are read-only bind mounted into every target
-    /// container panoramic launches (not millstone or datadog-intake). The directory
-    /// is treated as the container root: `<mounts-dir>/etc/foo` maps to `/etc/foo`.
-    /// Defaults to `bin/correctness/panoramic/mounts/` in the Saluki workspace where
-    /// this binary was compiled
-    #[arg(long, default_value_os_t = default_mounts_dir(), verbatim_doc_comment)]
-    mounts_dir: PathBuf,
-
-    /// Name of the kind cluster to create or reuse for kind-runtime tests.
+    /// Name of the kind cluster to create or reuse for cases with Kubernetes pod participants.
     #[arg(long, default_value = crate::kind::DEFAULT_CLUSTER_NAME)]
     pub kind_cluster_name: String,
 
-    /// Don't delete the kind cluster after kind-runtime tests complete (useful for
-    /// local iteration)
+    /// Don't delete the kind cluster after cases with Kubernetes pod participants complete
+    /// (useful for local iteration).
     #[arg(long, verbatim_doc_comment)]
     pub no_delete_kind_cluster: bool,
-
-    /// `agent-data-plane` binary that host-process (`runtime: mac`) tests spawn. A
-    /// relative path resolves against the current directory
-    #[arg(long, env = "PANORAMIC_ADP_BINARY_PATH", default_value = DEFAULT_ADP_BINARY_PATH, verbatim_doc_comment)]
-    adp_binary_path: PathBuf,
-
-    /// Datadog Agent binary that converged host-process tests spawn. Point this at
-    /// another install (a system-wide /opt/datadog-agent, for example) to test
-    /// against it
-    #[arg(long, env = "PANORAMIC_CORE_AGENT_BINARY_PATH", default_value = DEFAULT_CORE_AGENT_BINARY_PATH, verbatim_doc_comment)]
-    core_agent_binary_path: PathBuf,
-
-    /// Alpine image for the short-lived container that fixes up shared-volume
-    /// permissions. CI points this at an internal registry
-    #[arg(long, env = "PANORAMIC_ALPINE_IMAGE", default_value = DEFAULT_ALPINE_IMAGE, verbatim_doc_comment)]
-    alpine_image: String,
-
-    /// Image to run for one of a test's containers, as `<name>=<image>`, replacing
-    /// what the test case declares. Repeat the flag to name more than one container; the
-    /// environment variable takes them as one comma-separated list. CI uses this to run
-    /// the cases against the images built for the commit. `panoramic list --json`
-    /// reports the container names each test declares, and a name no test in the run
-    /// declares is an error
-    #[arg(
-        long = "image-override",
-        value_name = "NAME=IMAGE",
-        env = "PANORAMIC_IMAGE_OVERRIDES",
-        value_delimiter = ',',
-        verbatim_doc_comment
-    )]
-    pub image_overrides: Vec<ImageOverride>,
 }
 
 impl RunCommand {
-    /// Collects the settings that the runner hands to every test.
-    pub(crate) fn runner_settings(&self) -> RunnerSettings {
-        RunnerSettings {
-            mounts_dir: self.mounts_dir.clone(),
-            adp_binary_path: self.adp_binary_path.clone(),
-            core_agent_binary_path: self.core_agent_binary_path.clone(),
-            alpine_image: self.alpine_image.clone(),
-        }
-    }
-
     /// Gets the log directory for this run.
     ///
     /// The base comes from `--log-dir`/`PANORAMIC_LOG_DIR`, falling back to a temporary directory.
@@ -253,11 +275,7 @@ impl RunCommand {
     }
 }
 
-fn default_mounts_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("mounts")
-}
-
-/// List available integration tests.
+/// List discovered cases.
 #[derive(Args)]
 #[command(args_override_self = true)]
 pub struct ListCommand {
@@ -265,14 +283,21 @@ pub struct ListCommand {
     #[arg(short = 'd', long)]
     pub test_dirs: Vec<PathBuf>,
 
-    /// Integration-test runtime to scope discovery to. Same semantics as on `run`:
-    /// defaults to `mac` on macOS, `windows` on Windows, and `linux` everywhere
-    /// else. Correctness tests are unaffected
-    #[arg(long, verbatim_doc_comment)]
-    pub runtime: Option<String>,
+    /// Subject OS to select cases for: `linux`, `macos` or `windows`. Defaults to the
+    /// host's OS. Correctness cases run only for subject OS `linux`; other selections
+    /// report them as skipped.
+    #[arg(long, verbatim_doc_comment, value_parser = subject_os_parser(), default_value = Os::host().name())]
+    pub subject_os: Os,
 
-    /// Output the discovered tests as json along with their image dependencies. A
-    /// `ci` script depends on this for dynamic pipeline creation
+    /// Artifact manifest (TOML) binding artifact roles to image references and paths.
+    /// Roles it omits use their local defaults; a role no participant type or backend
+    /// declares is an error. The text listing shows the reference
+    /// each role resolves to.
+    #[arg(long, value_name = "FILE", verbatim_doc_comment)]
+    pub artifacts: Option<PathBuf>,
+
+    /// Output the discovered cases as JSON, with their layouts and artifact roles. The
+    /// correctness CI generator reads it.
     #[arg(long, verbatim_doc_comment)]
     pub json: bool,
 }
@@ -280,6 +305,7 @@ pub struct ListCommand {
 #[cfg(test)]
 mod tests {
     use std::ffi::OsStr;
+    use std::path::Path;
 
     use clap::CommandFactory as _;
 
@@ -291,18 +317,90 @@ mod tests {
 
     /// Panoramic's own settings, each an argument on `run` with a `PANORAMIC_*` fallback that clap
     /// renders next to the flag.
-    const PANORAMIC_ENV_FALLBACKS: &[(&str, &str)] = &[
-        ("adp_binary_path", "PANORAMIC_ADP_BINARY_PATH"),
-        ("core_agent_binary_path", "PANORAMIC_CORE_AGENT_BINARY_PATH"),
-        ("alpine_image", "PANORAMIC_ALPINE_IMAGE"),
-        ("log_dir", "PANORAMIC_LOG_DIR"),
-        ("image_overrides", "PANORAMIC_IMAGE_OVERRIDES"),
-    ];
+    const PANORAMIC_ENV_FALLBACKS: &[(&str, &str)] = &[("log_dir", "PANORAMIC_LOG_DIR")];
 
     fn run_command_of(cli: &Cli) -> &RunCommand {
         match &cli.command {
             Command::Run(cmd) => cmd,
-            Command::List(_) => panic!("expected a `run` invocation"),
+            Command::List(_) | Command::Artifacts(_) => panic!("expected a `run` invocation"),
+        }
+    }
+
+    #[test]
+    fn run_and_list_reject_the_runtime_flag() {
+        for command in ["run", "list"] {
+            let error = Cli::try_parse_from(["panoramic", command, "--runtime", "linux"])
+                .err()
+                .unwrap();
+            assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
+            assert_eq!(error.exit_code(), 2);
+            assert!(error.to_string().contains("--runtime"), "{error}");
+        }
+    }
+
+    fn subject_os_of(cli: Cli) -> Os {
+        match cli.command {
+            Command::Run(cmd) => cmd.subject_os,
+            Command::List(cmd) => cmd.subject_os,
+            Command::Artifacts(_) => panic!("expected run or list"),
+        }
+    }
+
+    #[test]
+    fn subject_os_accepts_only_case_file_os_names_on_run_and_list() {
+        for command in ["run", "list"] {
+            for os in [Os::Linux, Os::MacOs, Os::Windows] {
+                let selected =
+                    subject_os_of(Cli::try_parse_from(["panoramic", command, "--subject-os", os.name()]).unwrap());
+                assert_eq!(selected, os);
+            }
+            for name in ["mac", "docker", "Linux"] {
+                let error = Cli::try_parse_from(["panoramic", command, "--subject-os", name])
+                    .err()
+                    .unwrap();
+                assert_eq!(error.exit_code(), 2);
+            }
+        }
+    }
+
+    #[test]
+    fn the_subject_os_defaults_to_the_host() {
+        for command in ["run", "list"] {
+            assert_eq!(
+                subject_os_of(Cli::try_parse_from(["panoramic", command]).unwrap()),
+                Os::host()
+            );
+        }
+    }
+
+    #[test]
+    fn run_and_list_help_describe_subject_os_without_a_runtime_flag() {
+        let mut cli = Cli::command();
+        for command in ["run", "list"] {
+            let help = cli.find_subcommand_mut(command).unwrap().render_long_help().to_string();
+            assert!(help.contains("--subject-os"), "{help}");
+            assert!(help.contains("host's OS"), "{help}");
+            assert!(!help.contains("--runtime"), "{help}");
+        }
+    }
+
+    #[test]
+    fn help_describes_pod_cases_step_messages_and_listing_roles() {
+        for (command, expected) in [
+            ("run", "cases with Kubernetes pod participants"),
+            ("run", "Show every step's message, including for passing tests"),
+            (
+                "list",
+                "Output the discovered cases as JSON, with their layouts and artifact roles. The correctness CI generator reads it.",
+            ),
+        ] {
+            let mut cli = Cli::command();
+            let help = cli.find_subcommand_mut(command).unwrap().render_long_help().to_string();
+            let help = help.split_whitespace().collect::<Vec<_>>().join(" ");
+            assert!(help.contains(expected), "{help}");
+            for obsolete in ["kind-runtime", "image dependencies", "assertion details"] {
+                assert!(!help.contains(obsolete), "{help}");
+            }
         }
     }
 
@@ -450,59 +548,24 @@ mod tests {
 
         assert_eq!(cmd.parallelism.get(), 4);
         assert!(matches!(cmd.output, OutputFormat::Text));
-        assert_eq!(cmd.mounts_dir, default_mounts_dir());
         assert_eq!(cmd.kind_cluster_name, crate::kind::DEFAULT_CLUSTER_NAME);
-        assert!(cmd.runtime.is_none());
+        assert_eq!(cmd.subject_os, Os::host());
         assert!(cmd.tests.is_none());
         assert!(!cmd.fail_fast);
         assert!(!cmd.verbose);
         assert!(!cmd.no_tui);
         assert!(!cmd.no_delete_kind_cluster);
-        assert!(cmd.image_overrides.is_empty());
     }
 
     #[test]
-    fn image_overrides_accept_a_repeated_flag_and_a_delimited_list() {
-        let repeated = Cli::try_parse_from([
-            "panoramic",
-            "run",
-            "-d",
-            "cases",
-            "--image-override",
-            "millstone=registry.example.com/tools:abc123",
-            "--image-override",
-            "baseline=registry.example.com/agent:abc123",
-        ])
-        .expect("repeated flags should parse");
-
-        // The same pairs as one delimited value, which is the shape the environment variable takes.
-        let delimited = Cli::try_parse_from([
-            "panoramic",
-            "run",
-            "-d",
-            "cases",
-            "--image-override",
-            "millstone=registry.example.com/tools:abc123,baseline=registry.example.com/agent:abc123",
-        ])
-        .expect("a delimited value should parse");
-
-        for cmd in [run_command_of(&repeated), run_command_of(&delimited)] {
-            let pairs: Vec<(&str, &str)> = cmd
-                .image_overrides
-                .iter()
-                .map(|entry| (entry.name.as_str(), entry.image.as_str()))
-                .collect();
-            assert_eq!(
-                pairs,
-                vec![
-                    ("millstone", "registry.example.com/tools:abc123"),
-                    ("baseline", "registry.example.com/agent:abc123")
-                ]
-            );
+    fn removed_image_flags_are_unknown_arguments() {
+        for flag in ["--image-override", "--alpine-image"] {
+            let error = Cli::try_parse_from(["panoramic", "run", flag, "image:unused"])
+                .err()
+                .expect("removed flags must not parse");
+            assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
+            assert!(error.to_string().contains(flag));
         }
-
-        // A value that isn't a `name=image` pair fails at parse time rather than mid-run.
-        assert!(Cli::try_parse_from(["panoramic", "run", "-d", "cases", "--image-override", "millstone"]).is_err());
     }
 
     #[test]
@@ -540,8 +603,8 @@ mod tests {
             "two",
             "-f",
             "-v",
-            "--runtime",
-            "mac",
+            "--subject-os",
+            "macos",
             "--kind-cluster-name",
             "custom",
             "--no-delete-kind-cluster",
@@ -558,48 +621,9 @@ mod tests {
         assert_eq!(cmd.tests.as_deref(), Some("two"));
         assert!(cmd.fail_fast);
         assert!(cmd.verbose);
-        assert_eq!(cmd.runtime.as_deref(), Some("mac"));
+        assert_eq!(cmd.subject_os, Os::MacOs);
         assert_eq!(cmd.kind_cluster_name, "custom");
         assert!(cmd.no_delete_kind_cluster);
-    }
-
-    #[test]
-    fn runner_settings_fall_back_to_the_documented_defaults() {
-        let cli = Cli::try_parse_from(["panoramic", "run", "-d", "cases"]).expect("minimal run should parse");
-        let settings = run_command_of(&cli).runner_settings();
-
-        assert_eq!(settings.mounts_dir, default_mounts_dir());
-        assert_eq!(settings.adp_binary_path, Path::new(DEFAULT_ADP_BINARY_PATH));
-        assert_eq!(
-            settings.core_agent_binary_path,
-            Path::new(DEFAULT_CORE_AGENT_BINARY_PATH)
-        );
-        assert_eq!(settings.alpine_image, DEFAULT_ALPINE_IMAGE);
-    }
-
-    #[test]
-    fn explicit_run_flags_plumb_into_runner_settings() {
-        let cli = Cli::try_parse_from([
-            "panoramic",
-            "run",
-            "-d",
-            "cases",
-            "--adp-binary-path",
-            "/build/adp",
-            "--core-agent-binary-path",
-            "/build/agent",
-            "--alpine-image",
-            "registry.example/alpine:3.20",
-            "--mounts-dir",
-            "/build/mounts",
-        ])
-        .expect("run with explicit paths should parse");
-        let settings = run_command_of(&cli).runner_settings();
-
-        assert_eq!(settings.adp_binary_path, Path::new("/build/adp"));
-        assert_eq!(settings.core_agent_binary_path, Path::new("/build/agent"));
-        assert_eq!(settings.alpine_image, "registry.example/alpine:3.20");
-        assert_eq!(settings.mounts_dir, Path::new("/build/mounts"));
     }
 
     #[test]
@@ -649,6 +673,227 @@ mod tests {
     }
 
     #[test]
+    fn list_and_run_accept_an_artifacts_file_without_an_environment_fallback() {
+        for name in ["list", "run"] {
+            let command = Cli::try_parse_from(["panoramic", name, "--artifacts", "artifacts.toml"])
+                .unwrap()
+                .command;
+            let artifacts = match command {
+                Command::List(cmd) => cmd.artifacts,
+                Command::Run(cmd) => cmd.artifacts,
+                _ => panic!("expected list or run"),
+            };
+            assert_eq!(artifacts, Some(PathBuf::from("artifacts.toml")));
+            let command = Cli::command();
+            let argument = command
+                .find_subcommand(name)
+                .unwrap()
+                .get_arguments()
+                .find(|argument| argument.get_id() == "artifacts")
+                .unwrap();
+            assert_eq!(argument.get_env(), None);
+        }
+    }
+
+    #[test]
+    fn run_artifacts_combines_with_non_artifact_run_flags() {
+        let cli = Cli::try_parse_from([
+            "panoramic",
+            "run",
+            "--artifacts",
+            "artifacts.toml",
+            "--kind-cluster-name",
+            "cluster",
+            "-l",
+            "logs",
+            "--no-tui",
+        ])
+        .unwrap();
+        let cmd = run_command_of(&cli);
+        assert_eq!(cmd.artifacts.as_deref(), Some(Path::new("artifacts.toml")));
+        assert_eq!(cmd.kind_cluster_name, "cluster");
+        assert_eq!(cmd.log_dir.as_deref(), Some(Path::new("logs")));
+        assert!(cmd.no_tui);
+    }
+
+    #[test]
+    fn artifact_help_names_participant_types_and_backends_as_role_declarers() {
+        for path in [
+            vec!["list"],
+            vec!["run"],
+            vec!["artifacts", "verify"],
+            vec!["artifacts", "pull"],
+        ] {
+            let mut command = Cli::command();
+            command.build();
+            let mut subcommand = &mut command;
+            for name in path {
+                subcommand = subcommand.find_subcommand_mut(name).unwrap();
+            }
+            let help = subcommand.render_long_help().to_string();
+            let help = help.split_whitespace().collect::<Vec<_>>().join(" ");
+            assert!(help.contains("no participant type or backend"), "{help}");
+            assert!(help.contains("declares is an error."), "{help}");
+            assert!(!help.contains("typed"), "{help}");
+        }
+    }
+
+    #[test]
+    fn artifacts_render_accepts_repeated_set_pairs_and_an_output_file() {
+        let Command::Artifacts(ArtifactsCommand {
+            command: ArtifactsSubcommand::Render(cmd),
+        }) = Cli::try_parse_from([
+            "panoramic",
+            "artifacts",
+            "render",
+            "--set",
+            "b=y",
+            "-o",
+            "first.toml",
+            "--set",
+            "a=x",
+            "-o",
+            "last.toml",
+        ])
+        .unwrap()
+        .command
+        else {
+            panic!("expected artifacts render")
+        };
+        assert_eq!(cmd.set, vec![("b".into(), "y".into()), ("a".into(), "x".into())]);
+        assert_eq!(cmd.output, PathBuf::from("last.toml"));
+    }
+
+    #[test]
+    fn artifacts_render_splits_each_pair_at_its_first_equals_sign() {
+        for (pair, expected) in [("a=b=c", ("a", "b=c")), ("a=", ("a", "")), ("=b", ("", "b"))] {
+            let Command::Artifacts(ArtifactsCommand {
+                command: ArtifactsSubcommand::Render(cmd),
+            }) = Cli::try_parse_from([
+                "panoramic",
+                "artifacts",
+                "render",
+                "--set",
+                pair,
+                "--output",
+                "out.toml",
+            ])
+            .unwrap()
+            .command
+            else {
+                panic!("expected artifacts render")
+            };
+            assert_eq!(cmd.set, vec![(expected.0.into(), expected.1.into())]);
+            assert_eq!(cmd.output, PathBuf::from("out.toml"));
+        }
+    }
+
+    #[test]
+    fn artifacts_render_rejects_pairs_without_equals_and_requires_an_output_file() {
+        let error = Cli::try_parse_from(["panoramic", "artifacts", "render", "--set", "role", "-o", "out.toml"])
+            .err()
+            .unwrap();
+        assert_eq!(error.exit_code(), 2);
+        assert!(error.to_string().contains("expected ROLE=REFERENCE"), "{error}");
+        let error = Cli::try_parse_from(["panoramic", "artifacts", "render"]).err().unwrap();
+        assert_eq!(error.exit_code(), 2);
+        assert!(error.to_string().contains("--output <FILE>"), "{error}");
+    }
+
+    #[test]
+    fn artifacts_render_takes_no_test_directories_subject_os_or_manifest() {
+        for (flag, value) in [
+            ("-d", "cases"),
+            ("--test-dirs", "cases"),
+            ("--subject-os", "linux"),
+            ("--artifacts", "artifacts.toml"),
+        ] {
+            let error = Cli::try_parse_from(["panoramic", "artifacts", "render", "-o", "out.toml", flag, value])
+                .err()
+                .unwrap();
+            assert_eq!(error.exit_code(), 2);
+            assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
+        }
+    }
+
+    #[test]
+    fn artifacts_verify_and_pull_accept_directories_subject_os_and_manifest_but_not_runtime() {
+        for subcommand in ["verify", "pull"] {
+            for os in [Os::Linux, Os::MacOs, Os::Windows] {
+                let Command::Artifacts(ArtifactsCommand { command }) = Cli::try_parse_from([
+                    "panoramic",
+                    "artifacts",
+                    subcommand,
+                    "-d",
+                    "cases",
+                    "--test-dirs",
+                    "other",
+                    "--subject-os",
+                    os.name(),
+                    "--artifacts",
+                    "artifacts.toml",
+                ])
+                .unwrap()
+                .command
+                else {
+                    panic!("expected artifacts {subcommand}")
+                };
+                let cmd = match (subcommand, command) {
+                    ("verify", ArtifactsSubcommand::Verify(cmd)) | ("pull", ArtifactsSubcommand::Pull(cmd)) => cmd,
+                    _ => panic!("expected artifacts {subcommand}"),
+                };
+                assert_eq!(cmd.test_dirs, vec![PathBuf::from("cases"), PathBuf::from("other")]);
+                assert_eq!(cmd.subject_os, os);
+                assert_eq!(cmd.artifacts, Some(PathBuf::from("artifacts.toml")));
+            }
+            let command = Cli::command();
+            let cases_command = command
+                .find_subcommand("artifacts")
+                .unwrap()
+                .find_subcommand(subcommand)
+                .unwrap();
+            assert_eq!(
+                cases_command
+                    .get_arguments()
+                    .find(|argument| argument.get_id() == "artifacts")
+                    .unwrap()
+                    .get_env(),
+                None
+            );
+            for (flag, value) in [
+                ("--runtime", "linux"),
+                ("--subject-os", "mac"),
+                ("--subject-os", "Linux"),
+            ] {
+                let error = Cli::try_parse_from(["panoramic", "artifacts", subcommand, flag, value])
+                    .err()
+                    .unwrap();
+                assert_eq!(error.exit_code(), 2);
+            }
+        }
+    }
+
+    #[test]
+    fn artifacts_verify_and_pull_default_to_the_host_subject_os() {
+        for subcommand in ["verify", "pull"] {
+            let Command::Artifacts(ArtifactsCommand { command }) =
+                Cli::try_parse_from(["panoramic", "artifacts", subcommand])
+                    .unwrap()
+                    .command
+            else {
+                panic!("expected artifacts {subcommand}")
+            };
+            let cmd = match (subcommand, command) {
+                ("verify", ArtifactsSubcommand::Verify(cmd)) | ("pull", ArtifactsSubcommand::Pull(cmd)) => cmd,
+                _ => panic!("expected artifacts {subcommand}"),
+            };
+            assert_eq!(cmd.subject_os, Os::host());
+            assert!(cmd.test_dirs.is_empty());
+            assert!(cmd.artifacts.is_none());
+        }
+    }
+
+    #[test]
     fn known_list_invocations_parse() {
         let cli = Cli::try_parse_from(["panoramic", "list", "-d", "test/integration/cases", "--json"])
             .expect("list --json should parse");
@@ -657,7 +902,7 @@ mod tests {
                 assert_eq!(cmd.test_dirs, vec![PathBuf::from("test/integration/cases")]);
                 assert!(cmd.json);
             }
-            Command::Run(_) => panic!("expected a `list` invocation"),
+            Command::Run(_) | Command::Artifacts(_) => panic!("expected a `list` invocation"),
         }
     }
 

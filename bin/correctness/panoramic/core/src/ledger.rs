@@ -1,0 +1,1066 @@
+//! Tracks test resources for cleanup by the runner.
+
+use std::fmt;
+use std::future::Future;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Duration;
+
+use airlock::driver::ContainerRef;
+use futures::future::join_all;
+use k8s_openapi::api::core::v1::Namespace;
+use kube::api::{Api, DeleteParams};
+use kube::Client;
+use rand::RngExt as _;
+use saluki_error::{generic_error, ErrorContext as _, GenericError};
+use tokio::time::{sleep, timeout_at, Instant};
+use tokio_util::sync::CancellationToken;
+
+use crate::result::{Issue, IssueKind, ReclaimEntry, ReclaimResult};
+use crate::{backend::RunBackends, plan::ScopeLayout};
+
+/// Shared budget for stopping a case's tracked tasks and removing its resources.
+pub const RECLAIM_TIME: Duration = Duration::from_secs(30);
+
+/// How often reclaim checks whether a deleted namespace is gone.
+const NAMESPACE_POLL_INTERVAL: Duration = Duration::from_millis(500);
+
+/// Returns a random lowercase alphanumeric ID suitable for Docker and Kubernetes names.
+pub(crate) fn random_id() -> String {
+    const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
+    let mut rng = rand::rng();
+    (0..8)
+        .map(|_| ALPHABET[rng.random_range(0..ALPHABET.len())] as char)
+        .collect()
+}
+
+/// Shares a case's registered resources between its test body and the runner.
+///
+/// Register scopes, namespaces and participants before creation requests. The runner calls [`Self::reclaim`] to attempt
+/// removal in reverse registration order. Dropping the last ledger handle sends SIGKILL to registered process groups;
+/// directories, Docker resources, and namespaces require explicit reclaim.
+#[derive(Clone, Debug, Default)]
+pub struct ResourceLedger {
+    entries: Arc<Mutex<Vec<Entry>>>,
+}
+
+#[derive(Debug)]
+struct Entry {
+    resource: Resource,
+    /// Whether a creation request for this resource was cut short.
+    unsettled: bool,
+}
+
+/// A resource the runner knows how to remove.
+enum Resource {
+    /// A participant stopped with its type's grace before removal.
+    Participant {
+        name: String,
+        removal: ParticipantRemoval,
+        grace: Duration,
+    },
+    /// Native scope resources removed through the run's Docker connection.
+    ContainerScope {
+        backends: Arc<RunBackends>,
+        scope: ScopeLayout,
+        os: crate::layout::Os,
+    },
+    /// A Kubernetes namespace, removed through the client that created it.
+    Namespace { name: String, client: Client },
+    /// Node storage removed after its namespace is gone.
+    PodDirectory {
+        node: crate::backend::pod::node::Node,
+        path: String,
+        client: Client,
+        namespace: String,
+    },
+    /// A host directory whose removal depends on earlier results in the reclaim walk.
+    Directory(PathBuf),
+    #[cfg_attr(
+        not(unix),
+        expect(dead_code, reason = "Unix host scopes register their state directories.")
+    )]
+    HostScope(PathBuf),
+}
+
+/// Backend-owned resources needed to stop and remove a participant.
+pub(crate) enum ParticipantRemoval {
+    Container(ContainerRef),
+    Pod(crate::backend::pod::PodRemoval),
+    #[cfg(unix)]
+    ProcessGroup(crate::backend::host_process::ProcessGroup),
+}
+
+impl ParticipantRemoval {
+    async fn stop(self, grace: Duration, deadline: Instant) -> Result<(), GenericError> {
+        match self {
+            Self::Container(container) => container.stop_and_remove(grace, deadline).await,
+            Self::Pod(pod) => pod.stop(grace, deadline).await,
+            #[cfg(unix)]
+            Self::ProcessGroup(group) => group.stop(grace, deadline).await,
+        }
+    }
+}
+
+/// A namespace awaiting confirmation that deletion finished.
+struct Terminating {
+    api: Api<Namespace>,
+    name: String,
+}
+
+/// A cleanup result with an optional explanation for failed or unconfirmed removal.
+type Settled = (ReclaimResult, Option<String>);
+
+/// How far one resource's removal got during the reclaim walk.
+enum Removal {
+    Settled(Settled),
+    Terminating(Terminating),
+}
+
+impl Resource {
+    /// Removes the resource, returning a namespace that is still terminating.
+    ///
+    /// A directory or namespace that is already gone counts as removed. Filesystem removal may continue on a
+    /// blocking thread after its future is dropped.
+    async fn remove(self, deadline: Instant) -> Result<Option<Terminating>, GenericError> {
+        match self {
+            Self::Participant { removal, grace, .. } => removal.stop(grace, deadline).await.map(|()| None),
+            Self::ContainerScope { backends, scope, os } => {
+                backends.remove_container_scope(os, &scope).await.map(|()| None)
+            }
+            Self::Namespace { name, client } => {
+                let api = Api::<Namespace>::all(client);
+                match api.delete(&name, &DeleteParams::default()).await {
+                    Ok(_) => Ok(Some(Terminating { api, name })),
+                    Err(kube::Error::Api(status)) if status.is_not_found() => Ok(None),
+                    Err(e) => Err(generic_error!("Failed to delete namespace '{}': {}", name, e)),
+                }
+            }
+            Self::PodDirectory {
+                node,
+                path,
+                client,
+                namespace,
+            } => {
+                Terminating {
+                    api: Api::all(client),
+                    name: namespace,
+                }
+                .gone()
+                .await?;
+                node.remove_directory(&path).await.map(|()| None)
+            }
+            Self::HostScope(path) => tokio::task::spawn_blocking(move || {
+                match std::fs::remove_dir_all(&path) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => {
+                        return Err(generic_error!(error).context(format!("Failed to remove '{}'", path.display())))
+                    }
+                }
+                if let Some(parent) = path.parent() {
+                    match std::fs::remove_dir(parent) {
+                        Ok(()) => {}
+                        Err(error)
+                            if matches!(
+                                error.kind(),
+                                std::io::ErrorKind::NotFound | std::io::ErrorKind::DirectoryNotEmpty
+                            ) => {}
+                        Err(error) => {
+                            return Err(
+                                generic_error!(error).context(format!("Failed to remove '{}'", parent.display()))
+                            )
+                        }
+                    }
+                }
+                Ok(None)
+            })
+            .await
+            .error_context("Failed to join host directory removal")?,
+            Self::Directory(path) => match tokio::fs::remove_dir_all(&path).await {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                removed => removed
+                    .map(|()| None)
+                    .with_error_context(|| format!("Failed to remove '{}'", path.display())),
+            },
+        }
+    }
+}
+
+impl fmt::Debug for Resource {
+    /// Omits a namespace's client, which isn't `Debug`.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Participant { name, .. } => f.debug_tuple("Participant").field(name).finish(),
+            Self::ContainerScope { scope, .. } => f.debug_tuple("ContainerScope").field(scope).finish(),
+            Self::Namespace { name, .. } => f.debug_struct("Namespace").field("name", name).finish_non_exhaustive(),
+            Self::Directory(path) => f.debug_tuple("Directory").field(path).finish(),
+            Self::HostScope(path) => f.debug_tuple("HostScope").field(path).finish(),
+            Self::PodDirectory { path, .. } => f.debug_tuple("PodDirectory").field(path).finish(),
+        }
+    }
+}
+
+impl fmt::Display for Resource {
+    /// Resource label used in cleanup reports.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Participant { name, .. } => write!(f, "participant:{name}"),
+            Self::ContainerScope { scope, .. } => write!(f, "isolation_group:{}", scope.id()),
+            Self::Namespace { name, .. } => write!(f, "namespace:{}", name),
+            Self::Directory(path) | Self::HostScope(path) => write!(f, "directory:{}", path.display()),
+            Self::PodDirectory { node, path, .. } => write!(f, "node_directory:{}:{path}", node.container),
+        }
+    }
+}
+
+impl Terminating {
+    /// Polls until the namespace is gone.
+    async fn gone(self) -> Result<(), GenericError> {
+        loop {
+            match self.api.get_opt(&self.name).await {
+                Ok(None) => return Ok(()),
+                Ok(Some(_)) => sleep(NAMESPACE_POLL_INTERVAL).await,
+                Err(e) => {
+                    return Err(generic_error!(
+                        "Failed to check whether namespace '{}' is gone: {}",
+                        self.name,
+                        e
+                    ))
+                }
+            }
+        }
+    }
+}
+
+/// Keeps a completed removal unsettled when creation may still finish afterward.
+fn removed(unsettled: bool) -> Settled {
+    if unsettled {
+        (
+            ReclaimResult::Unsettled,
+            Some("a creation request was cut short, so something created after removal may remain".to_string()),
+        )
+    } else {
+        (ReclaimResult::Reclaimed, None)
+    }
+}
+
+async fn remove_entry(
+    entry: Entry, kept_by: Option<&str>, deadline: Instant,
+) -> (String, Option<String>, bool, Removal) {
+    let Entry { resource, unsettled } = entry;
+    let label = resource.to_string();
+    let participant = match &resource {
+        Resource::Participant { name, .. } => Some(name.clone()),
+        _ => None,
+    };
+    let removal = match (&resource, kept_by) {
+        (Resource::Directory(_) | Resource::HostScope(_) | Resource::PodDirectory { .. }, Some(kept_by)) => {
+            Removal::Settled((
+                ReclaimResult::Leaked,
+                Some(format!("kept because {} was not reclaimed", kept_by)),
+            ))
+        }
+        _ => match timeout_at(deadline, resource.remove(deadline)).await {
+            Ok(Ok(Some(terminating))) => Removal::Terminating(terminating),
+            Ok(Ok(None)) => Removal::Settled(removed(unsettled)),
+            Ok(Err(e)) => Removal::Settled((ReclaimResult::Leaked, Some(format!("{:#}", e)))),
+            Err(_) => Removal::Settled((
+                ReclaimResult::Unsettled,
+                Some(format!(
+                    "still being removed when the {:?} reclaim budget expired",
+                    RECLAIM_TIME
+                )),
+            )),
+        },
+    };
+    (label, participant, unsettled, removal)
+}
+
+impl ResourceLedger {
+    fn lock(&self) -> MutexGuard<'_, Vec<Entry>> {
+        // Every update is a single push or flag write, so the entries stay consistent if a holder panics.
+        self.entries.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn register(&self, resource: Resource) {
+        self.lock().push(Entry {
+            resource,
+            unsettled: false,
+        });
+    }
+
+    /// Registers the native scope before preparation.
+    pub(crate) fn container_scope(&self, backends: Arc<RunBackends>, scope: ScopeLayout, os: crate::layout::Os) {
+        self.register(Resource::ContainerScope { backends, scope, os });
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn host_scope(&self, path: PathBuf) {
+        self.register(Resource::HostScope(path));
+    }
+
+    /// Registers a participant before its creation request.
+    pub(crate) fn participant(&self, name: &str, removal: ParticipantRemoval, grace: Duration) {
+        self.register(Resource::Participant {
+            name: name.into(),
+            removal,
+            grace,
+        });
+    }
+
+    /// Runs creation with both the participant and scope marked unsettled if cancellation cuts it short.
+    pub(crate) async fn create_participant<F>(
+        &self, participant: &str, scope: &str, cancel: &CancellationToken, request: F,
+    ) -> Option<F::Output>
+    where
+        F: Future,
+    {
+        let created = self
+            .create(&format!("participant:{participant}"), cancel, request)
+            .await;
+        if created.is_none() {
+            self.mark_unsettled(scope);
+        }
+        created
+    }
+
+    #[cfg(test)]
+    pub(crate) fn labels(&self) -> Vec<String> {
+        self.lock().iter().map(|entry| entry.resource.to_string()).collect()
+    }
+
+    /// Registers a namespace, which reclaim deletes through `client`. Call it before creating the namespace.
+    pub(crate) fn namespace(&self, client: Client, name: String) {
+        self.register(Resource::Namespace { name, client });
+    }
+
+    pub(crate) fn pod_directory(
+        &self, node: crate::backend::pod::node::Node, path: String, client: Client, namespace: String,
+    ) {
+        self.register(Resource::PodDirectory {
+            node,
+            path,
+            client,
+            namespace,
+        });
+    }
+
+    /// Registers a directory the case created.
+    pub fn directory(&self, path: PathBuf) {
+        self.register(Resource::Directory(path));
+    }
+
+    /// Marks a creation request cut short: the runtime may finish creating the resource after removal.
+    fn mark_unsettled(&self, name: &str) {
+        for entry in self.lock().iter_mut() {
+            let named = match &entry.resource {
+                Resource::ContainerScope { scope, .. } => scope.id() == name,
+                Resource::Participant { name: participant, .. } => format!("participant:{participant}") == name,
+                Resource::Namespace { name: namespace, .. } | Resource::PodDirectory { namespace, .. } => {
+                    namespace == name
+                }
+                Resource::Directory(_) | Resource::HostScope(_) => false,
+            };
+            if named {
+                entry.unsettled = true;
+            }
+        }
+    }
+
+    /// Runs a creation request for the registered scope, namespace or participant `name`.
+    ///
+    /// If cancellation drops the request, returns `None` and marks the resource unsettled.
+    pub(crate) async fn create<F>(&self, name: &str, cancel: &CancellationToken, request: F) -> Option<F::Output>
+    where
+        F: Future,
+    {
+        let created = cancel.run_until_cancelled(request).await;
+        if created.is_none() {
+            self.mark_unsettled(name);
+        }
+        created
+    }
+
+    /// Attempts cleanup in reverse registration order under one deadline.
+    ///
+    /// Consecutive participant entries stop concurrently, each with its own grace.
+    /// Namespace deletions start during the walk; confirmation polls run concurrently afterward. Returns results in
+    /// reverse registration order and an issue for each failed or unconfirmed removal. Expiry drops pending removal
+    /// futures; dropping a process sends SIGKILL if needed.
+    pub async fn reclaim(&self, deadline: Instant) -> (Vec<ReclaimEntry>, Vec<Issue>) {
+        let entries = std::mem::take(&mut *self.lock());
+        let mut removals = Vec::with_capacity(entries.len());
+        // Preserve directories that a failed or unconfirmed removal may still need. Pending namespace deletions use
+        // kind-node paths and can finish independently of these host directories.
+        let mut kept_by: Option<String> = None;
+
+        let mut entries = entries.into_iter().rev().peekable();
+        while let Some(entry) = entries.next() {
+            let mut batch = vec![entry];
+            if matches!(batch[0].resource, Resource::Participant { .. }) {
+                while entries
+                    .peek()
+                    .is_some_and(|entry| matches!(entry.resource, Resource::Participant { .. }))
+                {
+                    batch.push(entries.next().expect("the next entry is a participant"));
+                }
+            }
+            for removal in join_all(
+                batch
+                    .into_iter()
+                    .map(|entry| remove_entry(entry, kept_by.as_deref(), deadline)),
+            )
+            .await
+            {
+                if let Removal::Settled((_, Some(_))) = removal.3 {
+                    kept_by.get_or_insert_with(|| removal.0.clone());
+                }
+                removals.push(removal);
+            }
+        }
+
+        let settled = join_all(
+            removals
+                .into_iter()
+                .map(|(label, participant, unsettled, removal)| async move {
+                    let settled = match removal {
+                        Removal::Settled(settled) => settled,
+                        Removal::Terminating(terminating) => match timeout_at(deadline, terminating.gone()).await {
+                            Ok(Ok(())) => removed(unsettled),
+                            Ok(Err(e)) => (ReclaimResult::Leaked, Some(format!("{:#}", e))),
+                            Err(_) => (
+                                ReclaimResult::Unsettled,
+                                Some(format!(
+                                    "still terminating when the {:?} reclaim budget expired",
+                                    RECLAIM_TIME
+                                )),
+                            ),
+                        },
+                    };
+                    (label, participant, settled)
+                }),
+        )
+        .await;
+
+        let mut reclaim = Vec::with_capacity(settled.len());
+        let mut issues = Vec::new();
+        for (label, participant, (result, detail)) in settled {
+            if let Some(detail) = detail {
+                let kind = match result {
+                    ReclaimResult::Unsettled => IssueKind::ResourceUnsettled,
+                    _ => IssueKind::ResourceLeaked,
+                };
+                issues.push(Issue {
+                    kind,
+                    message: format!("{}: {}", label, detail),
+                });
+            }
+            reclaim.push(ReclaimEntry {
+                resource: label,
+                participant,
+                result,
+            });
+        }
+
+        (reclaim, issues)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::task::Poll;
+
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    use tokio::net::TcpListener;
+    use tokio::sync::Notify;
+    use tokio::task::JoinHandle;
+    use tokio::time::timeout;
+
+    use super::*;
+    use crate::{
+        backend::docker::test_util::FakeDocker,
+        layout::Os,
+        tasks::{CaseTasks, TASK_STOP_TIME},
+    };
+
+    fn container_scope(api: &FakeDocker, os: Os) -> (ResourceLedger, ScopeLayout) {
+        let ledger = ResourceLedger::default();
+        let scope = ScopeLayout {
+            run: "abcd1234".into(),
+            index: 0,
+        };
+        ledger.container_scope(Arc::new(RunBackends::with_docker(api.daemon())), scope.clone(), os);
+        (ledger, scope)
+    }
+
+    #[tokio::test]
+    async fn a_container_scope_is_removed_through_the_backend_of_its_os() {
+        for (daemon_os, scope_os) in [("linux", Os::Windows), ("windows", Os::Linux)] {
+            let api = FakeDocker::new(Some(daemon_os));
+            let (ledger, scope) = container_scope(&api, scope_os);
+            let (reclaimed, issues) = ledger.reclaim(Instant::now() + Duration::from_secs(1)).await;
+            assert_eq!(reclaimed.len(), 1);
+            assert_eq!(reclaimed[0].resource, format!("isolation_group:{}", scope.id()));
+            assert_eq!(reclaimed[0].result, ReclaimResult::Leaked);
+            assert_eq!(issues.len(), 1);
+            assert_eq!(issues[0].kind, IssueKind::ResourceLeaked);
+            assert!(
+                issues[0].message.contains(&format!(
+                    "the Docker daemon runs {daemon_os} containers, not {}",
+                    scope_os.name()
+                )),
+                "{:?}",
+                issues[0]
+            );
+            assert_eq!(*api.calls.lock().unwrap(), ["connect", "info"]);
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_container_scope_creation_cut_short_by_the_task_stop_is_unsettled() {
+        let api = FakeDocker::new(Some("linux"));
+        let (ledger, scope) = container_scope(&api, Os::Linux);
+        let tasks = CaseTasks::new(&CancellationToken::new());
+        let entered = Arc::new(Notify::new());
+        let (task_ledger, task_entered, stop) = (ledger.clone(), entered.clone(), tasks.stop.clone());
+        let created = tasks.spawn(async move {
+            let request = async {
+                task_entered.notify_one();
+                std::future::pending::<()>().await
+            };
+            task_ledger.create(&scope.id(), &stop, request).await
+        });
+
+        timeout(BOUND, async {
+            entered.notified().await;
+            assert_eq!(tasks.stop_all(Instant::now() + TASK_STOP_TIME).await, 0);
+            assert_eq!(created.await.expect("creation task should not panic"), Some(None));
+        })
+        .await
+        .expect("creation and task shutdown should finish within the bound");
+
+        let entries = ledger.lock();
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].unsettled, "task shutdown must mark the interrupted scope");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_container_scope_still_being_removed_at_the_deadline_is_unsettled() {
+        let mut api = FakeDocker::new(Some("linux"));
+        api.pending_info = true;
+        let (ledger, scope) = container_scope(&api, Os::Linux);
+        let started = Instant::now();
+        let budget = Duration::from_secs(1);
+
+        let (reclaimed, issues) = timeout(BOUND, ledger.reclaim(started + budget))
+            .await
+            .expect("reclaim should finish within the bound");
+
+        assert_eq!(started.elapsed(), budget);
+        let resource = format!("isolation_group:{}", scope.id());
+        assert_eq!(
+            reclaimed,
+            [ReclaimEntry {
+                resource: resource.clone(),
+                participant: None,
+                result: ReclaimResult::Unsettled,
+            }]
+        );
+        assert_eq!(
+            issues,
+            [Issue {
+                kind: IssueKind::ResourceUnsettled,
+                message: format!(
+                    "{resource}: still being removed when the {:?} reclaim budget expired",
+                    RECLAIM_TIME
+                ),
+            }]
+        );
+        assert_eq!(*api.calls.lock().unwrap(), ["connect", "info"]);
+    }
+
+    /// Bounds every reclaim in these tests.
+    const BOUND: Duration = Duration::from_secs(10);
+
+    /// Reclaim budget allowing several namespace polls.
+    const BUDGET: Duration = Duration::from_secs(5);
+
+    /// Short reclaim budget for namespaces that never disappear.
+    const SHORT_BUDGET: Duration = Duration::from_secs(1);
+
+    const NAMESPACE: &str = "airlock-ab12cd34-baseline";
+
+    /// A fake Kubernetes API with canned responses and recorded requests.
+    struct FakeApi {
+        client: Client,
+        /// Each request's method and path.
+        requests: Arc<Mutex<Vec<String>>>,
+        server: JoinHandle<()>,
+    }
+
+    /// Maps the method, path, and prior matching request count to an HTTP status and JSON body.
+    type Respond = fn(&str, &str, usize) -> (u16, String);
+
+    // A kube client can need a process-wide rustls provider, normally installed by the binary's main.
+    #[cfg(not(windows))]
+    fn install_crypto_provider() {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    }
+
+    #[cfg(windows)]
+    fn install_crypto_provider() {
+        let _ = rustls_cng_crypto::default_provider().install_default();
+    }
+
+    impl FakeApi {
+        async fn start(respond: Respond) -> Self {
+            install_crypto_provider();
+            let listener = TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("the fake API should bind");
+            let address = listener.local_addr().expect("the listener should have an address");
+            let requests = Arc::new(Mutex::new(Vec::new()));
+            let recorded = requests.clone();
+            let server = tokio::spawn(async move {
+                let mut seen = HashMap::<String, usize>::new();
+                loop {
+                    let (mut stream, _) = listener.accept().await.expect("the fake API should accept");
+                    let mut request = Vec::new();
+                    let mut buf = [0; 1024];
+                    let head_end = loop {
+                        if let Some(end) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+                            break end + 4;
+                        }
+                        let read = stream.read(&mut buf).await.expect("the request should be readable");
+                        if read == 0 {
+                            break request.len();
+                        }
+                        request.extend_from_slice(&buf[..read]);
+                    };
+                    let head = String::from_utf8_lossy(&request[..head_end]).into_owned();
+                    // Drain the body so connection closure preserves the response for the client.
+                    let body_len = head
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().ok())?
+                        })
+                        .unwrap_or(0);
+                    while request.len() < head_end + body_len {
+                        let read = stream.read(&mut buf).await.expect("the body should be readable");
+                        if read == 0 {
+                            break;
+                        }
+                        request.extend_from_slice(&buf[..read]);
+                    }
+                    let mut request_line = head.lines().next().unwrap_or_default().split(' ');
+                    let method = request_line.next().unwrap_or_default();
+                    let path = request_line.next().unwrap_or_default();
+                    let path = path.split('?').next().unwrap_or_default();
+                    let key = format!("{} {}", method, path);
+                    let count = seen.entry(key.clone()).or_default();
+                    let (status, body) = respond(method, path, *count);
+                    *count += 1;
+                    recorded.lock().unwrap().push(key);
+                    let response = format!(
+                        "HTTP/1.1 {} Fake\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
+                         Connection: close\r\n\r\n{}",
+                        status,
+                        body.len(),
+                        body
+                    );
+                    let _ = stream.write_all(response.as_bytes()).await;
+                    let _ = stream.shutdown().await;
+                }
+            });
+            let config = kube::Config::new(
+                format!("http://{}", address)
+                    .parse()
+                    .expect("the fake API's address should be a URI"),
+            );
+            let client = Client::try_from(config).expect("kube should build a client for the fake API");
+            Self {
+                client,
+                requests,
+                server,
+            }
+        }
+
+        /// Registers `names` in a new ledger through the fake's client.
+        fn ledger(&self, names: &[&str]) -> ResourceLedger {
+            let ledger = ResourceLedger::default();
+            for name in names {
+                ledger.namespace(self.client.clone(), name.to_string());
+            }
+            ledger
+        }
+
+        fn requests(&self) -> Vec<String> {
+            self.requests.lock().unwrap().clone()
+        }
+    }
+
+    impl Drop for FakeApi {
+        fn drop(&mut self) {
+            self.server.abort();
+        }
+    }
+
+    /// A namespace in `phase`, named by the last segment of `path`.
+    fn namespace_json(path: &str, phase: &str) -> String {
+        let name = path.rsplit('/').next().unwrap_or_default();
+        format!(
+            r#"{{"apiVersion":"v1","kind":"Namespace","metadata":{{"name":"{}"}},"status":{{"phase":"{}"}}}}"#,
+            name, phase
+        )
+    }
+
+    fn status_json(code: u16, reason: &str, message: &str) -> String {
+        format!(
+            r#"{{"apiVersion":"v1","kind":"Status","metadata":{{}},"status":"Failure","message":"{}","reason":"{}","code":{}}}"#,
+            message, reason, code
+        )
+    }
+
+    fn not_found(path: &str) -> (u16, String) {
+        (404, status_json(404, "NotFound", &format!("{} not found", path)))
+    }
+
+    /// Accepts every deletion and reports every namespace as terminating.
+    fn always_terminating(method: &str, path: &str, _: usize) -> (u16, String) {
+        match method {
+            "DELETE" | "GET" => (200, namespace_json(path, "Terminating")),
+            _ => (500, status_json(500, "InternalError", "unexpected request")),
+        }
+    }
+
+    async fn reclaim(ledger: &ResourceLedger, budget: Duration) -> (Vec<ReclaimEntry>, Vec<Issue>) {
+        tokio::time::timeout(BOUND, ledger.reclaim(Instant::now() + budget))
+            .await
+            .expect("reclaim should finish within the bound")
+    }
+
+    fn entry(resource: &str, result: ReclaimResult) -> ReclaimEntry {
+        ReclaimEntry {
+            resource: resource.to_string(),
+            participant: None,
+            result,
+        }
+    }
+
+    #[test]
+    fn directory_removal_yields_to_the_reclaim_deadline() {
+        for kind in [
+            "directory",
+            #[cfg(unix)]
+            "host scope",
+        ] {
+            // Occupy the blocking pool so the reclaim budget expires before filesystem work starts.
+            let parent = tempfile::tempdir().expect("temp dir should be creatable");
+            let directory = parent.path().join("state");
+            std::fs::create_dir(&directory).expect("the state directory should be creatable");
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .start_paused(true)
+                .max_blocking_threads(1)
+                .build()
+                .expect("the runtime should build");
+
+            runtime.block_on(async {
+                let (release, wait) = std::sync::mpsc::channel::<()>();
+                let (started, ready) = tokio::sync::oneshot::channel();
+                let blocker = tokio::task::spawn_blocking(move || {
+                    let _ = started.send(());
+                    let _ = wait.recv();
+                });
+                ready.await.expect("the blocking task should start");
+
+                let ledger = ResourceLedger::default();
+                match kind {
+                    "directory" => ledger.directory(directory.clone()),
+                    #[cfg(unix)]
+                    "host scope" => ledger.host_scope(directory.clone()),
+                    _ => unreachable!(),
+                }
+                let reclaim = ledger.reclaim(Instant::now() + RECLAIM_TIME);
+                tokio::pin!(reclaim);
+                std::future::poll_fn(|cx| {
+                    assert!(reclaim.as_mut().poll(cx).is_pending());
+                    Poll::Ready(())
+                })
+                .await;
+                tokio::time::advance(RECLAIM_TIME).await;
+                let (reclaim, issues) = reclaim.await;
+
+                assert_eq!(
+                    reclaim,
+                    [ReclaimEntry {
+                        resource: format!("directory:{}", directory.display()),
+                        participant: None,
+                        result: ReclaimResult::Unsettled,
+                    }]
+                );
+                assert_eq!(issues.len(), 1);
+                assert_eq!(issues[0].kind, IssueKind::ResourceUnsettled);
+                assert!(issues[0].message.contains("reclaim budget expired"), "{:?}", issues[0]);
+                assert!(directory.exists(), "removal should still be queued");
+                drop(release);
+                blocker.await.expect("the blocking task should finish");
+            });
+            drop(runtime);
+            assert!(
+                !directory.exists(),
+                "{kind} removal should finish after the future is dropped"
+            );
+            assert_eq!(parent.path().exists(), kind == "directory");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_directory_with_nested_files_is_reclaimed() {
+        let parent = tempfile::tempdir().expect("temp dir should be creatable");
+        let directory = parent.path().join("state");
+        std::fs::create_dir_all(directory.join("nested")).expect("the nested directory should be creatable");
+        std::fs::write(directory.join("nested/file"), b"state").expect("the nested file should be writable");
+        let ledger = ResourceLedger::default();
+        ledger.directory(directory.clone());
+
+        let (reclaim, issues) = ledger.reclaim(Instant::now() + RECLAIM_TIME).await;
+
+        assert_eq!(
+            reclaim,
+            [ReclaimEntry {
+                resource: format!("directory:{}", directory.display()),
+                participant: None,
+                result: ReclaimResult::Reclaimed,
+            }]
+        );
+        assert_eq!(issues, []);
+        assert!(!directory.exists());
+        assert!(parent.path().exists());
+    }
+
+    #[tokio::test]
+    async fn a_directory_that_is_already_gone_counts_as_reclaimed() {
+        let parent = tempfile::tempdir().expect("temp dir should be creatable");
+        let missing = parent.path().join("missing");
+        let ledger = ResourceLedger::default();
+        ledger.directory(missing.clone());
+
+        let (reclaim, issues) = reclaim(&ledger, BUDGET).await;
+
+        assert_eq!(
+            reclaim,
+            [entry(
+                &format!("directory:{}", missing.display()),
+                ReclaimResult::Reclaimed
+            )]
+        );
+        assert_eq!(issues, []);
+    }
+
+    #[tokio::test]
+    async fn a_namespace_is_reclaimed_once_it_is_gone() {
+        let api = FakeApi::start(|method, path, seen| match (method, seen) {
+            ("DELETE", _) => (200, namespace_json(path, "Terminating")),
+            ("GET", 0) => (200, namespace_json(path, "Terminating")),
+            ("GET", _) => not_found(path),
+            _ => (500, status_json(500, "InternalError", "unexpected request")),
+        })
+        .await;
+        let ledger = api.ledger(&[NAMESPACE]);
+
+        let (reclaim, issues) = reclaim(&ledger, BUDGET).await;
+
+        assert_eq!(
+            reclaim,
+            [entry(&format!("namespace:{}", NAMESPACE), ReclaimResult::Reclaimed)]
+        );
+        assert_eq!(issues, []);
+        let path = format!("/api/v1/namespaces/{}", NAMESPACE);
+        assert_eq!(
+            api.requests(),
+            [
+                format!("DELETE {}", path),
+                format!("GET {}", path),
+                format!("GET {}", path)
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_namespace_still_terminating_at_the_deadline_is_unsettled() {
+        let api = FakeApi::start(always_terminating).await;
+        let ledger = api.ledger(&[NAMESPACE]);
+
+        let (reclaim, issues) = reclaim(&ledger, SHORT_BUDGET).await;
+
+        let resource = format!("namespace:{}", NAMESPACE);
+        assert_eq!(reclaim, [entry(&resource, ReclaimResult::Unsettled)]);
+        assert_eq!(
+            issues,
+            [Issue {
+                kind: IssueKind::ResourceUnsettled,
+                message: format!(
+                    "{}: still terminating when the {:?} reclaim budget expired",
+                    resource, RECLAIM_TIME
+                ),
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_namespace_that_is_already_gone_counts_as_reclaimed() {
+        let api = FakeApi::start(|method, path, _| match method {
+            "DELETE" => not_found(path),
+            _ => (500, status_json(500, "InternalError", "unexpected request")),
+        })
+        .await;
+        let ledger = api.ledger(&[NAMESPACE]);
+
+        let (reclaim, issues) = reclaim(&ledger, BUDGET).await;
+
+        assert_eq!(
+            reclaim,
+            [entry(&format!("namespace:{}", NAMESPACE), ReclaimResult::Reclaimed)]
+        );
+        assert_eq!(issues, []);
+    }
+
+    #[tokio::test]
+    async fn a_failed_namespace_delete_is_leaked() {
+        let api = FakeApi::start(|_, _, _| (500, status_json(500, "InternalError", "boom"))).await;
+        let ledger = api.ledger(&[NAMESPACE]);
+
+        let (reclaim, issues) = reclaim(&ledger, BUDGET).await;
+
+        assert_eq!(
+            reclaim,
+            [entry(&format!("namespace:{}", NAMESPACE), ReclaimResult::Leaked)]
+        );
+        assert_eq!(issues.len(), 1, "{issues:?}");
+        assert_eq!(issues[0].kind, IssueKind::ResourceLeaked);
+        assert!(
+            issues[0].message.starts_with(&format!(
+                "namespace:{}: Failed to delete namespace '{}': ",
+                NAMESPACE, NAMESPACE
+            )) && issues[0].message.contains("boom"),
+            "{}",
+            issues[0].message
+        );
+        assert_eq!(api.requests(), [format!("DELETE /api/v1/namespaces/{}", NAMESPACE)]);
+    }
+
+    #[tokio::test]
+    async fn a_namespace_that_cannot_be_checked_is_leaked() {
+        let api = FakeApi::start(|method, path, _| match method {
+            "DELETE" => (200, namespace_json(path, "Terminating")),
+            _ => (500, status_json(500, "InternalError", "boom")),
+        })
+        .await;
+        let ledger = api.ledger(&[NAMESPACE]);
+
+        let (reclaim, issues) = reclaim(&ledger, BUDGET).await;
+
+        assert_eq!(
+            reclaim,
+            [entry(&format!("namespace:{}", NAMESPACE), ReclaimResult::Leaked)]
+        );
+        assert_eq!(issues.len(), 1, "{issues:?}");
+        assert_eq!(issues[0].kind, IssueKind::ResourceLeaked);
+        assert!(
+            issues[0].message.starts_with(&format!(
+                "namespace:{}: Failed to check whether namespace '{}' is gone: ",
+                NAMESPACE, NAMESPACE
+            )) && issues[0].message.contains("boom"),
+            "{}",
+            issues[0].message
+        );
+    }
+
+    #[tokio::test]
+    async fn every_namespace_is_deleted_before_any_wait() {
+        let api = FakeApi::start(always_terminating).await;
+        let names = [
+            "airlock-ab12cd34-baseline",
+            "airlock-ab12cd34-comparison",
+            "airlock-ab12cd34-load",
+        ];
+        let ledger = api.ledger(&names);
+
+        let (reclaim, _) = reclaim(&ledger, SHORT_BUDGET).await;
+
+        let newest_first: Vec<_> = names.iter().rev().collect();
+        assert_eq!(
+            reclaim,
+            newest_first
+                .iter()
+                .map(|name| entry(&format!("namespace:{}", name), ReclaimResult::Unsettled))
+                .collect::<Vec<_>>()
+        );
+        let requests = api.requests();
+        assert_eq!(
+            requests[..3],
+            newest_first
+                .iter()
+                .map(|name| format!("DELETE /api/v1/namespaces/{}", name))
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            requests[3..].iter().all(|request| request.starts_with("GET ")),
+            "{requests:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_creation_cut_short_by_the_task_stop_is_unsettled() {
+        // Even confirmed deletion cannot rule out an interrupted creation finishing later.
+        let never_created: Respond = |_, path, _| not_found(path);
+        let deleted: Respond = |method, path, _| match method {
+            "DELETE" => (200, namespace_json(path, "Terminating")),
+            _ => not_found(path),
+        };
+        for respond in [never_created, deleted] {
+            let api = FakeApi::start(respond).await;
+            let ledger = api.ledger(&[NAMESPACE]);
+            let tasks = CaseTasks::new(&CancellationToken::new());
+            let entered = Arc::new(Notify::new());
+            let (task_ledger, task_entered, stop) = (ledger.clone(), entered.clone(), tasks.stop.clone());
+            tasks.spawn(async move {
+                let request = async {
+                    task_entered.notify_one();
+                    std::future::pending::<()>().await
+                };
+                task_ledger.create(NAMESPACE, &stop, request).await
+            });
+            tokio::time::timeout(BOUND, entered.notified())
+                .await
+                .expect("the creation should start within the bound");
+
+            let running = tasks.stop_all(Instant::now() + TASK_STOP_TIME).await;
+            let (reclaim, issues) = reclaim(&ledger, BUDGET).await;
+
+            assert_eq!(running, 0);
+            let resource = format!("namespace:{}", NAMESPACE);
+            assert_eq!(
+                reclaim,
+                [entry(&resource, ReclaimResult::Unsettled)],
+                "{:?}",
+                api.requests()
+            );
+            assert_eq!(
+                issues,
+                [Issue {
+                    kind: IssueKind::ResourceUnsettled,
+                    message: format!(
+                        "{}: a creation request was cut short, so something created after removal may remain",
+                        resource
+                    ),
+                }]
+            );
+        }
+    }
+}

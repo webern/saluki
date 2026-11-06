@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # Emit a GitLab child-pipeline YAML for correctness tests on stdout.
 #
-# Run by .gitlab/e2e.yml's generate-correctness-pipeline job. Uses panoramic's
-# `list --json` subcommand to enumerate test cases and their baseline images.
-# Tests whose baseline is a saluki-images/ placeholder also extend
-# .test-correctness-adp-baseline so panoramic gets the CI-built image at runtime.
+# Run by .gitlab/e2e.yml's generate-correctness-pipeline job.
+# Reads runnable rows from `panoramic list --subject-os linux --json`, using their
+# layout realizations to choose the job template.
 
 set -euo pipefail
 
@@ -17,39 +16,23 @@ stages:
   - test
 EOF
 
-# Ask panoramic for the test list. jq yields one `<case>\t<runtime>\t<baseline-image>`
-# line per test. Kind-runtime tests use .test-correctness-kind-definition (longer timeout);
-# all cluster and image management is handled inside panoramic at runtime.
-./target/release/panoramic list -d test/correctness/cases --json \
-    | jq -r 'to_entries[] | "\(.key)\t\(.value.runtime)\t\(.value.images.baseline)"' \
-    | while IFS=$'\t' read -r case runtime baseline; do
+# jq yields one `<case>\t<pod>` line per runnable case.
+# Unknown statuses and null layouts on runnable rows fail jq and this script.
+./target/release/panoramic list -d test/correctness/cases --subject-os linux --json \
+    | jq -r 'to_entries[] | select(if .value.status == "skipped" then false elif .value.status == "runnable" then true else error("unknown status for \(.key)") end) | "\(.key)\t\(any(.value.layout[]; .realization == "kubernetes-pod"))"' \
+    | while IFS=$'\t' read -r case pod; do
 
-        # Pick the right base mixin depending on runtime.
-        if [[ "${runtime}" == "kubernetes_in_docker" ]]; then
+        # Pod cases use a longer timeout; panoramic manages the cluster and its images.
+        if [[ "${pod}" == "true" ]]; then
             base_mixin=".test-correctness-kind-definition"
         else
             base_mixin=".test-correctness-definition"
         fi
 
-        # saluki-images/* is a local-only placeholder; CI must inject the
-        # registry image via the adp-baseline mixin. Real registry URLs
-        # (DDOT) work as-is.
-        if [[ "${baseline}" == saluki-images/* ]]; then
-            extends="[${base_mixin}, .test-correctness-adp-baseline]"
-        else
-            extends="[${base_mixin}]"
-        fi
-
-        # GitLab job names cannot contain '/'. Matrix variant names use '/'
-        # as a separator (e.g. dsd-origin-detection-matrix/legacy), so
-        # replace it with '-' for the job name while keeping the original
-        # name for CORRECTNESS_TEST_CASE, which panoramic receives as-is.
-        job_name="${case//\//-}"
-
         cat <<EOF
 
-test-correctness-${job_name}:
-  extends: ${extends}
+test-correctness-${case}:
+  extends: [${base_mixin}]
   variables:
     CORRECTNESS_TEST_CASE: ${case}
 EOF

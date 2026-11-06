@@ -2,10 +2,14 @@
 members = [
   "bin/agent-data-plane",
   "bin/correctness/airlock",
+  "bin/correctness/courier",
   "bin/correctness/datadog-intake",
   "bin/correctness/millstone",
   "bin/correctness/otlp-fixtures",
   "bin/correctness/panoramic",
+  "bin/correctness/panoramic/core",
+  "bin/correctness/panoramic/participants",
+  "bin/correctness/panoramic/steps",
   "bin/correctness/stele",
   "lib/agent-data-plane-config",
   "lib/agent-data-plane-config-system",
@@ -71,6 +75,10 @@ datadog-protos = { path = "lib/protos/datadog" }
 containerd-protos = { path = "lib/protos/containerd" }
 ddsketch = { path = "lib/ddsketch" }
 go-duration = { path = "lib/go-duration" }
+panoramic-core = { path = "bin/correctness/panoramic/core" }
+panoramic-courier = { path = "bin/correctness/courier" }
+panoramic-participants = { path = "bin/correctness/panoramic/participants" }
+panoramic-steps = { path = "bin/correctness/panoramic/steps" }
 process-memory = { path = "lib/process-memory" }
 prometheus-exposition = { path = "lib/prometheus-exposition" }
 saluki-antithesis = { path = "lib/saluki-antithesis" }
@@ -179,6 +187,7 @@ similar-asserts = { version = "2.0", default-features = false }
 slab = { version = "0.4.12", default-features = false }
 syn = { version = "3", default-features = false, features = ["full", "parsing", "printing", "clone-impls", "visit-mut"] }
 tokio-util = { version = "0.7.18", default-features = false }
+toml = { version = "1.1", default-features = false, features = ["parse", "serde", "std"] }
 tower = { version = "0.5", default-features = false }
 tracing-subscriber = { version = "0.3", default-features = false }
 typify = { version = "0.7", default-features = false }
@@ -234,6 +243,7 @@ home = { version = "0.5", default-features = false }
 reqwest = { version = "0.13", default-features = false }
 lading-payload = { git = "https://github.com/DataDog/lading", rev = "4dbacec20b11eff23e0edd7fcc91300124663157" }
 serde-saphyr = { version = "2.0", default-features = false, features = ["deserialize", "serialize"] }
+serde_path_to_error = { version = "0.1.20", default-features = false }
 serde_with = { version = "3.18.0", default-features = false, features = [
   "macros",
 ] }
@@ -248,11 +258,12 @@ rcgen = { version = "0.14", default-features = false }
 tikv-jemallocator = { version = "0.7", default-features = false }
 axum-extra = { version = "0.12", default-features = false }
 papaya = { version = "0.2", default-features = false }
+tar = { version = "0.4", default-features = false }
 tempfile = { version = "3", default-features = false }
 fs4 = { version = "0.13.1", default-features = false }
 fnv = { version = "1", default-features = false }
 twox-hash = { version = "2", features = ["xxhash64"] }
-sha2 = { version = "0.10.9", default-features = false }
+sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
 shake = { version = "0.1", default-features = false }
 test-strategy = { version = "0.4", default-features = false }
 opentelemetry-semantic-conventions = { version = "0.33.0", default-features = false }
@@ -288,6 +299,10 @@ debug-assertions = true
 overflow-checks = true
 lto = "thin"
 codegen-units = 8
+
+[profile.release.package.panoramic-courier]
+debug = false
+strip = "debuginfo"
 
 [profile.optimized-release]
 inherits = "release"

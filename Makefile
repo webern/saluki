@@ -41,6 +41,7 @@ MACOS_TEST_AGENT_VERSION ?= 7.84.6
 MACOS_TEST_AGENT_DMG_DIR ?= /tmp/saluki-dda-dmg-cache
 MACOS_TEST_AGENT_DMG_URL ?= https://s3.amazonaws.com/dd-agent/datadog-agent-$(MACOS_TEST_AGENT_VERSION)-1.$(shell uname -m).dmg
 MACOS_TEST_AGENT_INSTALL_DIR ?= /tmp/saluki-dda/datadog-agent
+MACOS_TEST_ARTIFACTS ?= $(CURDIR)/target/panoramic-artifacts-macos.toml
 
 # General build settings used for tooling, etc.
 export GO_BUILD_IMAGE ?= golang:1.23-bullseye
@@ -48,6 +49,14 @@ export GO_APP_IMAGE ?= ubuntu:24.04
 # TODO: move this to test/output when everyone has it in their gitignore
 SALUKI_TEST_OUTPUT_DIR ?= $(CURDIR)/target/test-output
 export PANORAMIC_LOG_DIR ?= $(SALUKI_TEST_OUTPUT_DIR)/panoramic
+CORRECTNESS_TEST_ARTIFACTS ?= $(CURDIR)/target/panoramic-artifacts-correctness.toml
+
+# Pass a manifest on the make command line: `make test-integration PANORAMIC_ARTIFACTS=artifacts.toml`.
+# Environment values, including empty ones, stop make when a run target expands this argument.
+PANORAMIC_ARTIFACTS_ARG = $(if $(filter environment%,$(origin PANORAMIC_ARTIFACTS)),$(error PANORAMIC_ARTIFACTS must be set on the make command line, not in the environment),$(if $(PANORAMIC_ARTIFACTS),--artifacts "$(PANORAMIC_ARTIFACTS)"))
+
+# Match the runner host's architecture; override for a Docker daemon of another architecture.
+COURIER_LINUX_TARGET ?= $(shell rustc -vV | sed -n 's/^host: \([^-]*\)-.*/\1/p')-unknown-linux-musl
 
 # Pinned nightly toolchain shared by the Miri tests and API-doc generation, both of which rely on
 # nightly-only features. Keeping it in one variable ensures the two stay in lockstep; bump here to
@@ -476,9 +485,8 @@ endif
 
 ##@ Kind (Correctness Testing)
 
-# kind cluster lifecycle (create, load, delete) is managed by panoramic automatically
-# when running kind-runtime tests. Use --no-delete-cluster to keep the cluster alive
-# between local runs.
+# Panoramic manages kind when a selected case has pod participants.
+# Use --no-delete-kind-cluster to keep the cluster between local runs.
 
 .PHONY: check-kind-tools
 check-kind-tools:
@@ -614,44 +622,89 @@ test-loom: ## Runs all Loom-specific unit tests
 	@echo "[*] Running Loom-specific unit tests..."
 	cargo nextest run --release --features loom -p stringtheory -p saluki-core loom_tests
 
+.PHONY: test-airlock-daemon
+test-airlock-daemon: check-rust-build-tools cargo-install-cargo-nextest
+test-airlock-daemon: ## Runs airlock's tests against a real Docker daemon (the image in $AIRLOCK_TEST_IMAGE, default alpine:latest, must already be local)
+	@echo "[*] Running airlock daemon tests..."
+	cargo nextest run -p airlock --test daemon --no-fail-fast
+
+.PHONY: test-panoramic-daemon
+test-panoramic-daemon: check-rust-build-tools cargo-install-cargo-nextest build-courier-linux
+test-panoramic-daemon: ## Runs panoramic's backend, lifecycle and runner daemon tests against a real Docker daemon (the image in $PANORAMIC_TEST_IMAGE, default alpine:latest, must already be local)
+	@echo "[*] Running panoramic daemon tests..."
+	cargo nextest run -p panoramic-core --run-ignored only --no-fail-fast -E 'not test(/windows_container::daemon_tests::/) and not test(/^backend::pod::kind_tests::/)'
+	cargo nextest run -p panoramic --run-ignored only --no-fail-fast -E 'not test(/^runner::product_tests::/)'
+
+.PHONY: test-panoramic-kind
+test-panoramic-kind: check-rust-build-tools cargo-install-cargo-nextest build-courier-linux check-kind-tools
+test-panoramic-kind: ## Runs local pod backend tests in an ephemeral kind cluster ($PANORAMIC_TEST_IMAGE, default alpine:latest, must already be local)
+	cargo nextest run -p panoramic-core --run-ignored only --no-fail-fast --test-threads 1 -E 'test(/^backend::pod::kind_tests::/)'
+
+.PHONY: test-panoramic-products
+test-panoramic-products: check-rust-build-tools cargo-install-cargo-nextest build-courier-linux
+test-panoramic-products: ## Runs native product tests with local images ($PANORAMIC_AGENT_ADP_LINUX_IMAGE and $PANORAMIC_TOOLS_LINUX_IMAGE)
+	@echo "[*] Running panoramic product tests..."
+	cargo nextest run -p panoramic --run-ignored only --no-fail-fast --test-threads 1 -E 'test(/^runner::product_tests::/)'
+
 .PHONY: test-all
 test-all: ## Test everything
 test-all: test test-property test-docs test-miri test-loom
 
+.PHONY: render-correctness-test-artifacts
+render-correctness-test-artifacts: build-panoramic
+render-correctness-test-artifacts: ## Binds the release Agent image for local correctness tests
+	@target/release/panoramic artifacts render \
+		--set agent-adp-linux-image=saluki-images/datadog-agent:testing-release \
+		--output "$(CORRECTNESS_TEST_ARTIFACTS)"
+
 .PHONY: test-correctness
-test-correctness: build-panoramic build-correctness-tools-image build-datadog-agent-image-release
+test-correctness: render-correctness-test-artifacts build-courier-linux build-correctness-tools-image build-datadog-agent-image-release
 test-correctness: ## Runs the complete correctness suite (all test cases in parallel)
 	@echo "[*] Running correctness test suite..."
-	@target/release/panoramic run -d $(shell pwd)/test/correctness/cases $(if $(PANORAMIC_PARALLELISM),-p $(PANORAMIC_PARALLELISM))
+	@target/release/panoramic run --subject-os linux -d $(shell pwd)/test/correctness/cases $(if $(PANORAMIC_PARALLELISM),-p $(PANORAMIC_PARALLELISM)) $(or $(PANORAMIC_ARTIFACTS_ARG),--artifacts "$(CORRECTNESS_TEST_ARTIFACTS)")
 
 .PHONY: test-correctness-case
-test-correctness-case: build-panoramic build-correctness-tools-image build-datadog-agent-image-release
+test-correctness-case: render-correctness-test-artifacts build-courier-linux build-correctness-tools-image build-datadog-agent-image-release
 test-correctness-case: ## Runs a single correctness test case by name (usage: make test-correctness-case CASE=dsd-plain)
 	@echo "[*] Running '$(CASE)' correctness test case..."
-	@target/release/panoramic run -d $(shell pwd)/test/correctness/cases -t $(CASE) --no-tui
+	@target/release/panoramic run --subject-os linux -d $(shell pwd)/test/correctness/cases -t $(CASE) --no-tui $(or $(PANORAMIC_ARTIFACTS_ARG),--artifacts "$(CORRECTNESS_TEST_ARTIFACTS)")
 
 .PHONY: build-panoramic
 build-panoramic: check-rust-build-tools
-build-panoramic: ## Builds the panoramic binary (ADP integration test runner)
+build-panoramic: ## Builds the panoramic binary (correctness and integration test runner)
 	@echo "[*] Building panoramic..."
 	@cargo build --profile release --package panoramic
 
+.PHONY: build-courier-linux
+build-courier-linux: check-rust-build-tools
+build-courier-linux: ## Builds the static Linux courier for the runner host's architecture
+ifeq ($(shell command -v rustup >/dev/null || echo not-found), not-found)
+	$(error "Rustup must be present to install the Linux musl target: https://www.rust-lang.org/tools/install")
+endif
+	@echo "[*] Building the Linux courier for $(COURIER_LINUX_TARGET)..."
+	@rustup target add $(COURIER_LINUX_TARGET)
+	@cargo build --profile release --package panoramic-courier --bin panoramic-courier --target $(COURIER_LINUX_TARGET)
+
 .PHONY: test-integration
-test-integration: build-panoramic build-datadog-agent-image build-correctness-tools-image
+test-integration: build-panoramic build-courier-linux build-datadog-agent-image build-correctness-tools-image
 test-integration: ## Runs all ADP integration tests
 	@echo "[*] Running ADP integration tests..."
-	@target/release/panoramic run -d $(shell pwd)/test/integration/cases $(if $(PANORAMIC_LOG_DIR),-l $(PANORAMIC_LOG_DIR))
+	@target/release/panoramic run --subject-os linux -d $(shell pwd)/test/integration/cases $(if $(PANORAMIC_LOG_DIR),-l $(PANORAMIC_LOG_DIR)) $(PANORAMIC_ARTIFACTS_ARG)
 
 .PHONY: test-integration-quick
-test-integration-quick: build-panoramic
+test-integration-quick: build-panoramic build-courier-linux
 test-integration-quick: ## Runs ADP integration tests (assumes images already built)
+	@$(MAKE) run-integration-quick
+
+.PHONY: run-integration-quick
+run-integration-quick: ## Runs ADP integration tests using built binaries and images
 	@echo "[*] Running ADP integration tests (quick mode)..."
-	@target/release/panoramic run -d $(shell pwd)/test/integration/cases $(if $(PANORAMIC_LOG_DIR),-l $(PANORAMIC_LOG_DIR))
+	@target/release/panoramic run --subject-os linux -d $(shell pwd)/test/integration/cases $(if $(PANORAMIC_LOG_DIR),-l $(PANORAMIC_LOG_DIR)) $(PANORAMIC_ARTIFACTS_ARG)
 
 .PHONY: list-integration-tests
 list-integration-tests: build-panoramic
 list-integration-tests: ## Lists available ADP integration tests
-	@target/release/panoramic list -d $(shell pwd)/test/integration/cases
+	@target/release/panoramic list --subject-os linux -d $(shell pwd)/test/integration/cases
 
 .PHONY: build-adp-host
 build-adp-host: BUILD_PROFILE ?= release
@@ -664,6 +717,12 @@ build-adp-host: ## Builds the agent-data-plane binary for the current host (Carg
 	@APP_GIT_HASH="$(ADP_APP_GIT_HASH)" \
 		APP_BUILD_TIME="$(APP_BUILD_TIME)" \
 		cargo $(ADP_CARGO_BUILD_SUBCMD) --profile $(BUILD_PROFILE) --bin agent-data-plane
+
+.PHONY: build-intake-host
+build-intake-host: check-rust-build-tools
+build-intake-host: ## Builds datadog-intake for the current host (release)
+	@echo "[*] Building datadog-intake (release, host target)..."
+	@cargo build --profile release --package datadog-intake --bin datadog-intake
 
 .PHONY: build-adp-aix
 build-adp-aix: BUILD_PROFILE ?= aix-optimized-release
@@ -685,17 +744,12 @@ package-adp-host: ## Packages agent-data-plane into a release tarball under targ
 		$(CURDIR)/ci/tooling/package-adp-tarball.sh
 
 .PHONY: test-integration-macos-run
-# ADP path tracks $$BUILD_PROFILE so a tagged release pipeline (BUILD_PROFILE=optimized-release
-# in .gitlab-ci.yml workflow rules) tests the same binary it's about to ship — mirroring how the
-# linux flow builds and tests build-adp-image with whatever BUILD_PROFILE the pipeline sets.
-# panoramic stays at target/release/ unconditionally because it's the test harness, not the SUT;
-# build-panoramic always builds with --profile release, same as linux's build-panoramic-binary.
-test-integration-macos-run: BUILD_PROFILE ?= release
-test-integration-macos-run: ## Runs the macOS host-process integration tests using already-built binaries (assumes target/$$BUILD_PROFILE/agent-data-plane and target/release/panoramic exist). Defaults to all `mac`-runtime-eligible tests; narrow with CASE=<name>.
+# The artifact manifest selects the host binaries; the harness is always built in release mode.
+test-integration-macos-run: ## Runs macOS cases with already-built binaries and the artifact manifest; narrow with CASE=<name>.
 	@echo "[*] Running macOS host-process integration tests..."
 	@target/release/panoramic run -d "$(CURDIR)/test/integration/cases" \
-		--adp-binary-path "$(CURDIR)/target/$(BUILD_PROFILE)/agent-data-plane" \
-		--core-agent-binary-path "$(MACOS_TEST_AGENT_INSTALL_DIR)/bin/agent/agent" \
+		--subject-os macos \
+		$(PANORAMIC_ARTIFACTS_ARG) \
 		$(if $(CASE),-t $(CASE)) --no-tui -p 1 \
 		$(if $(PANORAMIC_LOG_DIR),-l $(PANORAMIC_LOG_DIR))
 
@@ -777,8 +831,19 @@ provision-macos-test-env: ## Installs the pinned Datadog Agent ($(MACOS_TEST_AGE
 	@echo "[*] macOS test environment ready."
 	@echo "[*] Agent binary: $(MACOS_TEST_AGENT_INSTALL_DIR)/bin/agent/agent"
 
+.PHONY: render-macos-test-artifacts
+render-macos-test-artifacts: BUILD_PROFILE ?= release
+render-macos-test-artifacts: build-panoramic
+render-macos-test-artifacts: ## Writes $$MACOS_TEST_ARTIFACTS binding the macOS tests' ADP and intake binaries and Agent install
+	@target/release/panoramic artifacts render \
+		--set adp-host-binary="$(CURDIR)/target/$(BUILD_PROFILE)/agent-data-plane" \
+		--set agent-host-install="$(MACOS_TEST_AGENT_INSTALL_DIR)" \
+		--set intake-host-binary="$(CURDIR)/target/release/datadog-intake" \
+		--output "$(MACOS_TEST_ARTIFACTS)"
+
 .PHONY: test-integration-macos-ci
-test-integration-macos-ci: build-panoramic build-adp-host provision-macos-test-env test-integration-macos-run ## CI entry point: builds binaries, ensures Agent + cert are provisioned, then runs the `mac`-runtime integration tests
+test-integration-macos-ci: override PANORAMIC_ARTIFACTS = $(MACOS_TEST_ARTIFACTS)
+test-integration-macos-ci: build-panoramic build-adp-host build-intake-host provision-macos-test-env render-macos-test-artifacts test-integration-macos-run ## CI entry point: builds binaries, provisions the Agent and cert, renders artifacts, and runs macOS integration tests
 
 .PHONY: ensure-rust-nightly
 ensure-rust-nightly:

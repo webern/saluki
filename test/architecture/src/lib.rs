@@ -17,6 +17,12 @@
 //! Guards can also collect aliases with [`symbols::SourceTree::aliases`]. Matches report the source location;
 //! unreadable, invalid, or missing sources fail the scan.
 //!
+//! # Term guards
+//!
+//! Term guards read crate files as text, so they also cover comments, strings, fixtures, manifests, and embedded
+//! assets that symbol guards skip. [`terms::read_crate`] loads every file of a crate, and [`terms::TermRule`] reports
+//! the lines that contain a [`terms::Term`] along with the exact lines exempt from the rule.
+//!
 //! # Limits
 //!
 //! Symbol guards don't resolve names. Unrelated items sharing a guarded identifier cause false positives.
@@ -32,6 +38,10 @@
 
 pub mod graph;
 pub mod symbols;
+pub mod terms;
+
+#[cfg(test)]
+mod panoramic;
 
 #[cfg(test)]
 mod tests {

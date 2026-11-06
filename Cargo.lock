@@ -134,12 +134,12 @@ name = "airlock"
 version = "0.1.0"
 dependencies = [
  "bollard",
+ "bytes",
  "futures",
  "home",
- "libc",
  "saluki-error",
+ "tar",
  "tokio",
- "tokio-util",
  "tracing",
 ]
 
@@ -4604,18 +4604,17 @@ version = "0.1.0"
 dependencies = [
  "airlock",
  "async-trait",
- "base64 0.23.1",
  "bollard",
  "chrono",
  "clap",
  "colored",
  "crossterm",
  "futures",
- "k8s-openapi",
- "kube",
+ "panoramic-core",
+ "panoramic-participants",
+ "panoramic-steps",
  "rand 0.10.3",
  "regex",
- "reqwest",
  "rustls",
  "rustls-cng-crypto",
  "saluki-common",
@@ -4623,16 +4622,111 @@ dependencies = [
  "serde",
  "serde-saphyr 2.0.0",
  "serde_json",
- "snafu",
- "socket2",
- "stele",
  "tempfile",
  "tokio",
  "tokio-util",
  "tracing",
  "tracing-subscriber",
- "treediff",
  "vergen-gix",
+]
+
+[[package]]
+name = "panoramic-core"
+version = "0.1.0"
+dependencies = [
+ "airlock",
+ "async-trait",
+ "bollard",
+ "bytes",
+ "chrono",
+ "futures",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "k8s-openapi",
+ "kube",
+ "libc",
+ "panoramic-courier",
+ "rand 0.10.3",
+ "rcgen",
+ "regex",
+ "rustls",
+ "rustls-cng-crypto",
+ "saluki-error",
+ "serde",
+ "serde-saphyr 2.0.0",
+ "serde_json",
+ "serde_path_to_error",
+ "sha2",
+ "simdutf8",
+ "snafu",
+ "socket2",
+ "tar",
+ "tempfile",
+ "tokio",
+ "tokio-rustls",
+ "tokio-util",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "panoramic-courier"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "serde",
+ "serde_json",
+ "snafu",
+ "socket2",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "panoramic-participants"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64 0.23.1",
+ "panoramic-core",
+ "regex",
+ "serde",
+ "serde-saphyr 2.0.0",
+ "serde_json",
+ "simdutf8",
+ "tempfile",
+ "tokio",
+ "url",
+]
+
+[[package]]
+name = "panoramic-steps"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64 0.23.1",
+ "datadog-protos",
+ "futures",
+ "panoramic-core",
+ "regex",
+ "rustls",
+ "saluki-common",
+ "saluki-error",
+ "saluki-tls",
+ "serde",
+ "serde-saphyr 2.0.0",
+ "serde_json",
+ "stele",
+ "tempfile",
+ "tokio",
+ "tokio-rustls",
+ "tracing",
+ "treediff",
  "zstd",
 ]
 
@@ -5431,7 +5525,6 @@ dependencies = [
  "rustls-platform-verifier",
  "serde",
  "serde_json",
- "serde_urlencoded",
  "sync_wrapper",
  "tokio",
  "tokio-rustls",
@@ -6725,6 +6818,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tar"
+version = "0.4.46"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f6221d9a6003c78398e3b239969f352578258df48c8eb051caadae0015bc840"
+dependencies = [
+ "filetime",
+ "libc",
+]
+
+[[package]]
 name = "target-lexicon"
 version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7164,19 +7267,14 @@ version = "0.6.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4cfcf7e2740e6fc6d4d688b4ef00650406bb94adf4731e43c096c3a19fe40840"
 dependencies = [
- "async-compression",
  "base64 0.22.1",
  "bitflags 2.11.1",
  "bytes",
- "futures-core",
  "futures-util",
  "http",
  "http-body",
- "http-body-util",
  "mime",
  "pin-project-lite",
- "tokio",
- "tokio-util",
  "tower",
  "tower-layer",
  "tower-service",

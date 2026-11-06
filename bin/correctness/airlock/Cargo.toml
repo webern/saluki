@@ -10,25 +10,20 @@ workspace = true
 
 [dependencies]
 bollard = { workspace = true, features = ["http", "pipe"] }
+bytes = { workspace = true }
 futures = { workspace = true }
 home = { workspace = true }
 saluki-error = { workspace = true }
+tar = { workspace = true }
 tokio = { workspace = true, features = [
-  "fs",
   "io-util",
   "macros",
-  "process",
   "rt",
   "rt-multi-thread",
   "sync",
   "time",
 ] }
-tokio-util = { workspace = true }
 tracing = { workspace = true }
-
-# Unix process-group signaling via killpg.
-[target.'cfg(unix)'.dependencies]
-libc = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["net"] }

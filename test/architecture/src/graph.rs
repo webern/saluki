@@ -34,6 +34,48 @@ impl Workspace {
         self.graph.workspace().root().as_std_path()
     }
 
+    /// Returns every workspace member's direct dependencies on workspace members, one per dependency kind.
+    ///
+    /// Optional, feature-gated, and target-specific dependencies are included. The result is ordered by member
+    /// package name, then dependency package name, then kind.
+    pub fn direct_member_dependencies(&self) -> Vec<MemberDependency> {
+        let mut dependencies: Vec<MemberDependency> = self
+            .graph
+            .workspace()
+            .iter()
+            .flat_map(|package| package.direct_links())
+            .filter(|link| link.to().in_workspace())
+            .flat_map(|link| {
+                [
+                    (DependencyKind::Build, link.build().is_present()),
+                    (DependencyKind::Dev, link.dev().is_present()),
+                    (DependencyKind::Normal, link.normal().is_present()),
+                ]
+                .into_iter()
+                .filter(|(_, present)| *present)
+                .map(move |(kind, _)| MemberDependency {
+                    from: link.from().name().to_string(),
+                    to: link.to().name().to_string(),
+                    kind,
+                })
+            })
+            .collect();
+        dependencies.sort_unstable();
+        dependencies
+    }
+
+    /// Returns the names of all workspace members.
+    pub fn member_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .graph
+            .workspace()
+            .iter()
+            .map(|package| package.name().to_string())
+            .collect();
+        names.sort_unstable();
+        names
+    }
+
     /// Returns the workspace member named `name`.
     ///
     /// # Errors
@@ -42,6 +84,44 @@ impl Workspace {
     pub fn member(&self, name: &str) -> Result<PackageMetadata<'_>, guppy::Error> {
         self.graph.workspace().member_by_name(name)
     }
+}
+
+/// The section of a manifest a dependency is declared in.
+///
+/// Variants sort alphabetically by their displayed names.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum DependencyKind {
+    /// `[build-dependencies]`.
+    Build,
+
+    /// `[dev-dependencies]`.
+    Dev,
+
+    /// `[dependencies]`.
+    Normal,
+}
+
+impl fmt::Display for DependencyKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Build => "build",
+            Self::Dev => "dev",
+            Self::Normal => "normal",
+        })
+    }
+}
+
+/// A direct dependency of one workspace member on another, by package name.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct MemberDependency {
+    /// The depending member.
+    pub from: String,
+
+    /// The member depended on.
+    pub to: String,
+
+    /// The manifest section declaring the dependency.
+    pub kind: DependencyKind,
 }
 
 /// Dependency kinds included by [`Dependencies`], without feature or platform filtering.
@@ -322,6 +402,31 @@ mod tests {
         assert_eq!(to_g, [("c", "dev".to_string()), ("d", "build".to_string())]);
 
         assert!(direct_links_to_target_or_its_dependents(&a, &workspace.member("f").unwrap()).is_empty());
+    }
+
+    #[test]
+    fn direct_member_dependencies_list_each_kind_once_per_member() {
+        let fixture = Fixture::new();
+        let workspace = fixture.load();
+
+        let dependencies: Vec<_> = workspace
+            .direct_member_dependencies()
+            .iter()
+            .map(|dependency| format!("{} -[{}]-> {}", dependency.from, dependency.kind, dependency.to))
+            .collect();
+        assert_eq!(
+            dependencies,
+            [
+                "a -[normal]-> b",
+                "a -[dev]-> c",
+                "a -[build]-> d",
+                "a -[normal]-> e",
+                "c -[dev]-> f",
+                "c -[normal]-> g",
+                "d -[normal]-> g",
+            ]
+        );
+        assert_eq!(workspace.member_names(), ["a", "b", "c", "d", "e", "f", "g"]);
     }
 
     #[test]

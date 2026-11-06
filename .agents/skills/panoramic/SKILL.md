@@ -36,29 +36,30 @@ make test-integration
 `make test-integration-quick` skips image builds. Use it only after verifying that the local images
 match the working tree.
 
-`--runtime` scopes integration discovery. On macOS, assume the `linux` runtime through the local
-Docker setup unless the user explicitly requests native macOS tests; pass `--runtime linux` because
-the CLI defaults to `mac` there. Follow the current Make recipe for native macOS provisioning.
-Correctness cases choose their runtime from their case configuration.
+`test-integration` and `test-integration-quick` select Linux containers, even on macOS. Direct
+`panoramic` calls default to the host OS; pass `--subject-os linux` for containers on macOS.
+For native macOS tests, follow the macOS targets in `Makefile`. See `docs/development/testing.md`
+for subject-OS selection, artifact manifests and skipped outcomes.
 
-Use `panoramic list` with the intended test directory and runtime to discover eligible case names
+Use `panoramic list` with the intended test directory and subject OS to discover eligible case names
 before selecting them.
 
 ## Run non-interactively
 
-The Panoramic test targets write artifacts beneath `{{saluki}}/target/test-output/panoramic/` by
-default. This in-tree path is visible to Docker on macOS. Set `SALUKI_TEST_OUTPUT_DIR` to relocate the
-shared test-output root or `PANORAMIC_LOG_DIR` to override Panoramic only. Use the same base for direct
-runs.
+Test targets write artifacts to `{{saluki}}/target/test-output/panoramic/` by default, a path Docker
+can access on macOS. Use the same base for direct runs. See `docs/development/testing.md` for
+output-directory overrides.
 
 ```bash
 make build-panoramic
 target/release/panoramic run \
   -d "$(pwd)/test/integration/cases" \
-  --runtime linux \
+  --subject-os linux \
   -t <case-name> \
   --no-tui -o json -l "$(pwd)/target/test-output/panoramic"
 ```
+
+For `--artifacts` verification and Linux courier prerequisites, see `docs/development/testing.md`.
 
 Use comma-separated names with `-t` and `-p 1` when one case needs attributable output. Each run
 creates a timestamped `panoramic-*` directory beneath the base. `make clean-test-logs` deletes the

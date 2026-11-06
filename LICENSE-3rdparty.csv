@@ -465,6 +465,7 @@ serde_with_macros,https://github.com/jonasbb/serde_with,MIT OR Apache-2.0,Jonas 
 serde_yaml,https://github.com/dtolnay/serde-yaml,MIT OR Apache-2.0,David Tolnay <dtolnay@gmail.com>
 sha1,https://github.com/RustCrypto/hashes,MIT OR Apache-2.0,RustCrypto Developers
 sha1-checked,https://github.com/RustCrypto/hashes,MIT OR Apache-2.0,RustCrypto Developers
+sha2,https://github.com/RustCrypto/hashes,MIT OR Apache-2.0,RustCrypto Developers
 shake,https://github.com/RustCrypto/XOFs,MIT OR Apache-2.0,RustCrypto Developers
 sharded-slab,https://github.com/hawkw/sharded-slab,MIT,Eliza Weisman <eliza@buoyant.io>
 shlex,https://github.com/comex/rust-shlex,MIT OR Apache-2.0,"comex <comexk@gmail.com>, Fenhl <fenhl@fenhl.net>, Adrian Taylor <adetaylor@chromium.org>, Alex Touchet <alextouchet@outlook.com>, Daniel Parks <dp+git@oxidized.org>, Garrett Berg <googberg@gmail.com>"
@@ -495,6 +496,7 @@ symlink,https://gitlab.com/chris-morgan/symlink,MIT OR Apache-2.0,Chris Morgan <
 syn,https://github.com/dtolnay/syn,MIT OR Apache-2.0,David Tolnay <dtolnay@gmail.com>
 sync_wrapper,https://github.com/Actyx/sync_wrapper,Apache-2.0,Actyx AG <developer@actyx.io>
 synstructure,https://github.com/mystor/synstructure,MIT,Nika Layzell <nika@thelayzells.com>
+tar,https://github.com/composefs/tar-rs,MIT OR Apache-2.0,Alex Crichton <alex@alexcrichton.com>
 target-lexicon,https://github.com/bytecodealliance/target-lexicon,Apache-2.0 WITH LLVM-exception,Dan Gohman <sunfish@mozilla.com>
 target-spec,https://github.com/guppy-rs/guppy,MIT OR Apache-2.0,"Jack Moffitt <metajack@fb.com>, Rain <rain1@fb.com>"
 target-tuple,https://github.com/dtolnay/target-tuple,MIT OR Apache-2.0,David Tolnay <dtolnay@gmail.com>

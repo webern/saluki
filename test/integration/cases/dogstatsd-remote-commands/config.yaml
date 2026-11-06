@@ -1,46 +1,52 @@
-type: integration
 name: "dogstatsd-remote-commands"
 description: "Verifies DogStatsD stats error and cardinality output through the Core Agent remote command CLI"
 timeout: 300s
-runtimes: [linux]
+subject_os: [linux]
 
-env:
-  DD_API_KEY: "00000000000000000000000000000000"
-  DD_HOSTNAME: "integration-test-dogstatsd-remote-commands"
-  DD_DATA_PLANE_ENABLED: "true"
-  DD_DATA_PLANE_STANDALONE_MODE: "false"
-  DD_DATA_PLANE_REMOTE_AGENT_ENABLED: "true"
-  DD_DATA_PLANE_DOGSTATSD_ENABLED: "true"
-
-container:
-  files:
-    - "run_dogstatsd_remote_commands_test.py:/dogstatsd-remote-commands/run_dogstatsd_remote_commands_test.py"
-  exposed_ports:
-    - "58125/udp"
+participants:
+  adp:
+    type: agent-adp
+    subject: true
+    config:
+      env:
+        DD_API_KEY: "00000000000000000000000000000000"
+        DD_HOSTNAME: "integration-test-dogstatsd-remote-commands"
+        DD_DATA_PLANE_ENABLED: "true"
+        DD_DATA_PLANE_STANDALONE_MODE: "false"
+        DD_DATA_PLANE_REMOTE_AGENT_ENABLED: "true"
+        DD_DATA_PLANE_DOGSTATSD_ENABLED: "true"
+      files: {files/: files}
 
 procedure:
   - parallel:
-      - assertion: port_listening
-        port: 58125
-        protocol: udp
+      # The log proves UDP bound successfully; a UDP connect alone cannot.
+      - step: log_contains
+        on: adp
+        pattern: 'listen_addr:"udp://[^"]+:58125" \| DogStatsD listener started\.'
+        regex: true
         timeout: 60s
-      - assertion: log_contains
+      - step: log_contains
+        on: adp
         pattern: "Agent Data Plane running."
         timeout: 60s
   # The driver bounds its own steps below this timeout, so it exits before the exec is abandoned.
-  - action: target_exec
-    command:
+  - step: exec
+    on: adp
+    argv:
       - "/opt/datadog-agent/embedded/bin/python3"
-      - "/dogstatsd-remote-commands/run_dogstatsd_remote_commands_test.py"
+      - "{{ adp.facts.files_dir }}/run_dogstatsd_remote_commands_test.py"
     timeout: 150s
-  - assertion: file_contains
+  - step: file_contains
+    on: adp
     path: "/tmp/dogstatsd-remote-commands-integration-result"
     pattern: "passed"
     timeout: 10s
   - parallel:
-      - assertion: process_stable_for
+      - step: process_stable_for
+        on: adp
         duration: 10s
-      - assertion: log_not_contains
+      - step: log_not_contains
+        on: adp
         pattern: "panic|PANIC"
         regex: true
         during: 10s

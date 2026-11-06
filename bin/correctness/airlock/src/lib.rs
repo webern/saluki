@@ -1,4 +1,10 @@
-pub mod config;
 pub mod docker;
 pub mod driver;
-pub mod unix;
+pub mod exec;
+pub mod files;
+pub mod group;
+pub mod observe;
+mod removal;
+
+#[cfg(test)]
+mod fake_daemon;

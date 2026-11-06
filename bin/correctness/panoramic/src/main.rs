@@ -1,65 +1,54 @@
-//! Test runner for running integration tests.
+//! Participant-based correctness and integration test runner.
 
 #![deny(warnings)]
 #![deny(missing_docs)]
 
-use std::collections::BTreeMap;
 use std::{io::IsTerminal, process::ExitCode};
 
 use clap::Parser as _;
+use panoramic_core::case::{CaseLoader, Registries};
 use saluki_common::logging::{filter_from_env, parse_filter_directives};
-use tokio::sync::{watch, Mutex};
-use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info};
 use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _};
 
-use crate::runner::Runner;
+use crate::{list_command::list_tests, run_command::run_tests};
 
 mod kind;
-use self::kind::KindLifecycle;
 
-mod actions;
-mod assertions;
+mod artifact_commands;
 mod cli;
 mod collector;
-use self::collector::{
-    consume_run, run_teardown, RunCollector, RunDisplay, RunEnd, EXIT_HARNESS_ERROR, EXIT_NO_TESTS_SELECTED,
-};
 
-mod correctness;
 use self::cli::{Cli, Command, LogLevel};
 
 mod config;
-mod deadline;
-mod dynamic_vars;
-mod integration;
-mod mounts;
-use self::config::{default_host_runtime, discover_tests};
+mod console;
+mod discovery;
+mod list_command;
 
-mod events;
-use self::events::create_event_channel;
+#[cfg(test)]
+mod case_loader_tests;
+#[cfg(test)]
+mod ci_shape_tests;
 
-mod image_override;
-mod intake;
-mod interrupts;
-use self::interrupts::Interrupts;
+/// Participant types and steps available to loading and compilation.
+pub(crate) const REGISTRIES: Registries<'static> = Registries {
+    participant_types: panoramic_participants::REGISTERED_TYPES,
+    steps: panoramic_steps::REGISTERED_STEPS,
+};
 
-mod machine_output;
-use self::machine_output::RunReport;
+/// Loads case files with the participant types and steps this binary registers.
+pub(crate) const CASE_LOADER: CaseLoader<'static> = CaseLoader::new(REGISTRIES);
 
-mod ledger;
-mod probe;
-mod record;
-mod reporter;
-use self::reporter::{OutputFormat, Reporter};
+mod text_output;
+use self::text_output::OutputFormat;
 
+mod providability;
+mod run_command;
 mod runner;
-mod tasks;
 mod test;
-mod test_env;
 mod traffic;
 mod tui;
-mod unix_runner;
 mod utils;
 
 #[cfg(not(windows))]
@@ -88,7 +77,7 @@ async fn main() -> ExitCode {
             !cmd.no_tui && matches!(cmd.output, OutputFormat::Text) && std::io::stdout().is_terminal(),
             true,
         ),
-        Command::List(_) => (false, false),
+        Command::List(_) | Command::Artifacts(_) => (false, false),
     };
 
     if !use_tui {
@@ -99,8 +88,13 @@ async fn main() -> ExitCode {
     }
 
     let result = match cli.command {
-        Command::Run(cmd) => run_tests(cmd, use_tui).await,
+        Command::Run(cmd) => run_tests(*cmd, use_tui).await,
         Command::List(cmd) => list_tests(cmd).await,
+        Command::Artifacts(cmd) => match cmd.command {
+            cli::ArtifactsSubcommand::Render(cmd) => artifact_commands::render(cmd),
+            cli::ArtifactsSubcommand::Verify(cmd) => artifact_commands::verify(cmd, &mut std::io::stdout()).await,
+            cli::ArtifactsSubcommand::Pull(cmd) => artifact_commands::pull(cmd, &mut std::io::stdout()).await,
+        },
     };
 
     if !use_tui {
@@ -134,359 +128,143 @@ fn initialize_logging(log_level: LogLevel) {
         .init();
 }
 
-/// Splits the `-t` selection into the tests that matched and the names that matched nothing.
-fn resolve_selection(requested: &str, discovered: &[Box<dyn test::Test>]) -> (Vec<String>, Vec<String>) {
-    let discovered: Vec<String> = discovered.iter().map(|t| t.name()).collect();
-    let mut selected = Vec::new();
-    let mut unmatched = Vec::new();
-
-    for name in requested.split(',').map(str::trim).filter(|n| !n.is_empty()) {
-        if discovered.iter().any(|d| d == name) {
-            selected.push(name.to_string());
-        } else {
-            unmatched.push(name.to_string());
-        }
-    }
-
-    (selected, unmatched)
-}
-
-async fn run_tests(cmd: cli::RunCommand, use_tui: bool) -> ExitCode {
-    let settings = cmd.runner_settings();
-    debug!(
-        adp_binary_path = %settings.adp_binary_path.display(),
-        core_agent_binary_path = %settings.core_agent_binary_path.display(),
-        mounts_dir = %settings.mounts_dir.display(),
-        alpine_image = %settings.alpine_image,
-        "Resolved runner settings."
-    );
-
-    if cmd.test_dirs.is_empty() {
-        let msg = "No test directories specified. Use -d <path> to specify one or more directories.";
-        if use_tui {
-            eprintln!("{}", msg);
-        } else {
-            error!("{}", msg);
-        }
-        return ExitCode::from(2);
-    }
-
-    let integration_runtime = cmd
-        .runtime
-        .clone()
-        .unwrap_or_else(|| default_host_runtime().to_string());
-    let test_cases = match discover_tests(&cmd.test_dirs, &integration_runtime, &cmd.image_overrides) {
-        Ok(tests) => tests,
-        Err(e) => {
-            if use_tui {
-                eprintln!("Failed to discover tests: {}", e);
-            } else {
-                error!("Failed to discover tests: {}", e);
-            }
-            return ExitCode::from(2);
-        }
-    };
-
-    if test_cases.is_empty() {
-        let dirs_str: Vec<_> = cmd.test_dirs.iter().map(|d| d.display().to_string()).collect();
-        let msg = format!("No test cases found in: {}", dirs_str.join(", "));
-        if use_tui {
-            eprintln!("{}", msg);
-        } else {
-            error!("{}", msg);
-        }
-        return ExitCode::from(2);
-    }
-
-    // Resolve the `-t` selection before doing any work: a name that matches nothing, or a
-    // selection that leaves nothing to run, is an error rather than a green run of zero tests.
-    let selected_tests = match cmd.tests.as_deref() {
-        Some(requested) => {
-            let (selected, unmatched) = resolve_selection(requested, &test_cases);
-            if !unmatched.is_empty() {
-                let msg = format!(
-                    "No test matches: {}. Run 'panoramic list' to see the tests in scope for runtime '{}'.",
-                    unmatched.join(", "),
-                    integration_runtime
-                );
-                if use_tui {
-                    eprintln!("{}", msg);
-                } else {
-                    error!("{}", msg);
-                }
-                return ExitCode::from(EXIT_NO_TESTS_SELECTED);
-            }
-            if selected.is_empty() {
-                let msg = "No tests selected. Drop -t, or name at least one test.";
-                if use_tui {
-                    eprintln!("{}", msg);
-                } else {
-                    error!("{}", msg);
-                }
-                return ExitCode::from(EXIT_NO_TESTS_SELECTED);
-            }
-            Some(selected)
-        }
-        None => None,
-    };
-    // Register only the selected tests so the runner and `run.json` share one selection.
-    let test_cases: Vec<Box<dyn test::Test>> = match selected_tests {
-        Some(names) => test_cases.into_iter().filter(|t| names.contains(&t.name())).collect(),
-        None => test_cases,
-    };
-
-    // Create log directory.
-    let log_dir = match std::path::absolute(cmd.log_dir()) {
-        Ok(path) => path,
-        Err(e) => {
-            error!("Failed to resolve log directory: {}", e);
-            return ExitCode::from(2);
-        }
-    };
-    if let Err(e) = std::fs::create_dir_all(&log_dir) {
-        if use_tui {
-            eprintln!("Failed to create log directory: {}", e);
-        } else {
-            error!("Failed to create log directory: {}", e);
-        }
-        return ExitCode::from(2);
-    }
-
-    // Install interrupt handlers before starting background work.
-    let mut interrupts = Interrupts::install();
-    let mut collector = RunCollector::start(
-        RunReport::new(
-            cmd.test_dirs.clone(),
-            integration_runtime.clone(),
-            cmd.parallelism.get(),
-            log_dir.clone(),
-            test_cases.iter().map(|t| t.name()).collect(),
-        ),
-        cmd.fail_fast,
-    );
-
-    // Create the event channel early so the kind setup task can emit status messages.
-    let (tx, rx) = create_event_channel();
-
-    // Spawn kind cluster setup in the background so non-kind tests start immediately.
-    // Kind tests will wait on `kind_rx` before doing any work.
-    let kind_images = collect_kind_images(&test_cases);
-    let kind_lifecycle_slot = std::sync::Arc::new(Mutex::new(None::<KindLifecycle>));
-    let kind_rx = if kind_images.is_empty() {
-        None
-    } else {
-        let (kind_tx, kind_rx) = watch::channel::<Option<Result<(), String>>>(None);
-        let slot = kind_lifecycle_slot.clone();
-        let cluster_name = cmd.kind_cluster_name.clone();
-        let event_tx = tx.clone();
-        tokio::spawn(async move {
-            match KindLifecycle::ensure(cluster_name, kind_images, event_tx).await {
-                Ok(lc) => {
-                    *slot.lock().await = Some(lc);
-                    let _ = kind_tx.send(Some(Ok(())));
-                }
-                Err(e) => {
-                    let _ = kind_tx.send(Some(Err(format!("{:?}", e))));
-                }
-            }
-        });
-        Some(kind_rx)
-    };
-
-    // Inject runtime config and build the test registry.
-    let mut registry = Runner::new(log_dir.clone(), settings);
-    if let Some(ref rx) = kind_rx {
-        registry = registry.with_kind_ready(rx.clone());
-    }
-    for tc in test_cases {
-        registry.register(tc).expect("failure to register test");
-    }
-
-    // The consume loop cancels this on the first interrupt.
-    let cancel_all = CancellationToken::new();
-
-    // Build run args.
-    let args = runner::RunArgs::new(cancel_all.clone(), tx)
-        .with_parallelism(cmd.parallelism)
-        .with_fail_fast(cmd.fail_fast);
-
-    // Spawn the test runner task (same code path for both modes).
-    let runner_handle = tokio::spawn(async move { registry.run_tests(args).await });
-
-    let mut display_error = None;
-    let display = if use_tui {
-        match tui::Tui::new(&log_dir) {
-            Ok(tui) => Some(RunDisplay::Tui(tui)),
-            Err(e) => {
-                display_error = Some(e);
-                None
-            }
-        }
-    } else {
-        info!("Starting test run with parallelism of {}...", cmd.parallelism);
-        info!("Container logs will be written to '{}'.", log_dir.display());
-        if cmd.fail_fast {
-            info!("Fail-fast mode enabled; will stop on first failure.");
-        }
-        Some(RunDisplay::Plain(Reporter::new(
-            cmd.output,
-            cmd.verbose,
-            Some(log_dir.clone()),
-        )))
-    };
-
-    let consumed = consume_run(rx, runner_handle, &mut collector, display, &mut interrupts, &cancel_all).await;
-    let display_error = display_error.or(consumed.display_error);
-    if let Some(e) = &display_error {
-        eprintln!("The TUI failed: {}", e);
-    }
-
-    // Tear down the kind cluster unless the caller asked to keep it.
-    if kind_rx.is_some() {
-        // The TUI has shut down by now, so its notices go to stderr directly.
-        let notice = |message: String| {
-            if use_tui {
-                eprintln!("{}", message);
-            } else {
-                warn!("{}", message);
-            }
-        };
-        let cluster_name = &cmd.kind_cluster_name;
-
-        if consumed.end == RunEnd::Abandoned {
-            notice(format!(
-                "Skipping kind cluster teardown after a second interrupt. Cluster '{}' may still be running; \
-                 delete it with 'kind delete cluster --name {}'.",
-                cluster_name, cluster_name
-            ));
-        } else {
-            let lifecycle: Option<KindLifecycle> = kind_lifecycle_slot.lock().await.take();
-            if let Some(lifecycle) = lifecycle {
-                if cmd.no_delete_kind_cluster {
-                    info!(
-                        "Skipping kind cluster teardown (--no-delete-kind-cluster). \
-                         Cluster '{}' is still running.",
-                        cluster_name
-                    );
-                } else if let Some(source) = run_teardown(lifecycle.teardown(), &mut collector, &mut interrupts).await {
-                    notice(format!(
-                        "Received {}; abandoned kind cluster teardown. A 'kind delete' already started may still \
-                         finish. If cluster '{}' is still running, delete it with 'kind delete cluster --name {}'.",
-                        source, cluster_name, cluster_name
-                    ));
-                }
-            } else {
-                // Failed or unfinished setup can leave a cluster behind.
-                notice(format!(
-                    "Kind cluster setup did not complete successfully. \
-                     A kind cluster named '{}' may still be running — run 'kind delete cluster --name {}' to clean it up.",
-                    cluster_name, cluster_name
-                ));
-            }
-        }
-    }
-
-    // Print after teardown so the report includes an interrupt during teardown.
-    let mut json_output_failed = false;
-    if matches!(cmd.output, OutputFormat::Json) {
-        match serde_json::to_string_pretty(collector.report()) {
-            Ok(json) => println!("{}", json),
-            Err(e) => {
-                error!("Failed to serialize the machine-readable run report: {}", e);
-                json_output_failed = true;
-            }
-        }
-    }
-
-    // Report output failures as harness errors, even when the tests passed.
-    if json_output_failed || display_error.is_some() {
-        return ExitCode::from(EXIT_HARNESS_ERROR);
-    }
-
-    collector::exit_code(collector.report())
-}
-
-/// Collects the unique set of images required by all kind-runtime tests in the given list.
-fn collect_kind_images(tests: &[Box<dyn test::Test>]) -> Vec<String> {
-    use std::collections::BTreeSet;
-    let mut images = BTreeSet::new();
-    for test in tests {
-        if test.runtime() == "kubernetes_in_docker" {
-            for (_, image) in test.images() {
-                images.insert(image);
-            }
-        }
-    }
-    images.into_iter().collect()
-}
-
-async fn list_tests(cmd: cli::ListCommand) -> ExitCode {
-    if cmd.test_dirs.is_empty() {
-        error!("No test directories specified. Use -d <path> to specify one or more directories.");
-        return ExitCode::from(2);
-    }
-
-    if !cmd.json {
-        let dirs_str: Vec<_> = cmd.test_dirs.iter().map(|d| d.display().to_string()).collect();
-        info!("Discovering test cases from: {}...", dirs_str.join(", "));
-    }
-
-    let integration_runtime = cmd
-        .runtime
-        .clone()
-        .unwrap_or_else(|| default_host_runtime().to_string());
-    let test_cases = match discover_tests(&cmd.test_dirs, &integration_runtime, &[]) {
-        Ok(tests) => tests,
-        Err(e) => {
-            error!("Failed to discover tests: {}", e);
-            return ExitCode::from(2);
-        }
-    };
-
-    if cmd.json {
-        let mut test_map = BTreeMap::new();
-        for test in &test_cases {
-            test_map.insert(
-                test.name(),
-                serde_json::json!({
-                    "type": test.suite(),
-                    "runtime": test.runtime(),
-                    "timeout": test.timeout(),
-                    "images": test.images(),
-                }),
-            );
-        }
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&test_map).expect("Unable to serialize a map of the tests")
-        )
-    } else {
-        if test_cases.is_empty() {
-            info!("No test cases found.");
-            return ExitCode::SUCCESS;
-        }
-
-        info!("Discovered {} test case(s).", test_cases.len());
-
-        println!();
-        println!("Available tests ({}):", test_cases.len());
-        println!();
-
-        for test_case in &test_cases {
-            println!("  {}", test_case.name());
-            if let Some(description) = test_case.description() {
-                println!("    {}", description);
-            }
-            println!("    Timeout: {:?}", test_case.timeout());
-            println!();
-        }
-    }
-    ExitCode::SUCCESS
-}
-
 #[cfg(test)]
 mod tests {
+    use panoramic_core::layout::Os;
+
     use super::*;
+    use crate::config::{
+        discover_in_scope,
+        tests::{planner, write_case, PARTICIPANT_FIELDS},
+    };
+
+    #[tokio::test]
+    async fn run_list_and_artifact_commands_report_the_same_setup_errors_with_exit_2() {
+        use tracing::instrument::WithSubscriber as _;
+
+        let dir = tempfile::tempdir().unwrap();
+        let cases = dir.path().join("cases");
+        write_case(&cases, "bad", "type: bogus\n");
+        let manifest = dir.path().join("missing.toml");
+        let logs = dir.path().join("logs");
+        for (has_dirs, has_manifest, expected) in [
+            (false, true, discovery::NO_TEST_DIRECTORIES.to_string()),
+            (
+                true,
+                true,
+                format!("failed to read artifact manifest {}:", manifest.display()),
+            ),
+            (true, false, "Failed to discover tests:".to_string()),
+        ] {
+            let mut first_error = None;
+            for command in [
+                vec!["run", "--no-tui", "-l", logs.to_str().unwrap()],
+                vec!["list"],
+                vec!["list", "--json"],
+                vec!["artifacts", "verify"],
+                vec!["artifacts", "pull"],
+            ] {
+                let mut args = vec!["panoramic"];
+                args.extend(command);
+                if has_dirs {
+                    args.extend(["-d", cases.to_str().unwrap()]);
+                }
+                if has_manifest {
+                    args.extend(["--artifacts", manifest.to_str().unwrap()]);
+                }
+                let output = tempfile::NamedTempFile::new().unwrap();
+                let subscriber = tracing_subscriber::fmt()
+                    .with_ansi(false)
+                    .without_time()
+                    .with_target(false)
+                    .with_writer(std::sync::Mutex::new(output.reopen().unwrap()))
+                    .finish();
+                let exit = async {
+                    match Cli::try_parse_from(args).unwrap().command {
+                        Command::Run(cmd) => run_tests(*cmd, false).await,
+                        Command::List(cmd) => list_tests(cmd).await,
+                        Command::Artifacts(cmd) => {
+                            let mut report = Vec::new();
+                            let exit = match cmd.command {
+                                cli::ArtifactsSubcommand::Verify(cmd) => {
+                                    artifact_commands::verify(cmd, &mut report).await
+                                }
+                                cli::ArtifactsSubcommand::Pull(cmd) => artifact_commands::pull(cmd, &mut report).await,
+                                cli::ArtifactsSubcommand::Render(_) => panic!("expected verify or pull"),
+                            };
+                            assert!(report.is_empty());
+                            exit
+                        }
+                    }
+                }
+                .with_subscriber(subscriber)
+                .await;
+                let diagnostic = std::fs::read_to_string(output.path()).unwrap();
+                assert_eq!(exit, ExitCode::from(2), "{diagnostic}");
+                assert!(!logs.exists(), "setup errors must precede log directory creation");
+                let error = &diagnostic[diagnostic.find("ERROR ").expect("setup error")..];
+                assert!(error.starts_with(&format!("ERROR {expected}")), "{diagnostic}");
+                match &first_error {
+                    Some(first) => assert_eq!(error, first),
+                    None => first_error = Some(error.to_string()),
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_missing_manifest_exits_2_for_run_list_and_list_json_before_discovery_or_logs() {
+        use tracing::instrument::WithSubscriber as _;
+
+        let dir = tempfile::tempdir().unwrap();
+        let cases = dir.path().join("cases");
+        write_case(
+            &cases,
+            "case",
+            "name: case\ntimeout: 1s\nsubject_os: [linux, windows]\nparticipants: {adp: {type: agent-adp, subject: true}}\nprocedure: [{step: log_contains, on: adp, pattern: ready, timeout: 5s}]\n",
+        );
+        write_case(&cases, "bad", "type: bogus\n");
+        let manifest = dir.path().join("missing.toml");
+        let logs = dir.path().join("logs");
+        for (command, extra, use_tui) in [
+            ("run", vec!["-t", "not-selected", "-l", logs.to_str().unwrap()], false),
+            ("run", vec!["-t", "not-selected", "-l", logs.to_str().unwrap()], true),
+            ("list", vec![], false),
+            ("list", vec!["--json"], false),
+        ] {
+            let mut args = vec![
+                "panoramic",
+                command,
+                "-d",
+                cases.to_str().unwrap(),
+                "--artifacts",
+                manifest.to_str().unwrap(),
+            ];
+            args.extend(extra);
+            let output = tempfile::NamedTempFile::new().unwrap();
+            let subscriber = tracing_subscriber::fmt()
+                .with_ansi(false)
+                .without_time()
+                .with_writer(std::sync::Mutex::new(output.reopen().unwrap()))
+                .finish();
+            let exit = async {
+                match Cli::try_parse_from(args).unwrap().command {
+                    Command::Run(cmd) => run_tests(*cmd, use_tui).await,
+                    Command::List(cmd) => list_tests(cmd).await,
+                    Command::Artifacts(_) => panic!("expected run or list"),
+                }
+            }
+            .with_subscriber(subscriber)
+            .await;
+            assert_eq!(exit, ExitCode::from(2));
+            assert!(!logs.exists());
+            if !use_tui {
+                let diagnostic = std::fs::read_to_string(output.path()).unwrap();
+                assert!(diagnostic.contains("failed to read artifact manifest"), "{diagnostic}");
+                assert!(!diagnostic.contains("Failed to discover"), "{diagnostic}");
+            }
+        }
+    }
 
     #[test]
     fn log_level_scopes_the_selected_level_to_first_party_crates() {
@@ -506,54 +284,107 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn image_override_validation_precedes_name_selection() {
+    async fn list_and_list_json_accept_windows_participant_cases_with_an_explicit_realization() {
         let dir = tempfile::tempdir().unwrap();
-        let case_dir = dir.path().join("unselected");
-        std::fs::create_dir(&case_dir).unwrap();
-        std::fs::write(
-            case_dir.join("config.yaml"),
-            r#"
-type: correctness
-runtime: docker
-analysis_mode: metrics
-baseline: {image: base}
-comparison: {image: comp}
-"#,
-        )
-        .unwrap();
-        for (entry, expected) in [
-            ("millstone=tools:custom", EXIT_NO_TESTS_SELECTED),
-            ("typo=tools:custom", EXIT_HARNESS_ERROR),
-        ] {
-            let cli = Cli::try_parse_from([
+        write_case(
+            dir.path(),
+            "participant",
+            &PARTICIPANT_FIELDS
+                .replace("[linux]", "[windows]")
+                .replace("subject: true", "subject: true, realization: {kind: windows-container}"),
+        );
+        write_case(
+            dir.path(),
+            "good",
+            "name: good\ntimeout: 1s\nsubject_os: [windows]\nparticipants: {adp: {type: agent-adp, subject: true}}\nprocedure: [{step: log_contains, on: adp, pattern: ready, timeout: 5s}]\n",
+        );
+        let cases = discover_in_scope(&mut planner(), &[dir.path().to_path_buf()], Os::Windows)
+            .unwrap()
+            .plans;
+        assert_eq!(
+            cases.iter().map(|plan| plan.case().name()).collect::<Vec<_>>(),
+            ["good", "participant"]
+        );
+        for json in [false, true] {
+            let mut args = vec![
                 "panoramic",
-                "run",
+                "list",
                 "-d",
                 dir.path().to_str().unwrap(),
-                "-t",
-                "not-discovered",
-                "--image-override",
-                entry,
-            ])
-            .unwrap();
-            let Command::Run(cmd) = cli.command else {
-                panic!("expected run")
+                "--subject-os",
+                "windows",
+            ];
+            if json {
+                args.push("--json");
+            }
+            let cli = Cli::try_parse_from(args).unwrap();
+            let Command::List(cmd) = cli.command else {
+                panic!("expected list");
             };
-            assert_eq!(run_tests(cmd, false).await, ExitCode::from(expected));
+            assert_eq!(list_tests(cmd).await, ExitCode::SUCCESS, "json: {json}");
         }
     }
 
-    #[test]
-    fn selection_reports_names_that_match_nothing() {
-        let discovered: Vec<Box<dyn test::Test>> = Vec::new();
-        let (selected, unmatched) = resolve_selection("no-such-test", &discovered);
-        assert!(selected.is_empty());
-        assert_eq!(unmatched, vec!["no-such-test".to_string()]);
-
-        // An empty or whitespace-only selection matches nothing and names nothing, which the caller
-        // treats as "no test selected" rather than a green run.
-        let (selected, unmatched) = resolve_selection(" , ", &discovered);
-        assert!(selected.is_empty());
-        assert!(unmatched.is_empty());
+    #[tokio::test]
+    async fn a_case_with_an_unsupported_realization_fails_list_list_json_and_run_with_exit_2() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = write_case(
+            dir.path(),
+            "b-host",
+            &PARTICIPANT_FIELDS.replace(
+                "subject: true",
+                "subject: true, realization: {kind: host-process-group}",
+            ),
+        );
+        let windows = write_case(
+            dir.path(),
+            "a-windows",
+            &PARTICIPANT_FIELDS
+                .replace("[linux]", "[linux, windows]")
+                .replace("subject: true", "subject: true, realization: {kind: linux-container}"),
+        );
+        let logs = dir.path().join("logs");
+        for os in [Os::Linux, Os::MacOs, Os::Windows] {
+            let message = discover_in_scope(&mut planner(), &[dir.path().to_path_buf()], os)
+                .err()
+                .unwrap()
+                .to_string();
+            assert_eq!(
+                message,
+                format!(
+                    "Failed to plan test cases:\n  - case 'a-windows' in {}: on subject OS 'windows', \
+                     participant 'adp' of type 'agent-adp' cannot run as linux-container on windows; \
+                     it supports linux-container on linux, kubernetes-pod on linux, host-process-group on macos, \
+                     windows-container on windows\n  - case 'b-host' in {}: on subject OS 'linux', \
+                     participant 'adp' of type 'agent-adp' cannot run as host-process-group on linux; \
+                     it supports linux-container on linux, kubernetes-pod on linux, host-process-group on macos, windows-container on windows",
+                    windows.canonicalize().unwrap().display(),
+                    host.canonicalize().unwrap().display()
+                )
+            );
+            for (command, extra) in [
+                ("list", vec![]),
+                ("list", vec!["--json"]),
+                ("run", vec!["--no-tui", "-l", logs.to_str().unwrap()]),
+            ] {
+                let mut args = vec![
+                    "panoramic",
+                    command,
+                    "-d",
+                    dir.path().to_str().unwrap(),
+                    "--subject-os",
+                    os.name(),
+                ];
+                args.extend(extra);
+                let cli = Cli::try_parse_from(args).unwrap();
+                let exit = match cli.command {
+                    Command::Run(cmd) => run_tests(*cmd, false).await,
+                    Command::List(cmd) => list_tests(cmd).await,
+                    Command::Artifacts(_) => panic!("expected run or list"),
+                };
+                assert_eq!(exit, ExitCode::from(2), "{command} under {os:?}");
+                assert!(!logs.exists(), "layout errors must precede log directory creation");
+            }
+        }
     }
 }

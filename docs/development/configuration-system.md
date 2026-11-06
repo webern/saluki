@@ -123,6 +123,26 @@ is read by `apply_datadog_env_vars` and by the Saluki-only reader.
 **A modeled key arrives in the Agent's canonical shape.** A source model **MUST** read that shape: don't add a
 `#[serde(rename)]` or `#[serde(alias)]`. Unmodeled environment variables aren't read.
 
+## Deprecated key names
+
+A schema setting can list former names under `renamed_from`, each with the Agent version that deprecated it. ADP
+reads former names as the Agent does, but only from local sources, since the Agent's configuration stream carries
+current names only:
+
+- **Environment**: for a setting without explicit `env_vars`, each former name's derived variable is read before the
+  current one, oldest deprecation first. `DD_STATSD_METRIC_BLOCKLIST` therefore beats `DD_METRIC_FILTERLIST`, and is
+  decoded as `metric_filterlist`. Explicit `env_vars` replace every derived name, former names included.
+- **`datadog.yaml`**: a former name resolves like any other leaf, including its case and dotted spellings. Once the
+  file is read, its value replaces the current name's and the former name is dropped, so the former name wins when
+  both are written. A null former name clears the current one. `datadog_yaml.rs` documents the details.
+
+Precedence between sources is unchanged: a current name in the environment still beats a former name in the file.
+Former names never reach the sources that the compatibility check, `/config`, and the flare read. A `no-env` setting
+has no former names, because the Agent's codegen declares it with `SetDefault`.
+
+Code generation emits the derived variables into `DATADOG_ENV_KEYS` and the former paths into
+`datadog_renamed_keys`. It fails the build if a former name overlaps a schema path.
+
 ## Scalar leaf coercion
 
 `DatadogConfiguration` scalar leaves accept what the Agent's permissive casting accepts. Code generation attaches a

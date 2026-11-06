@@ -80,6 +80,12 @@ pub struct FieldInfo {
     pub env_parser: Option<EnvParser>,
     /// Default value serialised as a JSON literal, or `None` if the schema omits one.
     pub default: Option<String>,
+    /// Former dotted names of the setting, from the schema's `renamed_from`, highest priority first.
+    ///
+    /// The Agent's codegen orders them by the version that deprecated each, oldest first, then by
+    /// name. A `no-env` setting has none: the Agent declares it with `SetDefault`, which registers no
+    /// former names.
+    pub renamed_from: Vec<String>,
 }
 
 /// Load and flatten the schema at `schema_path` into a `yaml_path → FieldInfo` map.
@@ -165,6 +171,11 @@ fn parse_setting(path_parts: &[&str], value: &Value) -> (String, FieldInfo) {
     let value_type = parse_value_type(value);
     let default = value.get("default").and_then(yaml_value_to_json_str);
     let env_parser = value.get("env_parser").and_then(|v| v.as_str()).map(EnvParser::parse);
+    let renamed_from = if has_no_env_tag {
+        Vec::new()
+    } else {
+        parse_renamed_from(&yaml_path, value)
+    };
 
     (
         yaml_path,
@@ -173,8 +184,44 @@ fn parse_setting(path_parts: &[&str], value: &Value) -> (String, FieldInfo) {
             env,
             env_parser,
             default,
+            renamed_from,
         },
     )
+}
+
+/// Parses `renamed_from`, a map of former name to the `MAJOR.MINOR.PATCH` Agent version that
+/// deprecated it, into former names ordered as the Agent's `deprecated_names` orders them.
+///
+/// Panics on a malformed entry, which the Agent's schema lint also rejects.
+fn parse_renamed_from(yaml_path: &str, value: &Value) -> Vec<String> {
+    let Some(renamed_from) = value.get("renamed_from") else {
+        return Vec::new();
+    };
+    let entries = renamed_from
+        .as_object()
+        .unwrap_or_else(|| panic!("`{yaml_path}`: `renamed_from` must map former names to versions"));
+    let mut names: Vec<((u64, u64, u64), String)> = entries
+        .iter()
+        .map(|(name, version)| {
+            let version = version
+                .as_str()
+                .and_then(parse_version)
+                .unwrap_or_else(|| panic!("`{yaml_path}`: `renamed_from.{name}` must be a `MAJOR.MINOR.PATCH` string"));
+            (version, name.clone())
+        })
+        .collect();
+    names.sort();
+    names.into_iter().map(|(_, name)| name).collect()
+}
+
+fn parse_version(version: &str) -> Option<(u64, u64, u64)> {
+    let mut parts = version.split('.').map(|part| {
+        (!part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+            .then(|| part.parse().ok())
+            .flatten()
+    });
+    let parsed = (parts.next()??, parts.next()??, parts.next()??);
+    parts.next().is_none().then_some(parsed)
 }
 
 fn parse_value_type(value: &Value) -> FieldType {
@@ -233,4 +280,64 @@ fn yaml_value_to_json_str(value: &Value) -> Option<String> {
 /// Escape backslashes and double-quotes in `s` for use inside a Rust string literal.
 pub fn escape_str(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    fn renamed_from(setting: Value) -> Vec<String> {
+        parse_setting(&["new_name"], &setting).1.renamed_from
+    }
+
+    #[test]
+    fn former_names_are_ordered_by_deprecating_version_then_name() {
+        let setting = json!({
+            "node_type": "setting",
+            "type": "boolean",
+            "renamed_from": {"c_name": "7.10.0", "b_name": "7.9.1", "a_name": "7.10.0", "d_name": "6.99.0"},
+        });
+
+        assert_eq!(renamed_from(setting), ["d_name", "b_name", "a_name", "c_name"]);
+    }
+
+    #[test]
+    fn a_setting_without_renamed_from_or_with_no_env_has_no_former_names() {
+        assert!(renamed_from(json!({"node_type": "setting", "type": "boolean"})).is_empty());
+        assert!(renamed_from(json!({
+            "node_type": "setting",
+            "type": "boolean",
+            "tags": ["no-env"],
+            "renamed_from": {"old_name": "7.86.0"},
+        }))
+        .is_empty());
+    }
+
+    #[test]
+    fn the_vendored_schema_renames_the_dogstatsd_blocklist() {
+        let files = crate::Files::default();
+        let schema = load_schema(&files.datadog_schema, &files.otel_schema_dir);
+
+        assert_eq!(schema["metric_filterlist"].renamed_from, ["statsd_metric_blocklist"]);
+        assert_eq!(
+            schema["metric_filterlist_match_prefix"].renamed_from,
+            ["statsd_metric_blocklist_match_prefix"]
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "must be a `MAJOR.MINOR.PATCH` string")]
+    fn a_partial_version_is_rejected() {
+        renamed_from(json!({"node_type": "setting", "renamed_from": {"old_name": "7.86"}}));
+    }
+
+    #[test]
+    fn versions_parse_only_in_full_semantic_form() {
+        assert_eq!(parse_version("7.86.0"), Some((7, 86, 0)));
+        for invalid in ["7.86", "7.86.0.1", "v7.86.0", "7.86.0-rc.1", "7..0", "7.+1.0"] {
+            assert_eq!(parse_version(invalid), None, "{invalid}");
+        }
+    }
 }

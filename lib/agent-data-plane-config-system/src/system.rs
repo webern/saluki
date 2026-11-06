@@ -898,36 +898,55 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn experimental_metric_allowlists_seed_the_model() {
+    async fn experimental_metric_allowlists_reach_the_model_from_file_and_environment() {
         let policies = json!({
             "https://primary.example.com": ["allowed.metric"],
             "https://secondary.example.com": []
         });
-        let system = standalone_system(json!({
-            "experimental": {
-                "metrics_endpoint_routing": {
-                    "metric_allowlist": policies.clone(),
-                    "metric_prefix_allowlist": { "https://primary.example.com": ["billing."] }
-                }
-            }
-        }))
-        .expect("system builds");
-
-        assert_eq!(
-            serde_json::to_value(&system.config().domains.metrics_endpoint_routing.metric_allowlists).unwrap(),
-            policies
-        );
-        assert_eq!(
-            system
-                .config()
-                .domains
-                .metrics_endpoint_routing
-                .metric_prefix_allowlists,
-            std::collections::HashMap::from([(
-                "https://primary.example.com".to_string(),
-                vec!["billing.".to_string()]
-            )])
-        );
+        let prefixes = json!({ "https://primary.example.com": ["billing."] });
+        let cases = [
+            (
+                "file",
+                standalone_system(json!({
+                    "experimental": {
+                        "metrics_endpoint_routing": {
+                            "metric_allowlist": policies.clone(),
+                            "metric_prefix_allowlist": prefixes.clone()
+                        }
+                    }
+                })),
+            ),
+            (
+                "environment",
+                standalone_system_with_env(
+                    json!({}),
+                    &[
+                        (
+                            "DD_EXPERIMENTAL_METRICS_ENDPOINT_ROUTING_METRIC_ALLOWLIST",
+                            &policies.to_string(),
+                        ),
+                        (
+                            "DD_EXPERIMENTAL_METRICS_ENDPOINT_ROUTING_METRIC_PREFIX_ALLOWLIST",
+                            &prefixes.to_string(),
+                        ),
+                    ],
+                ),
+            ),
+        ];
+        for (source, system) in cases {
+            let system = system.unwrap_or_else(|error| panic!("{source} boots: {error}"));
+            let routing = &system.config().domains.metrics_endpoint_routing;
+            assert_eq!(
+                serde_json::to_value(&routing.metric_allowlists).unwrap(),
+                policies,
+                "{source}"
+            );
+            assert_eq!(
+                serde_json::to_value(&routing.metric_prefix_allowlists).unwrap(),
+                prefixes,
+                "{source}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -1539,28 +1558,41 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn live_metric_filter_follows_current_and_legacy_precedence() {
-        // Regression: clearing `metric_filterlist` must restore the legacy list and match mode.
+    async fn live_metric_filter_tracks_filterlist_and_match_prefix_independently() {
         let (system, agent_tx) = connected_system(json!({})).await;
         let mut metric_filter = system.live(|c| &c.domains.dogstatsd.metric_filter);
         assert!(metric_filter.values.is_empty());
+        assert!(!metric_filter.match_prefix);
 
         agent_tx
-            .send(ConfigUpdate::snapshot([
-                ConfigSetting::explicit("metric_filterlist", json!(["current.duration.max"])),
-                ConfigSetting::explicit("metric_filterlist_match_prefix", json!(false)),
-                ConfigSetting::explicit("statsd_metric_blocklist", json!(["legacy.duration"])),
-                ConfigSetting::explicit("statsd_metric_blocklist_match_prefix", json!(true)),
-            ]))
+            .send(ConfigUpdate::Partial(ConfigSetting::explicit(
+                "metric_filterlist",
+                json!(["current.duration.max"]),
+            )))
             .await
             .unwrap();
 
-        let current = tokio::time::timeout(Duration::from_secs(2), metric_filter.changed())
+        let listed = tokio::time::timeout(Duration::from_secs(2), metric_filter.changed())
             .await
-            .expect("view observes the current filterlist taking precedence");
-        assert_eq!(current.values, vec!["current.duration.max".to_string()]);
-        assert!(!current.match_prefix);
+            .expect("view observes metric_filterlist updates");
+        assert_eq!(listed.values, vec!["current.duration.max".to_string()]);
+        assert!(!listed.match_prefix);
 
+        agent_tx
+            .send(ConfigUpdate::Partial(ConfigSetting::explicit(
+                "metric_filterlist_match_prefix",
+                json!(true),
+            )))
+            .await
+            .unwrap();
+
+        let prefixed = tokio::time::timeout(Duration::from_secs(2), metric_filter.changed())
+            .await
+            .expect("view observes metric_filterlist_match_prefix updates");
+        assert_eq!(prefixed.values, vec!["current.duration.max".to_string()]);
+        assert!(prefixed.match_prefix);
+
+        // Clearing the list leaves the match mode as configured.
         agent_tx
             .send(ConfigUpdate::Partial(ConfigSetting::explicit(
                 "metric_filterlist",
@@ -1569,25 +1601,11 @@ mod tests {
             .await
             .unwrap();
 
-        let legacy = tokio::time::timeout(Duration::from_secs(2), metric_filter.changed())
+        let cleared = tokio::time::timeout(Duration::from_secs(2), metric_filter.changed())
             .await
-            .expect("view observes the fallback to the legacy blocklist");
-        assert_eq!(legacy.values, vec!["legacy.duration".to_string()]);
-        assert!(legacy.match_prefix);
-
-        agent_tx
-            .send(ConfigUpdate::Partial(ConfigSetting::explicit(
-                "metric_filterlist",
-                json!(["current.duration.avg"]),
-            )))
-            .await
-            .unwrap();
-
-        let restored = tokio::time::timeout(Duration::from_secs(2), metric_filter.changed())
-            .await
-            .expect("view observes the current filterlist shadowing the legacy blocklist again");
-        assert_eq!(restored.values, vec!["current.duration.avg".to_string()]);
-        assert!(!restored.match_prefix);
+            .expect("view observes metric_filterlist being cleared");
+        assert!(cleared.values.is_empty());
+        assert!(cleared.match_prefix);
     }
 
     #[tokio::test]

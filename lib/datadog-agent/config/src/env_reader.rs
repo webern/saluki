@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use serde_json::{Map, Value};
 
 use crate::env_decode::{decode, EnvDecode};
-use crate::generated::env_keys::DATADOG_ENV_KEYS;
+use crate::generated::env_keys::{DATADOG_ENV_KEYS, DATADOG_RENAMED_KEYS};
 
 /// One modeled configuration key and how to read it from the environment.
 #[derive(Clone, Copy, Debug)]
@@ -22,6 +22,17 @@ pub struct EnvKey {
     pub path: &'static [&'static str],
     /// How to decode the raw string into the schema-declared JSON shape.
     pub decode: EnvDecode,
+}
+
+/// A former name of a Datadog schema setting, from the schema's `renamed_from`.
+///
+/// The environment side of a rename is already in [`EnvKey::env_vars`]; this is the file side.
+#[derive(Clone, Copy, Debug)]
+pub struct RenamedKey {
+    /// The former nested path (for example, `["statsd_metric_blocklist"]`).
+    pub former: &'static [&'static str],
+    /// The nested path of the setting it was renamed to.
+    pub path: &'static [&'static str],
 }
 
 /// Decodes process environment variables into modeled Datadog paths in `base`.
@@ -70,6 +81,15 @@ fn apply_env_snapshot(base: &mut Value, env: EnvSnapshot, overwrite: bool) -> Re
 /// map-typed leaf is never key-unioned across sources.
 pub fn datadog_leaf_paths() -> impl Iterator<Item = &'static [&'static str]> {
     DATADOG_ENV_KEYS.iter().map(|key| key.path)
+}
+
+/// Every former name of a Datadog schema setting, modeled or not.
+///
+/// Entries for one setting are adjacent and highest priority first: the name deprecated earliest
+/// comes first, as in the Agent. No former path is a schema path, or contains or is contained by
+/// one.
+pub fn datadog_renamed_keys() -> &'static [RenamedKey] {
+    DATADOG_RENAMED_KEYS
 }
 
 /// Decodes one key from the process environment into `base` at the supplied path.
@@ -361,6 +381,38 @@ mod tests {
     fn an_exact_case_later_alias_beats_a_different_case_earlier_alias() {
         let base = apply_vars(&[("dd_apm_max_eps", "100"), ("DD_MAX_EPS", "200")]).unwrap();
         assert_eq!(at(&base, &["apm_config", "max_events_per_second"]), Some(&json!(200.0)));
+    }
+
+    #[test]
+    fn a_former_name_is_read_before_the_current_one() {
+        let filterlist = &["metric_filterlist"];
+        let match_prefix = &["metric_filterlist_match_prefix"];
+        for pairs in [
+            [("DD_STATSD_METRIC_BLOCKLIST", "old"), ("DD_METRIC_FILTERLIST", "new")],
+            [("DD_METRIC_FILTERLIST", "new"), ("DD_STATSD_METRIC_BLOCKLIST", "old")],
+        ] {
+            assert_eq!(at(&apply_vars(&pairs).unwrap(), filterlist), Some(&json!(["old"])));
+        }
+        let base = apply_vars(&[
+            ("DD_STATSD_METRIC_BLOCKLIST_MATCH_PREFIX", "true"),
+            ("DD_METRIC_FILTERLIST_MATCH_PREFIX", "false"),
+        ])
+        .unwrap();
+        assert_eq!(at(&base, match_prefix), Some(&json!(true)));
+
+        // The former name is decoded as the current key: a space-separated list.
+        let base = apply_vars(&[("DD_STATSD_METRIC_BLOCKLIST", "a b")]).unwrap();
+        assert_eq!(at(&base, filterlist), Some(&json!(["a", "b"])));
+        assert_eq!(at(&base, &["statsd_metric_blocklist"]), None);
+
+        let base = apply_vars(&[("DD_METRIC_FILTERLIST", "new")]).unwrap();
+        assert_eq!(at(&base, filterlist), Some(&json!(["new"])));
+    }
+
+    #[test]
+    fn an_empty_former_name_falls_through_to_the_current_one() {
+        let base = apply_vars(&[("DD_STATSD_METRIC_BLOCKLIST", ""), ("DD_METRIC_FILTERLIST", "new")]).unwrap();
+        assert_eq!(at(&base, &["metric_filterlist"]), Some(&json!(["new"])));
     }
 
     #[test]

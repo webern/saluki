@@ -1,0 +1,9 @@
+---
+upgrade:
+  - |
+    ``statsd_metric_blocklist`` and ``statsd_metric_blocklist_match_prefix`` are now deprecated names of
+    ``metric_filterlist`` and ``metric_filterlist_match_prefix``, matching the Datadog Agent. When one file or the
+    environment sets both names, the deprecated name now wins, even when its list is empty; previously a non-empty
+    ``metric_filterlist`` won. Each setting is resolved on its own, so ``metric_filterlist_match_prefix`` applies to
+    whichever list is set. Runtime configuration updates must use the current names. To keep the previous behavior,
+    remove the deprecated names and set their values on ``metric_filterlist`` and ``metric_filterlist_match_prefix``.

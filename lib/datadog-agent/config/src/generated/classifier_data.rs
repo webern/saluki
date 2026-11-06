@@ -47,6 +47,12 @@ pub(crate) static CLASSIFIER_ENTRIES: &[ClassifierEntry] = &[
         default: DefaultValue::Json("true"),
     },
     ClassifierEntry {
+        yaml_path: "apm_config.traces_send_to_main_endpoint",
+        support_level: SupportLevel::Incompatible(Severity::Low),
+        pipeline_affinity: PipelineAffinity::Pipelines(&[Pipeline::Traces]),
+        default: DefaultValue::Json("true"),
+    },
+    ClassifierEntry {
         yaml_path: "config_id",
         support_level: SupportLevel::Incompatible(Severity::Low),
         pipeline_affinity: PipelineAffinity::CrossCutting,
@@ -63,6 +69,12 @@ pub(crate) static CLASSIFIER_ENTRIES: &[ClassifierEntry] = &[
         support_level: SupportLevel::Incompatible(Severity::Low),
         pipeline_affinity: PipelineAffinity::CrossCutting,
         default: DefaultValue::Json("\"tcp://0.0.0.0:5102\""),
+    },
+    ClassifierEntry {
+        yaml_path: "dogstatsd_client_drop_detection.enabled",
+        support_level: SupportLevel::Incompatible(Severity::Low),
+        pipeline_affinity: PipelineAffinity::Pipelines(&[Pipeline::DogStatsD]),
+        default: DefaultValue::Json("true"),
     },
     ClassifierEntry {
         yaml_path: "dogstatsd_experimental_http.max_concurrent_requests",
@@ -233,6 +245,12 @@ pub(crate) static CLASSIFIER_ENTRIES: &[ClassifierEntry] = &[
         default: DefaultValue::Json("\"\""),
     },
     ClassifierEntry {
+        yaml_path: "forwarder_concurrency_policy",
+        support_level: SupportLevel::Incompatible(Severity::Low),
+        pipeline_affinity: PipelineAffinity::CrossCutting,
+        default: DefaultValue::Json("\"static\""),
+    },
+    ClassifierEntry {
         yaml_path: "forwarder_requeue_buffer_size",
         support_level: SupportLevel::Incompatible(Severity::Low),
         pipeline_affinity: PipelineAffinity::CrossCutting,
@@ -242,6 +260,12 @@ pub(crate) static CLASSIFIER_ENTRIES: &[ClassifierEntry] = &[
         yaml_path: "heroku_dyno",
         support_level: SupportLevel::Incompatible(Severity::High),
         pipeline_affinity: PipelineAffinity::CrossCutting,
+        default: DefaultValue::Json("false"),
+    },
+    ClassifierEntry {
+        yaml_path: "intake_routing.enabled",
+        support_level: SupportLevel::Incompatible(Severity::Low),
+        pipeline_affinity: PipelineAffinity::Pipelines(&[Pipeline::Otlp]),
         default: DefaultValue::Json("false"),
     },
     ClassifierEntry {
@@ -569,10 +593,28 @@ pub(crate) static CLASSIFIER_ENTRIES: &[ClassifierEntry] = &[
         default: DefaultValue::Json("\"/api/intake/metrics/v3beta/sketches\""),
     },
     ClassifierEntry {
+        yaml_path: "serializer_experimental_use_v3_api.sketches.max_compressed_payload_size",
+        support_level: SupportLevel::Incompatible(Severity::Low),
+        pipeline_affinity: PipelineAffinity::Pipelines(&[Pipeline::DogStatsD]),
+        default: DefaultValue::Json("0"),
+    },
+    ClassifierEntry {
+        yaml_path: "serializer_experimental_use_v3_api.sketches.max_points_per_payload",
+        support_level: SupportLevel::Incompatible(Severity::Low),
+        pipeline_affinity: PipelineAffinity::Pipelines(&[Pipeline::DogStatsD]),
+        default: DefaultValue::Json("0"),
+    },
+    ClassifierEntry {
+        yaml_path: "serializer_experimental_use_v3_api.sketches.max_uncompressed_payload_size",
+        support_level: SupportLevel::Incompatible(Severity::Low),
+        pipeline_affinity: PipelineAffinity::Pipelines(&[Pipeline::DogStatsD]),
+        default: DefaultValue::Json("0"),
+    },
+    ClassifierEntry {
         yaml_path: "serializer_experimental_use_v3_api.sketches.shadow_sample_rate",
         support_level: SupportLevel::Incompatible(Severity::Low),
         pipeline_affinity: PipelineAffinity::Pipelines(&[Pipeline::DogStatsD]),
-        default: DefaultValue::Json("0.001"),
+        default: DefaultValue::Json("0"),
     },
     ClassifierEntry {
         yaml_path: "serializer_experimental_use_v3_api.sketches.shadow_sites",
@@ -603,6 +645,18 @@ pub(crate) static CLASSIFIER_ENTRIES: &[ClassifierEntry] = &[
         support_level: SupportLevel::Incompatible(Severity::Low),
         pipeline_affinity: PipelineAffinity::Pipelines(&[Pipeline::DogStatsD]),
         default: DefaultValue::Json("true"),
+    },
+    ClassifierEntry {
+        yaml_path: "use_v3_api.distributions.enabled",
+        support_level: SupportLevel::Incompatible(Severity::Medium),
+        pipeline_affinity: PipelineAffinity::Pipelines(&[Pipeline::DogStatsD]),
+        default: DefaultValue::Json("\"datadog_only\""),
+    },
+    ClassifierEntry {
+        yaml_path: "use_v3_api.distributions.endpoints",
+        support_level: SupportLevel::Incompatible(Severity::Medium),
+        pipeline_affinity: PipelineAffinity::Pipelines(&[Pipeline::DogStatsD]),
+        default: DefaultValue::Json("{}"),
     },
     ClassifierEntry {
         yaml_path: "forwarder_low_prio_buffer_size",

@@ -47,6 +47,12 @@ pub(crate) static CLASSIFIER_ENTRIES: &[ClassifierEntry] = &[
         default: DefaultValue::Json("true"),
     },
     ClassifierEntry {
+        yaml_path: "apm_config.apm_dd_url",
+        support_level: SupportLevel::Incompatible(Severity::Medium),
+        pipeline_affinity: PipelineAffinity::Pipelines(&[Pipeline::Traces]),
+        default: DefaultValue::Json("\"\""),
+    },
+    ClassifierEntry {
         yaml_path: "apm_config.traces_send_to_main_endpoint",
         support_level: SupportLevel::Incompatible(Severity::Low),
         pipeline_affinity: PipelineAffinity::Pipelines(&[Pipeline::Traces]),
@@ -71,10 +77,28 @@ pub(crate) static CLASSIFIER_ENTRIES: &[ClassifierEntry] = &[
         default: DefaultValue::Json("\"tcp://0.0.0.0:5102\""),
     },
     ClassifierEntry {
+        yaml_path: "dogstatsd_client_drop_detection.dropped_ratio_threshold",
+        support_level: SupportLevel::Incompatible(Severity::Low),
+        pipeline_affinity: PipelineAffinity::Pipelines(&[Pipeline::DogStatsD]),
+        default: DefaultValue::Json("0.01"),
+    },
+    ClassifierEntry {
         yaml_path: "dogstatsd_client_drop_detection.enabled",
         support_level: SupportLevel::Incompatible(Severity::Low),
         pipeline_affinity: PipelineAffinity::Pipelines(&[Pipeline::DogStatsD]),
         default: DefaultValue::Json("true"),
+    },
+    ClassifierEntry {
+        yaml_path: "dogstatsd_client_drop_detection.recovery_confirmation_window",
+        support_level: SupportLevel::Incompatible(Severity::Low),
+        pipeline_affinity: PipelineAffinity::Pipelines(&[Pipeline::DogStatsD]),
+        default: DefaultValue::DurationNanos(1800000000000),
+    },
+    ClassifierEntry {
+        yaml_path: "dogstatsd_client_drop_detection.unhealthy_confirmation_window",
+        support_level: SupportLevel::Incompatible(Severity::Low),
+        pipeline_affinity: PipelineAffinity::Pipelines(&[Pipeline::DogStatsD]),
+        default: DefaultValue::DurationNanos(60000000000),
     },
     ClassifierEntry {
         yaml_path: "dogstatsd_experimental_http.max_concurrent_requests",
@@ -245,6 +269,60 @@ pub(crate) static CLASSIFIER_ENTRIES: &[ClassifierEntry] = &[
         default: DefaultValue::Json("\"\""),
     },
     ClassifierEntry {
+        yaml_path: "forwarder.dynamic_concurrency.decrease_threshold",
+        support_level: SupportLevel::Incompatible(Severity::Low),
+        pipeline_affinity: PipelineAffinity::CrossCutting,
+        default: DefaultValue::Json("0.2"),
+    },
+    ClassifierEntry {
+        yaml_path: "forwarder.dynamic_concurrency.eval_interval",
+        support_level: SupportLevel::Incompatible(Severity::Low),
+        pipeline_affinity: PipelineAffinity::CrossCutting,
+        default: DefaultValue::DurationNanos(15000000000),
+    },
+    ClassifierEntry {
+        yaml_path: "forwarder.dynamic_concurrency.increase_cooldown",
+        support_level: SupportLevel::Incompatible(Severity::Low),
+        pipeline_affinity: PipelineAffinity::CrossCutting,
+        default: DefaultValue::DurationNanos(15000000000),
+    },
+    ClassifierEntry {
+        yaml_path: "forwarder.dynamic_concurrency.increase_step",
+        support_level: SupportLevel::Incompatible(Severity::Low),
+        pipeline_affinity: PipelineAffinity::CrossCutting,
+        default: DefaultValue::Json("1"),
+    },
+    ClassifierEntry {
+        yaml_path: "forwarder.dynamic_concurrency.increase_threshold",
+        support_level: SupportLevel::Incompatible(Severity::Low),
+        pipeline_affinity: PipelineAffinity::CrossCutting,
+        default: DefaultValue::Json("0.8"),
+    },
+    ClassifierEntry {
+        yaml_path: "forwarder.dynamic_concurrency.initial_limit",
+        support_level: SupportLevel::Incompatible(Severity::Low),
+        pipeline_affinity: PipelineAffinity::CrossCutting,
+        default: DefaultValue::Json("1"),
+    },
+    ClassifierEntry {
+        yaml_path: "forwarder.dynamic_concurrency.max_concurrent_requests",
+        support_level: SupportLevel::Incompatible(Severity::Low),
+        pipeline_affinity: PipelineAffinity::CrossCutting,
+        default: DefaultValue::Json("10"),
+    },
+    ClassifierEntry {
+        yaml_path: "forwarder.dynamic_concurrency.min_decrease_interval",
+        support_level: SupportLevel::Incompatible(Severity::Low),
+        pipeline_affinity: PipelineAffinity::CrossCutting,
+        default: DefaultValue::DurationNanos(1000000000),
+    },
+    ClassifierEntry {
+        yaml_path: "forwarder.dynamic_concurrency.num_workers",
+        support_level: SupportLevel::Incompatible(Severity::Low),
+        pipeline_affinity: PipelineAffinity::CrossCutting,
+        default: DefaultValue::Json("1"),
+    },
+    ClassifierEntry {
         yaml_path: "forwarder_concurrency_policy",
         support_level: SupportLevel::Incompatible(Severity::Low),
         pipeline_affinity: PipelineAffinity::CrossCutting,
@@ -267,6 +345,18 @@ pub(crate) static CLASSIFIER_ENTRIES: &[ClassifierEntry] = &[
         support_level: SupportLevel::Incompatible(Severity::Low),
         pipeline_affinity: PipelineAffinity::Pipelines(&[Pipeline::Otlp]),
         default: DefaultValue::Json("false"),
+    },
+    ClassifierEntry {
+        yaml_path: "intake_routing.refresh_interval",
+        support_level: SupportLevel::Incompatible(Severity::Low),
+        pipeline_affinity: PipelineAffinity::Pipelines(&[Pipeline::Otlp]),
+        default: DefaultValue::DurationNanos(600000000000),
+    },
+    ClassifierEntry {
+        yaml_path: "intake_routing.startup_grace_period",
+        support_level: SupportLevel::Incompatible(Severity::Low),
+        pipeline_affinity: PipelineAffinity::Pipelines(&[Pipeline::Otlp]),
+        default: DefaultValue::DurationNanos(1000000000),
     },
     ClassifierEntry {
         yaml_path: "logging_frequency",

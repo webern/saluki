@@ -169,6 +169,15 @@ inventory:
     pipelines: [traces]
     description: "Per service|operation APM event extraction rates"
 
+  apm_config.apm_dd_url:
+    support: none
+    severity: medium
+    planned: true
+    issue: "#2419"
+    pipelines: [traces]
+    description: "APM intake URL override"
+    documentation: "ADP sends trace and stats payloads to the endpoints derived from `dd_url` or `site` and ignores this override."
+
   apm_config.apm_non_local_traffic:
     support: full
     pipelines: [traces]
@@ -687,10 +696,20 @@ inventory:
     description: "Traffic capture file location"
     issue: "#1381"
 
+  dogstatsd_client_drop_detection.dropped_ratio_threshold:
+    support: none
+    severity: low
+    planned: true
+    issue: "#3088"
+    pipelines: [dogstatsd]
+    description: "Client drop ratio that marks a client unhealthy"
+    documentation: "ADP does not support DogStatsD client drop detection. See `dogstatsd_client_drop_detection.enabled`."
+
   dogstatsd_client_drop_detection.enabled:
     support: none
     severity: low
-    planned: false
+    planned: true
+    issue: "#3088"
     pipelines: [dogstatsd]
     description: "DogStatsD client drop detection"
     documentation: |-
@@ -699,6 +718,24 @@ inventory:
       `dogstatsd_client_drop_detection.dropped_ratio_threshold`. When ADP handles DogStatsD, those series
       never reach the core Agent's aggregator, and ADP has no Health Platform, so no drop-detection issue is
       raised. ADP still forwards the client telemetry metrics.
+
+  dogstatsd_client_drop_detection.recovery_confirmation_window:
+    support: none
+    severity: low
+    planned: true
+    issue: "#3088"
+    pipelines: [dogstatsd]
+    description: "Time below threshold before a client recovers"
+    documentation: "ADP does not support DogStatsD client drop detection. See `dogstatsd_client_drop_detection.enabled`."
+
+  dogstatsd_client_drop_detection.unhealthy_confirmation_window:
+    support: none
+    severity: low
+    planned: true
+    issue: "#3088"
+    pipelines: [dogstatsd]
+    description: "Time above threshold before a client is unhealthy"
+    documentation: "ADP does not support DogStatsD client drop detection. See `dogstatsd_client_drop_detection.enabled`."
 
   dogstatsd_context_expiry_seconds:
     support: full
@@ -1247,6 +1284,7 @@ inventory:
 
   experimental.metrics_endpoint_routing.metric_allowlist:
     support: partial
+    issue: "#3092"
     pipelines: [checks, dogstatsd, otlp]
     description: "Per-endpoint metric allow lists"
     documentation: |-
@@ -1324,6 +1362,7 @@ inventory:
 
   experimental.metrics_endpoint_routing.metric_prefix_allowlist:
     support: partial
+    issue: "#3092"
     pipelines: [checks, dogstatsd, otlp]
     description: "Per-endpoint metric-prefix allow lists"
     documentation: |-
@@ -1369,6 +1408,87 @@ inventory:
       When neither `apm_config.env` nor `env` is set, the first `env:` entry in `tags`, then in
       `extra_tags`, supplies the trace environment.
 
+  forwarder.dynamic_concurrency.decrease_threshold:
+    support: none
+    severity: low
+    planned: true
+    issue: "#3089"
+    pipelines: [cross_cutting]
+    description: "Dynamic concurrency decrease threshold"
+    documentation: "ADP does not support the `dynamic` forwarder concurrency policy. See `forwarder_concurrency_policy`."
+
+  forwarder.dynamic_concurrency.eval_interval:
+    support: none
+    severity: low
+    planned: true
+    issue: "#3089"
+    pipelines: [cross_cutting]
+    description: "Dynamic concurrency evaluation interval"
+    documentation: "ADP does not support the `dynamic` forwarder concurrency policy. See `forwarder_concurrency_policy`."
+
+  forwarder.dynamic_concurrency.increase_cooldown:
+    support: none
+    severity: low
+    planned: true
+    issue: "#3089"
+    pipelines: [cross_cutting]
+    description: "Dynamic concurrency increase cooldown"
+    documentation: "ADP does not support the `dynamic` forwarder concurrency policy. See `forwarder_concurrency_policy`."
+
+  forwarder.dynamic_concurrency.increase_step:
+    support: none
+    severity: low
+    planned: true
+    issue: "#3089"
+    pipelines: [cross_cutting]
+    description: "Dynamic concurrency increase step"
+    documentation: "ADP does not support the `dynamic` forwarder concurrency policy. See `forwarder_concurrency_policy`."
+
+  forwarder.dynamic_concurrency.increase_threshold:
+    support: none
+    severity: low
+    planned: true
+    issue: "#3089"
+    pipelines: [cross_cutting]
+    description: "Dynamic concurrency increase threshold"
+    documentation: "ADP does not support the `dynamic` forwarder concurrency policy. See `forwarder_concurrency_policy`."
+
+  forwarder.dynamic_concurrency.initial_limit:
+    support: none
+    severity: low
+    planned: true
+    issue: "#3089"
+    pipelines: [cross_cutting]
+    description: "Dynamic concurrency initial limit"
+    documentation: "ADP does not support the `dynamic` forwarder concurrency policy. See `forwarder_concurrency_policy`."
+
+  forwarder.dynamic_concurrency.max_concurrent_requests:
+    support: none
+    severity: low
+    planned: true
+    issue: "#3089"
+    pipelines: [cross_cutting]
+    description: "Dynamic concurrency request ceiling"
+    documentation: "ADP does not support the `dynamic` forwarder concurrency policy. See `forwarder_concurrency_policy`."
+
+  forwarder.dynamic_concurrency.min_decrease_interval:
+    support: none
+    severity: low
+    planned: true
+    issue: "#3089"
+    pipelines: [cross_cutting]
+    description: "Dynamic concurrency minimum decrease interval"
+    documentation: "ADP does not support the `dynamic` forwarder concurrency policy. See `forwarder_concurrency_policy`."
+
+  forwarder.dynamic_concurrency.num_workers:
+    support: none
+    severity: low
+    planned: true
+    issue: "#3089"
+    pipelines: [cross_cutting]
+    description: "Dynamic concurrency worker count"
+    documentation: "ADP does not support the `dynamic` forwarder concurrency policy. See `forwarder_concurrency_policy`."
+
   forwarder_apikey_validation_interval:
     support: partial
     pipelines: [cross_cutting]
@@ -1405,7 +1525,8 @@ inventory:
   forwarder_concurrency_policy:
     support: none
     severity: low
-    planned: false
+    planned: true
+    issue: "#3089"
     pipelines: [cross_cutting]
     description: "Forwarder concurrency policy"
     documentation: |-
@@ -1602,13 +1723,32 @@ inventory:
   intake_routing.enabled:
     support: none
     severity: low
-    planned: false
+    planned: true
+    issue: "#3090"
     pipelines: [otlp]
     description: "Pre-intake endpoint routing"
     documentation: |-
       The Agent can ask the Datadog platform whether to send data to a different variant of an endpoint. Only
       the core logs agent uses it. ADP does not query intake routing: its OTLP logs, and all its other
       payloads, use the configured endpoints.
+
+  intake_routing.refresh_interval:
+    support: none
+    severity: low
+    planned: true
+    issue: "#3090"
+    pipelines: [otlp]
+    description: "Intake routing refresh interval"
+    documentation: "ADP does not query intake routing. See `intake_routing.enabled`."
+
+  intake_routing.startup_grace_period:
+    support: none
+    severity: low
+    planned: true
+    issue: "#3090"
+    pipelines: [otlp]
+    description: "Intake routing startup grace period"
+    documentation: "ADP does not query intake routing. See `intake_routing.enabled`."
 
   ipc_cert_file_path:
     support: full
@@ -1743,7 +1883,7 @@ inventory:
     description: "Blocklist uses prefix matching"
 
   metric_filterlist_prefix:
-    support: partial
+    support: full
     pipelines: [dogstatsd]
     description: "Per-entry metric prefix blocklist rules"
     documentation: |-
@@ -1757,18 +1897,6 @@ inventory:
       Entries decode as the Agent decodes them: a missing `prefix` is the empty prefix, unknown
       fields are ignored, and when any entry cannot be decoded, ADP logs a warning and applies no
       prefix rules.
-
-      ADP differs from the Agent when the value is not a list of objects:
-
-      - The Agent decodes a single object as a one-entry list; ADP rejects the configuration.
-      - In `datadog.yaml`, ADP decodes and applies a JSON-encoded string; the Agent logs an error
-        and applies no prefix rules.
-      - For a string or an empty map, the Agent applies no prefix rules; ADP rejects the
-        configuration.
-      - For a list entry that is neither an object nor null, the Agent logs an error. In
-        `datadog.yaml` it then applies no prefix rules; from `DD_METRIC_FILTERLIST_PREFIX`, it keeps
-        the entry as an empty-prefix rule, which matches every metric name. ADP rejects the
-        configuration.
 
       Exceptions apply across this whole key: a metric excepted by one rule is kept even when it
       matches another prefix rule. Exact or prefix matches from `metric_filterlist` still drop the
@@ -2772,7 +2900,7 @@ inventory:
     support: none
     severity: low
     planned: true
-    issue: "pending: V3 distributions"  # TODO: review: file draft issue I1 and link it
+    issue: "#3091"
     pipelines: [dogstatsd]
     description: "V3 sketches max compressed payload size"
     documentation: |-
@@ -2786,7 +2914,7 @@ inventory:
     support: none
     severity: low
     planned: true
-    issue: "pending: V3 distributions"  # TODO: review: file draft issue I1 and link it
+    issue: "#3091"
     pipelines: [dogstatsd]
     description: "V3 sketches max points per payload"
     documentation: |-
@@ -2800,7 +2928,7 @@ inventory:
     support: none
     severity: low
     planned: true
-    issue: "pending: V3 distributions"  # TODO: review: file draft issue I1 and link it
+    issue: "#3091"
     pipelines: [dogstatsd]
     description: "V3 sketches max uncompressed payload size"
     documentation: |-
@@ -3017,7 +3145,7 @@ inventory:
     support: none
     severity: medium
     planned: true
-    issue: "pending: V3 distributions"  # TODO: review: file draft issue I1 and link it
+    issue: "#3091"
     pipelines: [dogstatsd]
     description: "Send sketches using the V3 API"
     documentation: |-
@@ -3030,7 +3158,7 @@ inventory:
     support: none
     severity: medium
     planned: true
-    issue: "pending: V3 distributions"  # TODO: review: file draft issue I1 and link it
+    issue: "#3091"
     pipelines: [dogstatsd]
     description: "Per-endpoint V3 sketches mode"
     documentation: |-
@@ -3293,7 +3421,6 @@ excluded:
   anomaly_detection.storage.point_retention: "2026-09-08 ADP does not currently have an anomaly-detection component; anomaly detection currently runs in the Core Agent."
   apm_config.additional_endpoints: "ignored in initial audit 2026-04-23"
   apm_config.additional_profile_tags: "ignored in initial audit 2026-04-23"
-  apm_config.apm_dd_url: "ignored in initial audit 2026-04-23"
   apm_config.bucket_size_seconds: "ignored in initial audit 2026-04-23"
   apm_config.client_stats_flush_interval: "ignored in initial audit 2026-04-23"
   apm_config.connection_limit: "ignored in initial audit 2026-04-23"
@@ -3815,9 +3942,6 @@ excluded:
   docker_env_as_tags: "ignored in initial audit 2026-04-23"
   docker_labels_as_tags: "ignored in initial audit 2026-04-23"
   docker_query_timeout: "ignored in initial audit 2026-04-23"
-  dogstatsd_client_drop_detection.dropped_ratio_threshold: "2026-11-05: ADP does not currently support DogStatsD client drop detection."
-  dogstatsd_client_drop_detection.recovery_confirmation_window: "2026-11-05: ADP does not currently support DogStatsD client drop detection."
-  dogstatsd_client_drop_detection.unhealthy_confirmation_window: "2026-11-05: ADP does not currently support DogStatsD client drop detection."
   dogstatsd_experimental_http.enabled: "served entirely by the core Agent (comp/dogstatsd/http); never reaches ADP"
   dogstatsd_experimental_http.listen_address: "served entirely by the core Agent (comp/dogstatsd/http); never reaches ADP"
   ec2_imdsv2_transition_payload_enabled: "ignored in initial audit 2026-04-23"
@@ -3925,15 +4049,6 @@ excluded:
   flare_stripped_keys: "ignored in initial audit 2026-04-23"
   fleet_layers: "ignored in initial audit 2026-04-23"
   fleet_policies_dir: "ignored in initial audit 2026-04-23"
-  forwarder.dynamic_concurrency.decrease_threshold: "2026-11-05: ADP does not currently support dynamic forwarder concurrency."
-  forwarder.dynamic_concurrency.eval_interval: "2026-11-05: ADP does not currently support dynamic forwarder concurrency."
-  forwarder.dynamic_concurrency.increase_cooldown: "2026-11-05: ADP does not currently support dynamic forwarder concurrency."
-  forwarder.dynamic_concurrency.increase_step: "2026-11-05: ADP does not currently support dynamic forwarder concurrency."
-  forwarder.dynamic_concurrency.increase_threshold: "2026-11-05: ADP does not currently support dynamic forwarder concurrency."
-  forwarder.dynamic_concurrency.initial_limit: "2026-11-05: ADP does not currently support dynamic forwarder concurrency."
-  forwarder.dynamic_concurrency.max_concurrent_requests: "2026-11-05: ADP does not currently support dynamic forwarder concurrency."
-  forwarder.dynamic_concurrency.min_decrease_interval: "2026-11-05: ADP does not currently support dynamic forwarder concurrency."
-  forwarder.dynamic_concurrency.num_workers: "2026-11-05: ADP does not currently support dynamic forwarder concurrency."
   gce_metadata_timeout: "ignored in initial audit 2026-04-23"
   gce_send_project_id_tag: "ignored in initial audit 2026-04-23"
   gce_use_dmi: "2026-11-05: ADP does not currently detect the hostname itself."
@@ -4041,8 +4156,6 @@ excluded:
   installer.registry.url: "ignored in initial audit 2026-04-23"
   installer.registry.username: "ignored in initial audit 2026-04-23"
   instrumentation_crd_controller.enabled: "2026-06-10 K8s CRD controller for APM auto-instrumentation; Cluster Agent concern."
-  intake_routing.refresh_interval: "2026-11-05: ADP does not currently support intake routing."
-  intake_routing.startup_grace_period: "2026-11-05: ADP does not currently support intake routing."
   integration.additional: "ignored in initial audit 2026-04-23"
   integration.basic.allowed: "ignored in initial audit 2026-04-23"
   integration.enabled: "ignored in initial audit 2026-04-23"

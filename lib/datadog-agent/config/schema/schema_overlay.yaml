@@ -171,7 +171,7 @@ inventory:
 
   apm_config.apm_dd_url:
     support: none
-    severity: medium
+    severity: low
     planned: true
     issue: "#2419"
     pipelines: [traces]

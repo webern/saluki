@@ -48,7 +48,7 @@ pub(crate) static CLASSIFIER_ENTRIES: &[ClassifierEntry] = &[
     },
     ClassifierEntry {
         yaml_path: "apm_config.apm_dd_url",
-        support_level: SupportLevel::Incompatible(Severity::Medium),
+        support_level: SupportLevel::Incompatible(Severity::Low),
         pipeline_affinity: PipelineAffinity::Pipelines(&[Pipeline::Traces]),
         default: DefaultValue::Json("\"\""),
     },

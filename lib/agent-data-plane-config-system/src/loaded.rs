@@ -9,10 +9,11 @@
 use std::path::Path;
 
 use agent_data_plane_config::SalukiConfiguration;
-use datadog_agent_config::apply_datadog_env_vars;
+use datadog_agent_config::{apply_datadog_env_vars, datadog_renamed_keys};
 use saluki_config::dynamic::ConfigUpdate;
 use serde_json::Value;
 use tokio::sync::mpsc;
+use tracing::warn;
 
 use crate::source::SourceTree;
 use crate::system::{translate_strict, validate, ConfigurationSystem, ConfigurationUpdates, Error};
@@ -44,6 +45,17 @@ pub struct LoadedConfiguration {
     /// `None` when Datadog-style key resolution succeeded. Callers should report this after logging
     /// is initialized: the fallback also ignores valid dotted and differently cased Datadog keys.
     pub yaml_fallback_error: Option<Error>,
+    // Former setting names the local sources used, reported by `warn_deprecated_names`.
+    deprecated_names: Vec<DeprecatedName>,
+}
+
+/// A former setting name that a local source used.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct DeprecatedName {
+    /// The former name as the source wrote it: a dotted file key or an environment variable.
+    pub(crate) former: String,
+    /// The dotted name of the setting.
+    pub(crate) current: String,
 }
 
 impl LoadedConfiguration {
@@ -74,7 +86,20 @@ impl LoadedConfiguration {
             local: reading.local?,
             base: reading.base,
             yaml_fallback_error: reading.yaml_fallback_error,
+            deprecated_names: reading.deprecated_names,
         })
+    }
+
+    /// Logs a warning for each former setting name the local file or environment used.
+    ///
+    /// Call this once logging is initialized.
+    pub fn warn_deprecated_names(&self) {
+        for name in &self.deprecated_names {
+            warn!(
+                "`{}` is a deprecated name for `{}`. Use the current name instead.",
+                name.former, name.current
+            );
+        }
     }
 
     /// Returns the typed snapshot of the local file and environment.
@@ -125,6 +150,8 @@ pub(crate) struct LocalReading {
     /// The error that caused every key to be read as written; `None` when the Agent-style reading
     /// is used.
     pub(crate) yaml_fallback_error: Option<Error>,
+    /// Former setting names the selected reading used.
+    pub(crate) deprecated_names: Vec<DeprecatedName>,
 }
 
 /// Reads the file's text and explicit environment variables, selecting the key reading
@@ -143,35 +170,40 @@ pub(crate) fn read_local(
 ) -> Result<LocalReading, Error> {
     // Every value the local sources supply was set explicitly: the file set it or an environment
     // variable supplied it.
-    let build = |reading| build_base_from(text, origin, vars, env, reading).map(SourceTree::all_explicit);
+    let build = |reading| {
+        build_base_from(text, origin, vars, env, reading).map(|(base, names)| (SourceTree::all_explicit(base), names))
+    };
     let (error, base) = match build(KeyReading::Datadog) {
-        Ok(base) => match translate_strict(&base) {
+        Ok((base, deprecated_names)) => match translate_strict(&base) {
             Ok(local) => {
                 return Ok(LocalReading {
                     base,
                     local: Ok(local),
                     yaml_fallback_error: None,
+                    deprecated_names,
                 })
             }
-            Err(error) => (error, Some(base)),
+            Err(error) => (error, Some((base, deprecated_names))),
         },
         Err(error) => (error, None),
     };
 
     let fallback = build(KeyReading::AsWritten)
         .ok()
-        .filter(|plain| base.as_ref() != Some(plain))
-        .and_then(|plain| translate_strict(&plain).ok().map(|local| (plain, local)));
+        .filter(|(plain, _)| base.as_ref().map(|(base, _)| base) != Some(plain))
+        .and_then(|(plain, names)| translate_strict(&plain).ok().map(|local| (plain, names, local)));
     match (fallback, base) {
-        (Some((plain, local)), _) => Ok(LocalReading {
+        (Some((plain, deprecated_names, local)), _) => Ok(LocalReading {
             base: plain,
             local: Ok(local),
             yaml_fallback_error: Some(error),
+            deprecated_names,
         }),
-        (None, Some(base)) => Ok(LocalReading {
+        (None, Some((base, deprecated_names))) => Ok(LocalReading {
             base,
             local: Err(error),
             yaml_fallback_error: None,
+            deprecated_names,
         }),
         (None, None) => Err(error),
     }
@@ -184,8 +216,7 @@ enum KeyReading {
     /// spellings land at their canonical paths, and the map keys of a Datadog setting are rendered as
     /// the Agent renders them.
     Datadog,
-    /// Every key is read as written. A former setting name written in its canonical spelling still
-    /// moves to the setting, as it does in the Datadog reading.
+    /// Every key is read as written.
     AsWritten,
 }
 
@@ -198,14 +229,16 @@ fn env_vars(env: EnvPrecedence) -> Vec<(String, String)> {
     }
 }
 
-/// Builds the typed base from the configuration file's text and explicit environment variables.
+/// Builds the typed base from the configuration file's text and explicit environment variables, and
+/// returns it with the former setting names they used.
 ///
 /// `text` is the file's content, `origin` is the path named in a parse error, and `vars` are the
 /// environment variable name/value pairs. `vars` is ignored when `env` is `Disabled`.
 ///
-/// `reading` sets how the file's keys are read. A null-valued key is dropped and an empty file is an
-/// empty object. The environment is then overlaid via the generated Datadog reader, the Saluki-only
-/// reader, and the canonical proxy variables. `env` sets whether the environment overwrites the file
+/// `reading` sets how the file's keys are read. A former setting name then moves to its setting (see
+/// [`datadog_yaml`]). A null-valued key is dropped and an empty file is an empty object. The
+/// environment is then overlaid via the generated Datadog reader, the Saluki-only reader, and the
+/// canonical proxy variables. `env` sets whether the environment overwrites the file
 /// (`AfterFile`) or only fills absent keys (`BeforeFile`); `Disabled` skips the environment entirely.
 ///
 /// # Errors
@@ -214,32 +247,46 @@ fn env_vars(env: EnvPrecedence) -> Vec<(String, String)> {
 /// its key's shape.
 fn build_base_from(
     text: &str, origin: &Path, vars: &[(String, String)], env: EnvPrecedence, reading: KeyReading,
-) -> Result<Value, Error> {
+) -> Result<(Value, Vec<DeprecatedName>), Error> {
     let parsed = match reading {
         KeyReading::Datadog => datadog_yaml::from_str(text),
-        KeyReading::AsWritten => saluki_config::yaml::from_str(text)
-            .map(|mut value| {
-                datadog_yaml::move_renamed_keys(&mut value);
-                value
-            })
-            .map_err(|e| e.to_string()),
+        KeyReading::AsWritten => saluki_config::yaml::from_str(text).map_err(|e| e.to_string()),
     };
     let mut base = parsed.map_err(|e| Error::Base {
         message: format!("parse `{}`: {e}", origin.display()),
     })?;
+    let mut deprecated_names: Vec<DeprecatedName> = datadog_yaml::move_renamed_keys(&mut base)
+        .into_iter()
+        .map(|renamed| DeprecatedName {
+            former: renamed.former.join("."),
+            current: renamed.path.join("."),
+        })
+        .collect();
     drop_nulls(&mut base);
     if base.is_null() {
         base = Value::Object(serde_json::Map::new());
     }
 
     let overwrite = match env {
-        EnvPrecedence::Disabled => return Ok(base),
+        EnvPrecedence::Disabled => return Ok((base, deprecated_names)),
         EnvPrecedence::AfterFile => true,
         EnvPrecedence::BeforeFile => false,
     };
     apply_datadog_env_vars(&mut base, vars.iter().cloned(), overwrite).map_err(|message| Error::Base { message })?;
     saluki_env_overlay::apply_env_vars(&mut base, vars, overwrite).map_err(|message| Error::Base { message })?;
-    Ok(base)
+    for renamed in datadog_renamed_keys() {
+        let Some(env_var) = renamed.env_var else {
+            continue;
+        };
+        // The environment reader skips an empty variable.
+        if vars.iter().any(|(name, value)| name == env_var && !value.is_empty()) {
+            deprecated_names.push(DeprecatedName {
+                former: env_var.to_string(),
+                current: renamed.path.join("."),
+            });
+        }
+    }
+    Ok((base, deprecated_names))
 }
 
 /// Recursively removes object entries whose value is JSON null: an explicitly null YAML key must not
@@ -266,7 +313,7 @@ mod tests {
 
     /// Builds the typed base from `text` and the process environment.
     fn build_base(path: &Path, text: &str, env: EnvPrecedence, reading: KeyReading) -> Result<Value, Error> {
-        build_base_from(text, path, &env_vars(env), env, reading)
+        build_base_from(text, path, &env_vars(env), env, reading).map(|(base, _)| base)
     }
 
     #[test]
@@ -950,7 +997,7 @@ mod tests {
         let vars = [("DD_DOGSTATSD_PORT".to_string(), "9125".to_string())];
         let yaml = "dogstatsd_port: 8125\nempty_key:\n";
 
-        let base = build_base_from(
+        let (base, _) = build_base_from(
             yaml,
             Path::new("datadog.yaml"),
             &[],
@@ -962,7 +1009,7 @@ mod tests {
         assert!(base.get("empty_key").is_none());
 
         // `Disabled` ignores the given variables.
-        let base = build_base_from(
+        let (base, _) = build_base_from(
             yaml,
             Path::new("datadog.yaml"),
             &vars,
@@ -973,7 +1020,7 @@ mod tests {
         assert_eq!(base.get("dogstatsd_port"), Some(&json!(8125)));
 
         // An empty file is an empty object.
-        let base = build_base_from(
+        let (base, _) = build_base_from(
             "",
             Path::new("datadog.yaml"),
             &[],
@@ -993,7 +1040,7 @@ mod tests {
         let yaml =
             "dogstatsd_port: 8125\ndogstatsd_non_local_traffic: false\nottl_filter_config:\n  error_mode: strict\n";
 
-        let base = build_base_from(
+        let (base, _) = build_base_from(
             yaml,
             Path::new("datadog.yaml"),
             &vars,
@@ -1006,7 +1053,7 @@ mod tests {
         // The Saluki-only reader takes the given variables too.
         assert_eq!(base.pointer("/ottl_filter_config/error_mode"), Some(&json!("silent")));
 
-        let base = build_base_from(
+        let (base, _) = build_base_from(
             yaml,
             Path::new("datadog.yaml"),
             &vars,
@@ -1469,7 +1516,7 @@ mod tests {
 
     #[tokio::test]
     async fn saluki_only_keys_keep_their_spelling() {
-        // A dotted Saluki-only key is a flat key the typed reader does not see, as before.
+        // A dotted Saluki-only key stays a flat key, which the typed reader does not see.
         let yaml = "data_plane.standalone_mode: true\n";
         let base = base_from_file("saluki_only_base", yaml).unwrap();
         assert_eq!(base["data_plane.standalone_mode"], json!(true));
@@ -1584,13 +1631,65 @@ mod tests {
 
         assert!(loaded.yaml_fallback_error.is_some());
         assert_eq!(loaded.local().domains.dogstatsd.metric_filter.values, ["a"]);
+        assert_eq!(
+            loaded.deprecated_names,
+            [DeprecatedName {
+                former: "statsd_metric_blocklist".to_string(),
+                current: "metric_filterlist".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn former_setting_names_used_by_the_file_or_environment_are_recorded() {
+        let names = |yaml: &str, vars: &[(&str, &str)]| -> Vec<(String, String)> {
+            let vars: Vec<_> = vars.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+            let (_, names) = build_base_from(
+                yaml,
+                Path::new("datadog.yaml"),
+                &vars,
+                EnvPrecedence::AfterFile,
+                KeyReading::Datadog,
+            )
+            .expect("base builds");
+            names.into_iter().map(|name| (name.former, name.current)).collect()
+        };
+        let pair = |former: &str, current: &str| (former.to_string(), current.to_string());
+
+        assert_eq!(
+            names(
+                "statsd_metric_blocklist: [a]\nSTATSD_METRIC_BLOCKLIST_MATCH_PREFIX: true\n",
+                &[]
+            ),
+            [
+                pair("statsd_metric_blocklist", "metric_filterlist"),
+                pair("statsd_metric_blocklist_match_prefix", "metric_filterlist_match_prefix"),
+            ]
+        );
+        // A null former name clears its setting, so it is recorded too.
+        assert_eq!(
+            names("statsd_metric_blocklist:\n", &[]),
+            [pair("statsd_metric_blocklist", "metric_filterlist")]
+        );
+        // An empty variable is not read.
+        assert_eq!(
+            names(
+                "",
+                &[
+                    ("DD_STATSD_METRIC_BLOCKLIST", "a"),
+                    ("DD_STATSD_METRIC_BLOCKLIST_MATCH_PREFIX", "")
+                ]
+            ),
+            [pair("DD_STATSD_METRIC_BLOCKLIST", "metric_filterlist")]
+        );
+        assert!(names("metric_filterlist: [a]\n", &[("DD_METRIC_FILTERLIST", "b")]).is_empty());
     }
 
     #[test]
     fn former_setting_names_beat_current_ones_only_within_a_source() {
         let build = |yaml: &str, vars: &[(&str, &str)]| {
             let vars: Vec<_> = vars.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
-            let base = build_base_from(
+            let (base, _) = build_base_from(
                 yaml,
                 Path::new("datadog.yaml"),
                 &vars,

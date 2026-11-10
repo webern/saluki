@@ -25,14 +25,15 @@ pub struct EnvKey {
 }
 
 /// A former name of a Datadog schema setting, from the schema's `renamed_from`.
-///
-/// The environment side of a rename is already in [`EnvKey::env_vars`]; this is the file side.
 #[derive(Clone, Copy, Debug)]
 pub struct RenamedKey {
     /// The former nested path (for example, `["statsd_metric_blocklist"]`).
     pub former: &'static [&'static str],
     /// The nested path of the setting it was renamed to.
     pub path: &'static [&'static str],
+    /// The environment variable derived from the former name, if the setting is read from the
+    /// environment. It is also in the setting's [`EnvKey::env_vars`].
+    pub env_var: Option<&'static str>,
 }
 
 /// Decodes process environment variables into modeled Datadog paths in `base`.

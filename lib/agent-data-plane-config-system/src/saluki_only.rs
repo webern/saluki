@@ -243,9 +243,8 @@ pub struct DataPlane {
 
 /// `data_plane.experimental.*`: unstable ADP features.
 ///
-/// New unstable ADP-only features go here, next to the other `data_plane.*` settings, rather than under the top-level
-/// `experimental.*` namespace, which the Datadog Agent schema uses. Settings here may change, move, or be removed
-/// without backward compatibility.
+/// New unstable ADP-only features go here. Settings here may change, move, or be removed without
+/// backward compatibility.
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct DataPlaneExperimental {

@@ -15,8 +15,8 @@
 //!   through the standard form via the Agent's bespoke handling (for example `proxy.http` through
 //!   `DD_PROXY_HTTP`); a field with genuinely no variable only yields a dead entry that never fires.
 //! - A [`EnvBinding::Standard`] key with former names (`renamed_from`) derives a name from each
-//!   former name too, ahead of its own, as `BindEnvAndSetDefaultWithDeprecation` does. Explicit
-//!   names replace all of them.
+//!   former name too, ahead of its own, as `BindEnvAndSetDefaultWithDeprecation` does. An
+//!   [`EnvBinding::Overridden`] key with former names fails the build.
 //!
 //! The same file holds [`RenamedKey`] entries for every schema setting with former names, modeled
 //! or not, so that a file using a former name reaches the current key.
@@ -60,11 +60,20 @@ pub fn generate(overlay: &SchemaOverlay, schema_map: &IndexMap<String, FieldInfo
     writeln!(out, "/// its nested path, and how to decode the raw value.").unwrap();
     writeln!(out, "pub static DATADOG_ENV_KEYS: &[EnvKey] = &[").unwrap();
 
+    let modeled: HashSet<&str> = keys.iter().map(|key| key.as_str()).collect();
     for key in keys {
         let info = schema_map.get(key.as_str());
 
         let env_vars: Vec<String> = match info.map(|i| &i.env) {
-            Some(EnvBinding::Overridden(env_vars)) => env_vars.clone(),
+            Some(EnvBinding::Overridden(env_vars)) => {
+                if info.is_some_and(|info| !info.renamed_from.is_empty()) {
+                    panic!(
+                        "`{key}` has both `env_vars` and `renamed_from`: confirm which environment variables the \
+                         Agent reads for its former names, and generate them here"
+                    );
+                }
+                env_vars.clone()
+            }
             Some(EnvBinding::Standard) => info
                 .into_iter()
                 .flat_map(|i| &i.renamed_from)
@@ -91,7 +100,7 @@ pub fn generate(overlay: &SchemaOverlay, schema_map: &IndexMap<String, FieldInfo
 
     writeln!(out, "];").unwrap();
     writeln!(out).unwrap();
-    write_renamed_keys(&mut out, schema_map);
+    write_renamed_keys(&mut out, schema_map, &modeled);
 
     crate::generated_file::write_formatted(&manifest_dir.join("src/generated/env_keys.rs"), &out);
 }
@@ -99,9 +108,12 @@ pub fn generate(overlay: &SchemaOverlay, schema_map: &IndexMap<String, FieldInfo
 /// Writes `DATADOG_RENAMED_KEYS`: every former name of every schema setting, grouped by setting and
 /// highest priority first within a setting.
 ///
+/// A former name's environment variable is written for a `modeled` setting, which is the only kind
+/// the environment reader reads.
+///
 /// Panics when a former name is a schema path, or a setting or another former name contains or holds
 /// it, since the file reader could not tell which one a key addresses.
-fn write_renamed_keys(out: &mut String, schema_map: &IndexMap<String, FieldInfo>) {
+fn write_renamed_keys(out: &mut String, schema_map: &IndexMap<String, FieldInfo>, modeled: &HashSet<&str>) {
     let mut leaves: HashSet<&str> = schema_map.keys().map(String::as_str).collect();
     let mut sections: HashSet<&str> = leaves.iter().flat_map(|key| proper_prefixes(key)).collect();
     for (key, info) in schema_map {
@@ -129,6 +141,13 @@ fn write_renamed_keys(out: &mut String, schema_map: &IndexMap<String, FieldInfo>
             writeln!(out, "    RenamedKey {{").unwrap();
             writeln!(out, "        former: &[{}],", path_literal(former)).unwrap();
             writeln!(out, "        path: &[{}],", path_literal(key)).unwrap();
+            let env_var = match info.env {
+                EnvBinding::Standard if modeled.contains(key.as_str()) => {
+                    format!("Some(\"{}\")", standard_env_name(former))
+                }
+                _ => "None".to_string(),
+            };
+            writeln!(out, "        env_var: {env_var},").unwrap();
             writeln!(out, "    }},").unwrap();
         }
     }

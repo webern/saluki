@@ -18,8 +18,9 @@
 //! # Former names
 //!
 //! A setting renamed in the schema (`renamed_from`) is still read under its former name, which
-//! resolves like any other leaf. Once the whole document is read, the former name's value replaces
-//! the current name's and the former name is removed, as the Agent's `processDeprecation` does. So
+//! resolves like any other leaf. Once the whole document is read, [`move_renamed_keys`] replaces the
+//! current name's value with the former name's and removes the former name, as the Agent's
+//! `processDeprecation` does. So
 //! `statsd_metric_blocklist: [a]` sets `metric_filterlist`, and wins over a `metric_filterlist`
 //! written in the same file. When several former names of one setting are written, the one
 //! deprecated earliest wins. The value is not converted: the typed model casts it as it casts the
@@ -50,7 +51,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::OnceLock;
 
-use datadog_agent_config::{datadog_leaf_paths, datadog_renamed_keys};
+use datadog_agent_config::{datadog_leaf_paths, datadog_renamed_keys, RenamedKey};
 use serde::de::{self, DeserializeSeed, IntoDeserializer as _, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value};
@@ -71,9 +72,7 @@ pub(crate) fn from_str(text: &str) -> Result<Value, String> {
         Node::Section(entries) => {
             let mut placements = Placements::default();
             placements.collect(entries, &[], &[]);
-            let mut root = Value::Object(placements.resolve());
-            move_renamed_keys(&mut root);
-            root
+            Value::Object(placements.resolve())
         }
         Node::Value(value) => value,
     })
@@ -507,18 +506,21 @@ impl Placements {
     }
 }
 
-/// Moves the value of every former setting name in `root` onto the setting, replacing its value.
+/// Moves the value of every former setting name in `root` onto the setting, replacing its value, and
+/// returns the former names found.
 ///
 /// See the module docs. Only exact paths are matched: the caller has already resolved spellings.
-pub(crate) fn move_renamed_keys(root: &mut Value) {
+pub(crate) fn move_renamed_keys(root: &mut Value) -> Vec<&'static RenamedKey> {
     let Value::Object(root) = root else {
-        return;
+        return Vec::new();
     };
+    let mut found = Vec::new();
     let mut moved: Vec<(&[&str], Value)> = Vec::new();
     for renamed in datadog_renamed_keys() {
         let Some(value) = take(root, renamed.former) else {
             continue;
         };
+        found.push(renamed);
         // Former names are listed highest priority first, so the first one found wins.
         if !moved.iter().any(|(path, _)| *path == renamed.path) {
             moved.push((renamed.path, value));
@@ -527,6 +529,7 @@ pub(crate) fn move_renamed_keys(root: &mut Value) {
     for (path, value) in moved {
         write(root, path, value);
     }
+    found
 }
 
 /// Removes and returns the value at `path`, if every parent is an object and the value is there.
@@ -590,6 +593,13 @@ mod tests {
         fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
             LeafValue.deserialize(deserializer).map(LeafDocument)
         }
+    }
+
+    /// Reads `yaml` and moves its former setting names, as the local base does.
+    fn read_moving_former_names(yaml: &str) -> Value {
+        let mut value = from_str(yaml).unwrap();
+        move_renamed_keys(&mut value);
+        value
     }
 
     /// The keys of `additional_endpoints`, a Datadog leaf, in `yaml`.
@@ -872,7 +882,7 @@ mod tests {
             ),
         ];
         for (yaml, expected) in cases {
-            assert_eq!(from_str(yaml).unwrap(), expected, "{yaml:?}");
+            assert_eq!(read_moving_former_names(yaml), expected, "{yaml:?}");
         }
     }
 
@@ -898,7 +908,7 @@ mod tests {
             ),
         ];
         for (yaml, expected) in cases {
-            assert_eq!(from_str(yaml).unwrap(), expected, "{yaml:?}");
+            assert_eq!(read_moving_former_names(yaml), expected, "{yaml:?}");
         }
     }
 
@@ -924,7 +934,7 @@ mod tests {
             ),
         ];
         for (yaml, expected) in cases {
-            assert_eq!(from_str(yaml).unwrap(), expected, "{yaml:?}");
+            assert_eq!(read_moving_former_names(yaml), expected, "{yaml:?}");
         }
     }
 
@@ -936,12 +946,16 @@ mod tests {
             "metric_filterlist_match_prefix": false,
         });
 
-        move_renamed_keys(&mut value);
+        let found: Vec<_> = move_renamed_keys(&mut value)
+            .into_iter()
+            .map(|renamed| renamed.former)
+            .collect();
 
         assert_eq!(
             value,
             json!({"STATSD_METRIC_BLOCKLIST": ["respelled"], "metric_filterlist_match_prefix": true})
         );
+        assert_eq!(found, [["statsd_metric_blocklist_match_prefix"]]);
     }
 
     #[test]

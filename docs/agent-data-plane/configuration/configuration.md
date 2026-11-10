@@ -1388,14 +1388,6 @@ empty while syslog logging is enabled, ADP uses the platform default local syslo
 
 ### DogStatsD metric blocklists
 
-`statsd_metric_blocklist` and `statsd_metric_blocklist_match_prefix` are deprecated names of
-`metric_filterlist` and `metric_filterlist_match_prefix`. ADP reads them as the Agent does: in
-`datadog.yaml`, a deprecated name replaces the current name's value, even when both are set; in
-the environment, `DD_STATSD_METRIC_BLOCKLIST` is read before `DD_METRIC_FILTERLIST`, and
-`DD_STATSD_METRIC_BLOCKLIST_MATCH_PREFIX` before `DD_METRIC_FILTERLIST_MATCH_PREFIX`. Each
-setting is renamed on its own, so `metric_filterlist_match_prefix` applies to whichever list is
-set. Runtime updates must use the current names.
-
 The list defaults to empty, and the match-prefix setting defaults to `false`. Accepted runtime
 changes to either setting update filtering. An entry ending in `*` is matched literally; use
 `metric_filterlist_prefix` for per-entry prefixes.

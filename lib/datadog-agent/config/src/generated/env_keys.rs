@@ -1343,9 +1343,11 @@ pub static DATADOG_RENAMED_KEYS: &[RenamedKey] = &[
     RenamedKey {
         former: &["statsd_metric_blocklist"],
         path: &["metric_filterlist"],
+        env_var: Some("DD_STATSD_METRIC_BLOCKLIST"),
     },
     RenamedKey {
         former: &["statsd_metric_blocklist_match_prefix"],
         path: &["metric_filterlist_match_prefix"],
+        env_var: Some("DD_STATSD_METRIC_BLOCKLIST_MATCH_PREFIX"),
     },
 ];
